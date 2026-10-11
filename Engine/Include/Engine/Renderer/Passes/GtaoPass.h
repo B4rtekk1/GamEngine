@@ -88,6 +88,8 @@ private:
     void buildLinearDepth(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkImageView depthView, VkSampler depthSampler,
                           const Mat4& inverseProjection);
     VkDevice device_ = VK_NULL_HANDLE;
+    PFN_vkCmdBeginDebugUtilsLabelEXT beginLabel_ = nullptr;
+    PFN_vkCmdEndDebugUtilsLabelEXT endLabel_ = nullptr;
     VkExtent2D fullExtent_{};
     VkExtent2D halfExtent_{};
     bool nativeResolution_ = false;

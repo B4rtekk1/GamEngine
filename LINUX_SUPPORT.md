@@ -17,26 +17,17 @@ The Windows backend remains available alongside the Linux backend.
 | User directories | Absolute XDG data/config paths and `user-dirs.dirs` for localized Documents |
 | Font resources | Bundled Droid Sans from ImGui, including attribution and Apache 2.0 license |
 | Runtime library lookup | `$ORIGIN` for development copies, game exports and installed packages |
-| Dependencies and shaders | PhysX, Compressonator, ISPC, Slang and FidelityFX Vulkan backend |
+| Dependencies and shaders | PhysX, Compressonator, ISPC, Slang and Vulkan Memory Allocator |
 | Distribution | Portable editor package, scripting SDK and Linux runtime template |
 
 The Win32 title bar, Windows user paths, file watcher and ConPTY sources are
 selected only for their platform. `Installer/Bootstrapper` is a native Windows
 installer; Linux distribution uses `PackageEditor` directly.
 
-FidelityFX has local Linux compatibility changes inside its Git submodule.
-These changes must be retained when sharing this working tree. The Release
-shader compiler additionally required correcting MD5 hex conversion: the
-old code passed a 32-byte `snprintf` capacity after advancing inside a 33-byte
-buffer. At iteration 1 the debugger observed only 31 bytes remaining. glibc's
-fortified Release build aborted. Direct hex encoding removes the invalid
-capacity and keeps the same digest format.
-
 ## Validation
 
 The Linux Debug engine, Player, editor, shaders and all test executables build.
-The `linux-release` preset builds `PackageEditor` successfully, including
-FidelityFX shader permutations. Player-only configuration with
+The `linux-release` preset builds `PackageEditor` successfully. Player-only configuration with
 `GE_BUILD_EDITOR=OFF` also succeeds.
 The 11 new platform/import/export tests pass. The export integration test:
 

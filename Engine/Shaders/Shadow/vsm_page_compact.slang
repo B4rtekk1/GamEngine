@@ -13,15 +13,16 @@ void main(uint3 threadId : SV_DispatchThreadID)
     if (wordIndex >= wordCount) return;
 
     uint bits = requestedPageBits[wordIndex];
+    if (bits == 0u) return;
+    uint destination;
+    InterlockedAdd(compactedPageCount[0], countbits(bits), destination);
     while (bits != 0u)
     {
         const uint bit = firstbitlow(bits);
         const uint pageKey = wordIndex * 32u + bit;
         if (pageKey < 7168u)
         {
-            uint destination;
-            InterlockedAdd(compactedPageCount[0], 1u, destination);
-            compactedPageKeys[destination] = pageKey;
+            compactedPageKeys[destination++] = pageKey;
         }
         bits &= bits - 1u;
     }

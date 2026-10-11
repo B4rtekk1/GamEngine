@@ -111,6 +111,9 @@ namespace Engine {
             if (index == PbrFoliageProgramSlot)
                 materialOptions.cullMode = VK_CULL_MODE_NONE;
             materialPipelines_[index].create(device, materialOptions);
+            GraphicsPipelineOptions twoSidedOptions = materialOptions;
+            twoSidedOptions.cullMode = VK_CULL_MODE_NONE;
+            twoSidedMaterialPipelines_[index].create(device, twoSidedOptions);
             if (enableMeshletPipelines) {
                 GraphicsPipelineOptions meshletOptions = materialOptions;
                 const auto& path = materialOptions.shader;
@@ -184,6 +187,7 @@ namespace Engine {
         foliagePipeline_.destroy();
         grassPipeline_.destroy();
         for (auto &pipeline: materialPipelines_) pipeline.destroy();
+        for (auto &pipeline: twoSidedMaterialPipelines_) pipeline.destroy();
         for (auto &pipeline: meshletMaterialPipelines_) pipeline.destroy();
     }
 
@@ -317,13 +321,13 @@ namespace Engine {
                                    const std::uint32_t shaderSlot,
                                    const Culling::IndexedIndirectDrawCount &indirectDraw,
                                    const VkDeviceSize commandOffset,
-                                   const VkDeviceSize countOffset) const {
+                                   const VkDeviceSize countOffset, const bool twoSided) const {
         if (!indirectDraw.valid()) return;
         if (shaderSlot >= MaterialShaderCount) {
             drawShaderGraph(commandBuffer, sceneDescriptorSet, shaderSlot, indirectDraw, commandOffset, countOffset);
             return;
         }
-        const auto &pipeline = materialPipelines_[shaderSlot];
+        const auto &pipeline = twoSided ? twoSidedMaterialPipelines_[shaderSlot] : materialPipelines_[shaderSlot];
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                                 0, 1, &sceneDescriptorSet, 0, nullptr);

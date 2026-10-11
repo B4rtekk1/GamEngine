@@ -1,5 +1,6 @@
 import Common.SceneData;
 import Common.Displacement;
+import Common.ShadowCasterData;
 
 struct PushConstants
 {
@@ -7,9 +8,6 @@ struct PushConstants
 };
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
-struct ShadowInstanceTransform { float4 row0; float4 row1; float4 row2; };
-[[vk::binding(5, 0)]] StructuredBuffer<ShadowInstanceTransform> shadowTransforms;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> shadowMaterialOffsets;
 [[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
 
 struct ShadowVertexInput
@@ -34,9 +32,10 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
                               uint baseInstance : SV_StartInstanceLocation)
 {
     const uint transformIndex = baseInstance + instanceIndex;
-    const ShadowInstanceTransform transform = shadowTransforms[transformIndex];
+    uint materialOffset;
+    const ShadowInstanceTransform transform = loadShadowCaster(transformIndex, materialOffset);
     ShadowVertexOutput output;
-    const MaterialData material = materials[shadowMaterialOffsets[transformIndex] + input.materialIndex];
+    const MaterialData material = materials[materialOffset + input.materialIndex];
     const float3 localPosition = displaceMaterialPosition(
         material, input.position, input.normal, input.texCoord, input.texCoord1);
     float4 worldPosition = float4(dot(transform.row0, float4(localPosition, 1.0)),
@@ -44,7 +43,7 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
                                   dot(transform.row2, float4(localPosition, 1.0)), 1.0);
     output.position = mul(worldPosition, pushConstants.lightSpace);
     output.texCoord = input.texCoord;
-    output.materialIndex = shadowMaterialOffsets[transformIndex] + input.materialIndex;
+    output.materialIndex = materialOffset + input.materialIndex;
     output.texCoord1 = input.texCoord1;
     return output;
 }

@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 
 namespace Engine::RenderGraph {
@@ -11,6 +12,31 @@ namespace {
         .extent = {1920, 1080, 1},
         .format = VK_FORMAT_R16G16B16A16_SFLOAT,
         .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
+}
+
+TEST(RenderGraphTests, VsmPagePublicationPrecedesVisibilityAndForwardSampling) {
+    RenderGraph graph;
+    graph.enablePassCulling();
+    const auto pageTable = graph.importBuffer("VSM table",
+        reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), {
+            .size = 7168 * sizeof(std::uint32_t),
+            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT});
+    TextureHandle visibility;
+    graph.addPass("Shadow VSM", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.write(pageTable, BufferUsage::TransferWrite);
+    }, {});
+    graph.addPass("Directional visibility", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.read(pageTable, BufferUsage::StorageReadCompute);
+        visibility = builder.writeTexture("Visibility", ColorTarget);
+    }, {});
+    graph.addPass("Forward lighting inputs", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.read(pageTable, BufferUsage::StorageReadFragment);
+        builder.read(visibility);
+        builder.setSideEffect();
+    }, {});
+    graph.compile();
+    EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{
+        "Shadow VSM", "Directional visibility", "Forward lighting inputs"}));
 }
 
 TEST(RenderGraphTests, OrdersPassesFromResourceDependencies) {
@@ -108,6 +134,29 @@ TEST(RenderGraphTests, RebindsFrameLocalResourcesAndUploadWaitsFromACompiledTemp
     ASSERT_EQ(graph.uploadWaits().size(), 1U);
     EXPECT_EQ(graph.uploadWaits().front().timelineValue, 17U);
     EXPECT_EQ(graph.uploadWaits().front().stage, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+}
+
+TEST(RenderGraphTests, CachedBufferUploadWaitsFollowEachFramesTicket) {
+    RenderGraph graph;
+    constexpr BufferDesc storage{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
+    for (const std::uint64_t ticket : {0ULL, 17ULL, 0ULL, 29ULL}) {
+        graph.reset();
+        const auto input = graph.importBuffer("Uploaded buffer",
+            reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
+        graph.markUploaded(input, ticket);
+        graph.addPass("Consume buffer", Queue::AsyncCompute, [input](PassBuilder& builder) {
+            builder.read(input, BufferUsage::StorageReadCompute);
+        }, {});
+        graph.compile();
+        if (ticket == 0) {
+            EXPECT_TRUE(graph.uploadWaits().empty());
+        } else {
+            ASSERT_EQ(graph.uploadWaits().size(), 1U);
+            EXPECT_EQ(graph.uploadWaits().front().timelineValue, ticket);
+            EXPECT_EQ(graph.uploadWaits().front().stage, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            EXPECT_EQ(graph.uploadWaits().front().queue, Queue::AsyncCompute);
+        }
+    }
 }
 
 TEST(RenderGraphTests, ReportsTimelineDependenciesAcrossQueues) {
@@ -221,12 +270,20 @@ TEST(RenderGraphTests, PlansUploadWaitsAtTheConsumerBatch) {
     graph.compile();
 
     ASSERT_EQ(graph.uploadWaits().size(), 2U);
-    EXPECT_EQ(graph.uploadWaits()[0].timelineValue, 3U);
-    EXPECT_EQ(graph.uploadWaits()[0].stage, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-    EXPECT_EQ(graph.uploadWaits()[0].queue, Queue::AsyncCompute);
-    EXPECT_EQ(graph.uploadWaits()[1].timelineValue, 5U);
-    EXPECT_EQ(graph.uploadWaits()[1].stage, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
-    EXPECT_EQ(graph.uploadWaits()[1].queue, Queue::Graphics);
+    // Waits are collected by resource type; their vector order does not
+    // determine submission order. Verify the actual consumer batch instead.
+    const auto cullWait = std::ranges::find_if(graph.uploadWaits(), [](const UploadWait& wait) {
+        return wait.queue == Queue::AsyncCompute;
+    });
+    const auto shadeWait = std::ranges::find_if(graph.uploadWaits(), [](const UploadWait& wait) {
+        return wait.queue == Queue::Graphics;
+    });
+    ASSERT_NE(cullWait, graph.uploadWaits().end());
+    ASSERT_NE(shadeWait, graph.uploadWaits().end());
+    EXPECT_EQ(cullWait->timelineValue, 3U);
+    EXPECT_EQ(cullWait->stage, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+    EXPECT_EQ(shadeWait->timelineValue, 5U);
+    EXPECT_EQ(shadeWait->stage, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
 }
 
 TEST(RenderGraphTests, CullsPassesThatCannotReachAnExport) {

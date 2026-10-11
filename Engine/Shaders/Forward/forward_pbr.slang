@@ -47,7 +47,6 @@ static const uint PBR_DEBUG_GEOMETRIC_DIRECT_DIFFUSE = 4u;
 // full resolution after a depth-aware upsample and therefore needs no final
 // HDR darkening pass.
 [[vk::binding(16, 0)]] Sampler2D gtaoVisibility;
-[[vk::binding(20, 0)]] Sampler2D diffuseGI;
 [[vk::binding(18, 0)]] Sampler2D rtContactVisibility;
 #if FORWARD_RESOLVED_VSM
 [[vk::binding(19, 0)]] Sampler2D directionalVisibility;
@@ -566,13 +565,24 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     }
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * finalVisibility;
-    const uint2 grid = uint2((uint(frame.clusteredViewportNearFar.x) + 63u) / 64u,
-                             (uint(frame.clusteredViewportNearFar.y) + 63u) / 64u);
-    const float viewDepth = max(-mul(float4(input.worldPosition, 1.0), frame.view).z, frame.clusteredViewportNearFar.z);
-    const uint slice = min(uint(max(log2(viewDepth) * frame.clusterZScaleBiasEnvironmentMipRtContact.x + frame.clusterZScaleBiasEnvironmentMipRtContact.y, 0.0)), 23u);
-    const uint2 tile = min(uint2(input.position.xy) / 64u, grid - 1u);
-    const uint clusterIndex = (slice * grid.y + tile.y) * grid.x + tile.x;
-    const ClusterLightRange lightRange = clusterRanges[clusterIndex];
+    // A directional-light-only view needs neither the logarithmic cluster
+    // lookup nor its dependent SSBO read. Probe-capable variants still load
+    // the range when probes are present, even without local lights.
+    ClusterLightRange lightRange = {0u, 0u, 0u, 0u};
+    bool needsCluster = frame.localLightCount != 0u;
+#if PBR_HAS_PROBES
+    needsCluster = needsCluster || frame.reflectionProbeCount != 0u;
+#endif
+    if (needsCluster)
+    {
+        const uint2 grid = uint2((uint(frame.clusteredViewportNearFar.x) + 63u) / 64u,
+                                 (uint(frame.clusteredViewportNearFar.y) + 63u) / 64u);
+        const float viewDepth = max(-mul(float4(input.worldPosition, 1.0), frame.view).z, frame.clusteredViewportNearFar.z);
+        const uint slice = min(uint(max(log2(viewDepth) * frame.clusterZScaleBiasEnvironmentMipRtContact.x + frame.clusterZScaleBiasEnvironmentMipRtContact.y, 0.0)), 23u);
+        const uint2 tile = min(uint2(input.position.xy) / 64u, grid - 1u);
+        const uint clusterIndex = (slice * grid.y + tile.y) * grid.x + tile.x;
+        lightRange = clusterRanges[clusterIndex];
+    }
     for (uint i = 0u; i < lightRange.lightCount; ++i)
     {
         const uint lightIndex = clusterLightIndices[lightRange.lightOffset + i];
@@ -627,23 +637,6 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 kS = disableSpecularIbl ? 0.0 : fresnelIbl;
     float3 kD = (1.0 - kS) * (1.0 - metallic);
     float3 indirectDiffuse = irradianceMap.SampleLevel(normal, 0.0).rgb * albedo * kD;
-    bool useDiffuseGI = false;
-    // Brixelizer only voxelizes opaque, non-displaced geometry. Cutout and
-    // blended receivers must keep the environment irradiance.
-    if ((frame.screenSpaceEffects & 2u) != 0u && alphaMode == 0u &&
-        !materialHasDisplacement(material)) {
-        float2 giUv = input.position.xy / frame.clusteredViewportNearFar.xy;
-#if FORWARD_OUTPUT_VELOCITY
-        giUv -= (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
-#endif
-        if (all(giUv >= 0.0) && all(giUv <= 1.0)) {
-            const float3 giRadiance = diffuseGI.SampleLevel(giUv, 0.0).rgb;
-            // An empty GI sample is not a valid replacement for sky IBL.
-            useDiffuseGI = max(max(giRadiance.r, giRadiance.g), giRadiance.b) > 1.0e-5;
-            if (useDiffuseGI)
-                indirectDiffuse = giRadiance * albedo * kD;
-        }
-    }
     float3 reflection = reflect(-viewDirection, normal);
     const uint prefilteredMipCount = max(uint(frame.clusterZScaleBiasEnvironmentMipRtContact.z), 1u);
     float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(
@@ -683,7 +676,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // accessibility, so neither is allowed to brighten the other.  The
     // GTAO visibility is used at full strength after its bilateral upsample.
     const float indirectVisibility = min(ao, dynamicAo);
-    const float diffuseAO = useDiffuseGI ? ao : indirectVisibility;
+    const float diffuseAO = indirectVisibility;
     // Lagarde's visibility-based specular-occlusion approximation.  It
     // suppresses sky/probe reflections in contact cavities without needing a
     // bent normal; rough surfaces converge to the diffuse visibility while

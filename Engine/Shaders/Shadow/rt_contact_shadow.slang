@@ -19,6 +19,36 @@ float3 decodeOct(float2 e) {
     return normalize(n);
 }
 
+float3 reconstructViewPosition(int2 pixel, float depth, int2 extent) {
+    const float2 uv = (float2(pixel) + 0.5) / float2(extent);
+    const float4 position = mul(float4(uv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
+    return position.xyz / position.w;
+}
+
+float3 receiverGeometricNormal(int2 pixel, int2 extent, float3 center, float3 fallback) {
+    // Prefer the neighbour on the same surface on each axis. Forward-only
+    // differences join unrelated surfaces at silhouettes and produce bad offsets.
+    const int2 left = max(pixel - int2(1, 0), int2(0));
+    const int2 right = min(pixel + int2(1, 0), extent - 1);
+    const int2 up = max(pixel - int2(0, 1), int2(0));
+    const int2 down = min(pixel + int2(0, 1), extent - 1);
+    const float3 pLeft = reconstructViewPosition(left, depthTexture.Load(int3(left, 0)).r, extent);
+    const float3 pRight = reconstructViewPosition(right, depthTexture.Load(int3(right, 0)).r, extent);
+    const float3 pUp = reconstructViewPosition(up, depthTexture.Load(int3(up, 0)).r, extent);
+    const float3 pDown = reconstructViewPosition(down, depthTexture.Load(int3(down, 0)).r, extent);
+    const float3 dx = abs(pRight.z - center.z) < abs(pLeft.z - center.z)
+        ? pRight - center : center - pLeft;
+    const float3 dy = abs(pDown.z - center.z) < abs(pUp.z - center.z)
+        ? pDown - center : center - pUp;
+    const float3 normal = cross(dx, dy);
+    const float normalSquared = dot(normal, normal);
+    // Thin geometry and viewport boundaries may not have two valid neighbours.
+    if (!all(isfinite(normal)) || normalSquared <= 1.0e-8 * dot(dx, dx) * dot(dy, dy) ||
+        max(abs(dx.z), abs(dy.z)) > max(0.01, abs(center.z) * 0.02)) return fallback;
+    const float3 result = normal * rsqrt(normalSquared);
+    return dot(result, fallback) < 0.0 ? -result : result;
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
     uint width, height; contactVisibility.GetDimensions(width, height);
@@ -40,16 +70,24 @@ void main(uint3 id : SV_DispatchThreadID) {
         contactVisibility[pixel] = 1.0;
         return;
     }
-    float4 viewPosition = mul(float4(sourceUv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
-    viewPosition /= viewPosition.w;
-    float3 worldPosition = mul(viewPosition, frame.inverseView).xyz;
-    float3 viewNormal = decodeOct(viewNormalTexture.Load(int3(sourcePixel, 0)).xy);
+    const int2 sourceExtent = int2(sourceWidth, sourceHeight);
+    const float3 viewPosition = reconstructViewPosition(sourcePixel, depth, sourceExtent);
+    float3 worldPosition = mul(float4(viewPosition, 1.0), frame.inverseView).xyz;
+    const float3 shadingNormal = decodeOct(viewNormalTexture.Load(int3(sourcePixel, 0)).xy);
+    const float3 viewNormal = receiverGeometricNormal(sourcePixel, sourceExtent, viewPosition, shadingNormal);
     float3 worldNormal = normalize(mul(float4(viewNormal, 0.0), frame.inverseView).xyz);
     if (frame.lightDirectionIntensity.w <= 0.0001) { contactVisibility[pixel] = 1.0; return; }
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
-    // The prepass supplies a face-corrected receiver normal.
+    // A smooth vertex normal can offset the origin inside its own triangle.
+    // Offset along the depth-derived surface normal, accounting for one depth
+    // quantization step and world-coordinate rounding as well as the user bias.
+    const float3 fartherPosition = reconstructViewPosition(sourcePixel,
+        min(depth + 5.96046448e-8, 1.0), sourceExtent);
+    const float depthError = abs(dot(fartherPosition - viewPosition, viewNormal));
+    const float positionError = max(abs(worldPosition.x), max(abs(worldPosition.y), abs(worldPosition.z))) * 1.0e-6;
+    const float receiverBias = max(settings.normalBias, 0.0) + depthError + positionError;
     RayDesc ray;
-    ray.Origin = worldPosition + worldNormal * settings.normalBias;
+    ray.Origin = worldPosition + worldNormal * receiverBias;
     ray.Direction = lightDirection;
     ray.TMin = 0.001;
     ray.TMax = settings.maxDistance;

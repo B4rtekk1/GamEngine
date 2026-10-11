@@ -12,11 +12,14 @@ namespace Engine {
         std::array<glm::mat4, 7> clipMatrices{};
         std::uint64_t sceneRevision{};
         std::uint64_t settingsRevision{};
+        std::uint64_t transformRevision{}, deformationRevision{}, windRevision{}, animationFrame{};
         std::uint32_t width{}, height{}, quality{};
 
         [[nodiscard]] bool operator==(const VsmFeedbackKey& other) const noexcept {
             return viewProjection == other.viewProjection && clipMatrices == other.clipMatrices &&
                 sceneRevision == other.sceneRevision && settingsRevision == other.settingsRevision &&
+                transformRevision == other.transformRevision && deformationRevision == other.deformationRevision &&
+                windRevision == other.windRevision && animationFrame == other.animationFrame &&
                 width == other.width && height == other.height && quality == other.quality;
         }
     };

@@ -326,7 +326,7 @@
             // Reading this mapped allocation therefore consumes GPU work from
             // its prior use with no queue wait or submission-time readback. A
             // view-direction cut does not invalidate shadow page coordinates.
-            if (!vsmLayoutCut && vsmRequestsReady[currentFrame] &&
+            if (!vsmLayoutCut && vsmRequestsReady[currentFrame] && !vsmRequestsFromScene[currentFrame] &&
                 vsmCompactedPageCountBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 std::uint32_t requestCount{};
                 vsmCompactedPageCountBuffers[currentFrame].read(&requestCount, sizeof(requestCount));
@@ -343,6 +343,37 @@
                 shadowClipUpdateMask = updateVirtualShadowClipmaps(
                     cameraController.camera()->position(), shadowClipMatrices,
                     lastShadowCameraPosition, lastShadowLightDirection, shadowClipmapsValid);
+                if (receiverFeedbackValid) {
+                    std::array<std::int32_t, ShadowMap::ClipLevelCount> shiftX{}, shiftY{};
+                    for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
+                        if (!vsmClipPageShift(vsmRequestClipMatrices[currentFrame][level].native(),
+                                             shadowClipMatrices[level].native(), ShadowMap::VirtualPagesPerAxis,
+                                             shiftX[level], shiftY[level])) {
+                            receiverFeedbackValid = false;
+                            receiverPageRequests = {};
+                            break;
+                        }
+                    }
+                    if (receiverFeedbackValid) {
+                        constexpr std::uint32_t axis = ShadowMap::VirtualPagesPerAxis;
+                        constexpr std::uint32_t pagesPerLevel = axis * axis;
+                        std::size_t count = 0;
+                        // Translate delayed keys through whole-page scrolling.
+                        // Their originating matrices remain attached to the slot,
+                        // so reused feedback is never translated twice.
+                        for (const std::uint32_t key : receiverPageRequests) {
+                            if (key >= ShadowMap::VirtualPageCount) continue;
+                            const std::uint32_t level = key / pagesPerLevel;
+                            const std::int32_t x = static_cast<std::int32_t>(key % axis) + shiftX[level];
+                            const std::int32_t y = static_cast<std::int32_t>((key % pagesPerLevel) / axis) + shiftY[level];
+                            if (x < 0 || y < 0 || x >= static_cast<std::int32_t>(axis) || y >= static_cast<std::int32_t>(axis))
+                                continue;
+                            completedVsmRequests[count++] = level * pagesPerLevel + static_cast<std::uint32_t>(y) * axis +
+                                                            static_cast<std::uint32_t>(x);
+                        }
+                        receiverPageRequests = std::span{completedVsmRequests}.first(count);
+                    }
+                }
                 shadowPass.preparePages(
                     shadowClipMatrices,
                     cameraController.camera()->projectionMatrix() *
@@ -353,7 +384,7 @@
                 shadowClipUpdateMask = 0;
                 shadowClipmapsValid = false;
                 shadowPass.invalidateCache();
-                vsmRequestsReady.fill(false);
+                if (renderGameViewport) vsmRequestsReady.fill(false);
             }
             if (vsmPageMarkingUniformBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 VsmPageMarkingUniforms marking{};
@@ -367,13 +398,25 @@
                 marking.depthWidth = swapchain.extent().width;
                 marking.depthHeight = swapchain.extent().height;
                 marking.shadowQuality = static_cast<std::uint32_t>(shadowQuality);
-                vsmPageMarkingUniformBuffers[currentFrame].update(&marking, sizeof(marking));
+                if (renderGameViewport) {
+                    vsmPageMarkingUniformBuffers[currentFrame].update(&marking, sizeof(marking));
+                    const auto& source = hiZBuffers[previousHiZFrame];
+                    if (source.image() != VK_NULL_HANDLE) {
+                        const VkDescriptorImageInfo depthInfo{source.sampler(), source.fullView(),
+                                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        const VkWriteDescriptorSet write{
+                            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                            .dstSet = vsmPageMarkingSets[currentFrame], .dstBinding = 0,
+                            .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                            .pImageInfo = &depthInfo};
+                        vkUpdateDescriptorSets(vulkanDevice.logical(), 1, &write, 0, nullptr);
+                    }
+                }
             }
             // Motion vectors describe continuous motion. Reusing temporal
             // history after a teleport or a large orientation jump produces
             // unavoidable ghosting, so reset those histories at cameraCut.
             if (cameraCut) {
-                brixelizer.invalidateGI();
                 virtualWaterRenderer.invalidateTemporalHistory();
                 // GTAO history is independent of TAA and must not survive a
                 // teleport or a large camera rotation either.
@@ -406,9 +449,7 @@
                 static_cast<std::uint32_t>(gtaoDebugView),
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbes.size()),
-                1u | (brixelizerGIEnabled && !msaa.enabled() &&
-                      brixelizerDebugView == BrixelizerSystem::DebugView::Off &&
-                      brixelizer.giHasHistory() && brixelizer.hasStaticMeshes() ? 2u : 0u),
+                1u,
                 // Do not vary PCF/VSM sample phase until TAA has stronger
                 // per-surface confidence (normals/reactive mask).  Depth
                 // rejection prevents trails, but cannot fully hide changing
@@ -421,8 +462,8 @@
                 glm::vec4{24.0F / std::log2(1000.0F / 0.1F),
                           -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                           static_cast<float>(imageBasedLighting.prefilteredMipLevels()),
-                          // Enabled after recording this frame's RT mask. A
-                          // previous TLAS build does not prove it is valid now.
+                          // Finalized after preparing this frame's TLAS,
+                          // before the first submission reads the frame UBO.
                           0.0F},
                 frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
@@ -464,17 +505,87 @@
                     sceneCamera.position(), sceneShadowClipMatrices,
                     lastSceneShadowCameraPosition, lastSceneShadowLightDirection,
                     sceneShadowClipmapsValid);
+                // Consume only completed Scene View work. Game View uses the
+                // same frame-slot buffers, but a different camera and page table.
+                if (sceneVsmFeedbackPending[currentFrame] && vsmRequestsReady[currentFrame] &&
+                    vsmRequestsFromScene[currentFrame]) {
+                    std::uint32_t count{};
+                    vsmCompactedPageCountBuffers[currentFrame].read(&count, sizeof(count));
+                    sceneVsmReceiverRequests.resize(std::min(count, ShadowMap::VirtualPageCount));
+                    if (!sceneVsmReceiverRequests.empty())
+                        vsmCompactedPageBuffers[currentFrame].read(sceneVsmReceiverRequests.data(),
+                            sceneVsmReceiverRequests.size() * sizeof(std::uint32_t));
+                    sceneVsmReceiverMatrices = vsmRequestClipMatrices[currentFrame];
+                    sceneVsmReceiverFeedbackValid = true;
+                    sceneVsmFeedbackPending[currentFrame] = false;
+                }
+                std::vector<std::uint32_t> requests;
+                bool feedbackValid = sceneVsmReceiverFeedbackValid;
+                std::array<std::int32_t, ShadowMap::ClipLevelCount> shiftX{}, shiftY{};
+                for (std::uint32_t level = 0; feedbackValid && level < ShadowMap::ClipLevelCount; ++level)
+                    feedbackValid = vsmClipPageShift(sceneVsmReceiverMatrices[level].native(),
+                        sceneShadowClipMatrices[level].native(), ShadowMap::VirtualPagesPerAxis,
+                        shiftX[level], shiftY[level]);
+                if (feedbackValid) {
+                    constexpr std::uint32_t axis = ShadowMap::VirtualPagesPerAxis;
+                    constexpr std::uint32_t pagesPerLevel = axis * axis;
+                    for (const auto key : sceneVsmReceiverRequests) {
+                        if (key >= ShadowMap::VirtualPageCount) continue;
+                        const auto level = key / pagesPerLevel;
+                        const auto x = static_cast<std::int32_t>(key % axis) + shiftX[level];
+                        const auto y = static_cast<std::int32_t>((key % pagesPerLevel) / axis) + shiftY[level];
+                        if (x >= 0 && y >= 0 && x < static_cast<std::int32_t>(axis) && y < static_cast<std::int32_t>(axis))
+                            requests.push_back(level * pagesPerLevel + y * axis + x);
+                    }
+                }
                 sceneDescriptorPass.preparePages(
                     sceneShadowClipMatrices,
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
-                    gpuObjects, dirtyShadowObjects, {}, false, currentFrame, 32);
+                    gpuObjects, dirtyShadowObjects, requests, feedbackValid, currentFrame, 32);
             } else {
                 sceneShadowClipUpdateMask = 0;
                 sceneShadowClipmapsValid = false;
                 sceneDescriptorPass.invalidateCache();
+                sceneVsmFeedbackPending.fill(false);
+                sceneVsmFeedbackCache = {};
+                sceneVsmReceiverFeedbackValid = false;
             }
             const Mat4 sceneView = sceneCamera.viewMatrix();
             const Mat4 sceneProjection = sceneCamera.projectionMatrix();
+            sceneVsmFeedbackKey.viewProjection = sceneProjection.native() * sceneView.native();
+            sceneVsmFeedbackKey.sceneRevision = scene.mutationRevision();
+            sceneVsmFeedbackKey.settingsRevision = renderSettingsRevision;
+            sceneVsmFeedbackKey.transformRevision = registry.componentRevision<Transform>();
+            sceneVsmFeedbackKey.deformationRevision = grassDeformationVersion;
+            sceneVsmFeedbackKey.windRevision = sceneFrameDataCache.windRevision;
+            sceneVsmFeedbackKey.animationFrame = sceneFrameDataCache.hasWind && !sceneGpu.grassInstances.empty()
+                ? submittedFrameValue : 0;
+            sceneVsmFeedbackKey.width = sceneViewportTarget.extent().width;
+            sceneVsmFeedbackKey.height = sceneViewportTarget.extent().height;
+            sceneVsmFeedbackKey.quality = static_cast<std::uint32_t>(shadowQuality);
+            for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level)
+                sceneVsmFeedbackKey.clipMatrices[level] = sceneShadowClipMatrices[level].native();
+            if (vsmPageMarkingUniformBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
+                VsmPageMarkingUniforms marking{};
+                marking.inverseViewProjection = glm::inverse(sceneVsmFeedbackKey.viewProjection);
+                for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level)
+                    marking.clipMatrices[level] = sceneShadowClipMatrices[level].native();
+                marking.pageCountPerAxis = ShadowMap::VirtualPagesPerAxis;
+                marking.virtualResolution = ShadowMap::VirtualResolution;
+                marking.clipLevelCount = ShadowMap::ClipLevelCount;
+                marking.depthWidth = sceneVsmFeedbackKey.width;
+                marking.depthHeight = sceneVsmFeedbackKey.height;
+                marking.shadowQuality = sceneVsmFeedbackKey.quality;
+                vsmPageMarkingUniformBuffers[currentFrame].update(&marking, sizeof(marking));
+                const VkDescriptorImageInfo depthInfo{sceneViewportDepthBuffer.sampler(),
+                    sceneViewportDepthBuffer.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+                const VkWriteDescriptorSet write{
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = vsmPageMarkingSets[currentFrame], .dstBinding = 0,
+                    .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &depthInfo};
+                vkUpdateDescriptorSets(vulkanDevice.logical(), 1, &write, 0, nullptr);
+            }
             UniformBufferObject data{
                 sceneView, sceneProjection, Mat4{glm::inverse(sceneProjection.native())},
                 Mat4{glm::inverse(sceneView.native())}, sceneView, sceneProjection,
@@ -590,6 +701,9 @@
             static const ProfileNameId cullingProfileName = Profiler::registerName("Culling");
             static const ProfileNameId meshletForwardProfileName = Profiler::registerName("Meshlet Forward Prepare");
             static const ProfileNameId forwardProfileName = Profiler::registerName("Forward");
+            static const ProfileNameId depthPrepassProfileName = Profiler::registerName("Depth Prepass");
+            static const ProfileNameId hiZProfileName = Profiler::registerName("Hi-Z");
+            static const ProfileNameId directionalVisibilityProfileName = Profiler::registerName("Directional Visibility");
             static const ProfileNameId velocityProfileName = Profiler::registerName("Velocity");
             static const ProfileNameId taaProfileName = Profiler::registerName("TAA");
             static const ProfileNameId bloomProfileName = Profiler::registerName("Bloom");
@@ -736,7 +850,10 @@
             if (meshletForwardReady) {
                 for (const InstanceBatch& batch : instanceBatches) {
                     if (batch.shaderSlot == materialShaderIndex(MaterialShader::Water)) continue;
+                    // Meshlet commands currently mix both face modes in one
+                    // shader bin. Two-sided materials need the indexed lists.
                     if (batch.meshletCount == 0 || batch.shaderSlot >= MaterialShaderCount ||
+                        batch.twoSided ||
                         batch.lod1IndexCount != 0 || batch.lod2IndexCount != 0) {
                         meshletForwardReady = false;
                         break;
@@ -889,7 +1006,9 @@
             const auto previousHiZFrame = (currentFrame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
             const auto& previousHiZBuffer = hiZBuffers[previousHiZFrame];
             const bool hasHiZResources = hiZBuffer.image() != VK_NULL_HANDLE;
-            const bool hizEnabled = canUseHiZOcclusionCulling() && hasHiZResources;
+            // Shadows need receiver depth even when occlusion culling is off.
+            const bool hizEnabled = hasHiZResources &&
+                (canUseHiZOcclusionCulling() || (mainLightShadows && renderGameViewport));
             const bool hadPreviousHiZ = hiZValid[previousHiZFrame];
             // Descriptors stay bound on the first frame and after a camera
             // cut. Give both images a sampled layout before any shader can
@@ -1084,8 +1203,17 @@
             // Mark VSM pages from the completed depth hierarchy. The result
             // is consumed the next time this frame slot is reused, so this
             // dispatch never creates a CPU/GPU synchronization point.
-            const auto recordGameVsmPageRequests = [&](const VkCommandBuffer buffer) {
-                if (renderGameViewport && mainLightShadows && hadPreviousHiZ &&
+            const auto recordVsmPageRequests = [&](const VkCommandBuffer buffer, const bool sceneView) {
+                VsmFeedbackKey feedbackKey = sceneView ? sceneVsmFeedbackKey : hiZFeedbackKeys[previousHiZFrame];
+                for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level)
+                    feedbackKey.clipMatrices[level] = (sceneView ? sceneShadowClipMatrices : shadowClipMatrices)[level].native();
+                feedbackKey.settingsRevision = renderSettingsRevision;
+                feedbackKey.quality = static_cast<std::uint32_t>(shadowQuality);
+                const bool needsFeedback = sceneView ? sceneVsmFeedbackCache.needsUpdate(feedbackKey)
+                    : (!vsmRequestsReady[currentFrame] || vsmRequestsFromScene[currentFrame] ||
+                       vsmFeedbackCaches[currentFrame].needsUpdate(feedbackKey));
+                if (mainLightShadows && (sceneView || (renderGameViewport && hadPreviousHiZ)) &&
+                    needsFeedback &&
                     vsmPageMarkingPipeline != VK_NULL_HANDLE &&
                     vsmPageMarkingSets[currentFrame] != VK_NULL_HANDLE &&
                     vsmPageCompactPipeline != VK_NULL_HANDLE &&
@@ -1097,7 +1225,7 @@
                         .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                         .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
                         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                         .buffer = vsmRequestedPageBuffers[currentFrame].handle(),
                         .offset = 0, .size = VK_WHOLE_SIZE};
                     const VkDependencyInfo clearDependency{
@@ -1111,8 +1239,8 @@
                     vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                             vsmPageMarkingPipelineLayout, 0, 1,
                                             &markingSet, 0, nullptr);
-                    vkCmdDispatch(buffer, (swapchain.extent().width + 7U) / 8U,
-                                  (swapchain.extent().height + 7U) / 8U, 1);
+                    vkCmdDispatch(buffer, (feedbackKey.width + 7U) / 8U,
+                                  (feedbackKey.height + 7U) / 8U, 1);
                     const VkBufferMemoryBarrier2 markingBarrier{
                         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                         .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1134,7 +1262,7 @@
                         .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                         .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
                         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                         .buffer = vsmCompactedPageCountBuffers[currentFrame].handle(),
                         .offset = 0, .size = sizeof(std::uint32_t)};
                     const VkDependencyInfo countDependency{
@@ -1173,6 +1301,12 @@
                         .pBufferMemoryBarriers = completionBarriers};
                     vkCmdPipelineBarrier2(buffer, &completionDependency);
                     vsmRequestsReady[currentFrame] = true;
+                    vsmRequestsFromScene[currentFrame] = sceneView;
+                    vsmRequestClipMatrices[currentFrame] = sceneView ? sceneShadowClipMatrices : shadowClipMatrices;
+                    if (sceneView) {
+                        sceneVsmFeedbackPending[currentFrame] = true;
+                        sceneVsmFeedbackCache.commit(feedbackKey);
+                    } else vsmFeedbackCaches[currentFrame].commit(feedbackKey);
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                 }
             };
@@ -1244,7 +1378,8 @@
                     shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
                     mainLightShadows
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
-                    sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr,
+                    sceneDescriptorPass.grassShadowDescriptorSet(currentFrame),
+                    mainLightShadows ? grassShadowDrawPtr : nullptr,
                     static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
                 gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
@@ -1537,7 +1672,7 @@
                     .write = false});
             }, [&](const VkCommandBuffer buffer) {
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
-                gpuTimestampProfiler.beginZone(buffer, currentFrame, forwardProfileName);
+                gpuTimestampProfiler.beginZone(buffer, currentFrame, depthPrepassProfileName);
                 forwardPass.begin(buffer, msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(),
                     depthBuffer.imageView(), msaa.enabled() ? VK_NULL_HANDLE : velocityBuffer.imageView(),
                     msaa.enabled() ? VK_NULL_HANDLE : gtaoViewNormalBuffer.imageView(),
@@ -1560,7 +1695,7 @@
                         forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
                             indirectDraws[currentFrame], commandOffset, countOffset);
                         forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
-                            foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                            foliageIndirectDraws[currentFrame], commandOffset, countOffset, true);
                     }
                 }
                 if (meshletForwardReady)
@@ -1600,8 +1735,16 @@
             viewportFrameGraph.exportTexture(graphAo);
             // Shadow atlas work follows depth on graphics and overlaps GTAO on compute.
             // The previous Hi-Z is read by page marking before the current Hi-Z write.
+            // The table is also the explicit graph dependency between atlas
+            // publication and visibility sampling. Sharing a depth input alone
+            // does not order these two passes.
+            const auto graphShadowPageTable = viewportFrameGraph.importBuffer(
+                "VSM page table", shadowPass.pageTableBuffer(currentFrame), {
+                    .size = sizeof(std::uint32_t) * ShadowMap::VirtualPageCount,
+                    .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT});
             viewportFrameGraph.addPass("Shadow VSM", RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
+                builder.write(graphShadowPageTable, RenderGraph::BufferUsage::TransferWrite);
                 builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
                 if (graphPreviousHiZ)
                     builder.read(graphPreviousHiZ, RenderGraph::TextureUsage::SampledReadCompute);
@@ -1609,7 +1752,7 @@
             }, [&](const VkCommandBuffer buffer) {
                 gameVsmProfiled[currentFrame] = true;
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowProfileName);
-                recordGameVsmPageRequests(buffer);
+                recordVsmPageRequests(buffer, false);
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowDepthRasterProfileName);
                 shadowPass.record(
                     buffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
@@ -1619,7 +1762,8 @@
                     shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
                     mainLightShadows
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
-                    shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr,
+                    shadowPass.grassShadowDescriptorSet(currentFrame),
+                    mainLightShadows ? grassShadowDrawPtr : nullptr,
                     static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
@@ -1636,8 +1780,10 @@
                         .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                         .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         .write = false});
-                }, [this](const VkCommandBuffer buffer) {
+                }, [&](const VkCommandBuffer buffer) {
+                    gpuTimestampProfiler.beginZone(buffer, currentFrame, hiZProfileName);
                     hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame], VK_NULL_HANDLE, false);
+                    gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
                 viewportFrameGraph.exportTexture(graphHiZ);
             } else viewportFrameGraph.exportTexture(graphDepth);
@@ -1655,9 +1801,10 @@
                     "Directional visibility", directionalVisibilityPass.resultImage(currentFrame),
                     visibilityDesc, {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
                 // This graphics-queue compute pass only needs prepass outputs.
-                // It can run while GTAO and Hi-Z execute on async compute.
+                // It can overlap GTAO on async compute; Hi-Z uses graphics.
                 viewportFrameGraph.addPass("Directional visibility", RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(graphShadowPageTable, RenderGraph::BufferUsage::StorageReadCompute);
                     builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
                     builder.read(graphViewNormal, RenderGraph::TextureUsage::SampledReadCompute);
                     builder.write(graphDirectionalVisibility, RenderGraph::TextureUsage::StorageWriteCompute);
@@ -1668,9 +1815,11 @@
                         .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         .write = false});
                 }, [&](const VkCommandBuffer buffer) {
+                    gpuTimestampProfiler.beginZone(buffer, currentFrame, directionalVisibilityProfileName);
                     directionalVisibilityPass.record(buffer, currentFrame,
                         depthBuffer.imageView(), depthBuffer.sampler(),
                         gtaoViewNormalBuffer.imageView(), gtaoViewNormalBuffer.sampler(), false);
+                    gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
             }
             // Forward lighting records after this graph. Its input pass waits
@@ -1678,6 +1827,7 @@
             viewportFrameGraph.addPass("Forward lighting inputs", RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
                 builder.startNewBatch();
+                builder.read(graphShadowPageTable, RenderGraph::BufferUsage::StorageReadFragment);
                 builder.read(graphAo, RenderGraph::TextureUsage::SampledReadFragment);
                 if (graphDirectionalVisibility)
                     builder.read(graphDirectionalVisibility, RenderGraph::TextureUsage::SampledReadCompute);
@@ -1709,47 +1859,11 @@
             context.nextQueueTimelineValues[1] = &renderGraphComputeTimelineValue;
             context.nextQueueTimelineValues[2] = &renderGraphTransferTimelineValue;
             context.uploadTimeline = uploadContext.timeline();
-            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
-                throw std::runtime_error("Could not end graphics commands before viewport RenderGraph");
-            const std::uint64_t earlyUploadValue = legacyUploadValue();
-            const VkSemaphoreSubmitInfo earlyUploadWait{
-                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                .semaphore = uploadContext.timeline(), .value = earlyUploadValue,
-                .stageMask = legacyUploadStages};
-            const VkCommandBufferSubmitInfo earlyCommand{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-                .commandBuffer = commandBuffer};
-            const VkSubmitInfo2 earlySubmit{
-                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                .waitSemaphoreInfoCount = earlyUploadValue != 0 ? 1U : 0U,
-                .pWaitSemaphoreInfos = earlyUploadValue != 0 ? &earlyUploadWait : nullptr,
-                .commandBufferInfoCount = 1, .pCommandBufferInfos = &earlyCommand};
-            if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &earlySubmit, VK_NULL_HANDLE) != VK_SUCCESS)
-                throw std::runtime_error("Could not submit graphics commands before viewport RenderGraph");
-            viewportFrameGraph.recordAndSubmit(context);
-            commandBuffer = postViewportGraphicsCommandBuffers.at(currentFrame);
-            const VkCommandBufferBeginInfo postBegin{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-            if (vkBeginCommandBuffer(commandBuffer, &postBegin) != VK_SUCCESS)
-                throw std::runtime_error("Could not begin graphics commands after viewport RenderGraph");
-            hdrBufferInitialized = true;
-            if (brixelizer.ready() && cameraController.camera()) {
-                const glm::vec3 center = cameraController.camera()->position().native();
-                const float centerCoords[3]{center.x, center.y, center.z};
-                brixelizer.update(commandBuffer, centerCoords,
-                    static_cast<std::uint32_t>(submittedFrameValue), currentFrame, brixelizerDebugView,
-                    glm::inverse(cameraController.camera()->viewMatrix().native()),
-                    glm::inverse(cameraController.camera()->projectionMatrix().native()));
-            }
-            if (hizEnabled) {
-                hiZViewProjections[currentFrame] = cameraController.camera()->projectionMatrix().native() *
-                                                  cameraController.camera()->viewMatrix().native();
-                hiZValid[currentFrame] = true;
-            }
 
             const bool rtContactRequested = vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
                 mainLightShadows && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
-                rtContactShadowPass.resultView(currentFrame) != VK_NULL_HANDLE;
+                rtContactShadowPass.resultView(currentFrame) != VK_NULL_HANDLE &&
+                directionalVisibilityPass.resultView(currentFrame) != VK_NULL_HANDLE;
             const bool rtSceneRequested = rtContactRequested;
             if (rtSceneRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() && indexBuffer.hasDeviceAddress()) {
                 std::vector<AccelerationStructureManager::MeshBuildInput> meshes;
@@ -1829,18 +1943,66 @@
                     rtTlasUpdatePending[currentFrame] = false;
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
-                if (rtContactRequested && accelerationStructures.built(currentFrame)) {
-                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtContactProfileName);
-                    rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(currentFrame),
-                        depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
-                        gtaoViewNormalBuffer.sampler(), directionalVisibilityPass.resultView(currentFrame),
-                        directionalVisibilityPass.resultSampler(currentFrame), rtContactShadowSettings);
-                    const float rtContactEnabled = 1.0F;
-                    uniformBuffers[currentFrame].update(&rtContactEnabled, sizeof(rtContactEnabled),
-                        offsetof(UniformBufferObject, clusterZScaleBiasEnvironmentMipRtContact) + sizeof(float) * 3);
-                    rtContactActive = true;
-                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-                }
+            }
+            // Publish the feature flag before any submission can read the
+            // frame UBO. The depth/GTAO/visibility graph shares this allocation
+            // with RTCS and forward lighting; a later host write races its GPU reads.
+            const bool rtContactReadyThisFrame = rtContactRequested && !rayTracingBlasDirty &&
+                accelerationStructures.built(currentFrame);
+            const float rtContactEnabled = rtContactReadyThisFrame ? 1.0F : 0.0F;
+            uniformBuffers[currentFrame].update(&rtContactEnabled, sizeof(rtContactEnabled),
+                offsetof(UniformBufferObject, clusterZScaleBiasEnvironmentMipRtContact) + sizeof(float) * 3);
+
+            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+                throw std::runtime_error("Could not end graphics commands before viewport RenderGraph");
+            const std::uint64_t earlyUploadValue = legacyUploadValue();
+            const VkSemaphoreSubmitInfo earlyUploadWait{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .semaphore = uploadContext.timeline(), .value = earlyUploadValue,
+                .stageMask = legacyUploadStages};
+            const VkCommandBufferSubmitInfo earlyCommand{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                .commandBuffer = commandBuffer};
+            const VkSubmitInfo2 earlySubmit{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                .waitSemaphoreInfoCount = earlyUploadValue != 0 ? 1U : 0U,
+                .pWaitSemaphoreInfos = earlyUploadValue != 0 ? &earlyUploadWait : nullptr,
+                .commandBufferInfoCount = 1, .pCommandBufferInfos = &earlyCommand};
+            if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &earlySubmit, VK_NULL_HANDLE) != VK_SUCCESS)
+                throw std::runtime_error("Could not submit graphics commands before viewport RenderGraph");
+            viewportFrameGraph.recordAndSubmit(context);
+            commandBuffer = postViewportGraphicsCommandBuffers.at(currentFrame);
+            const VkCommandBufferBeginInfo postBegin{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            if (vkBeginCommandBuffer(commandBuffer, &postBegin) != VK_SUCCESS)
+                throw std::runtime_error("Could not begin graphics commands after viewport RenderGraph");
+            hdrBufferInitialized = true;
+            if (hizEnabled) {
+                hiZViewProjections[currentFrame] = cameraController.camera()->projectionMatrix().native() *
+                                                  cameraController.camera()->viewMatrix().native();
+                hiZValid[currentFrame] = true;
+                VsmFeedbackKey depthKey;
+                depthKey.viewProjection = cameraController.camera()->unjitteredProjectionMatrix().native() *
+                                          cameraController.camera()->viewMatrix().native();
+                depthKey.sceneRevision = scene.mutationRevision();
+                depthKey.transformRevision = registry.componentRevision<Transform>();
+                depthKey.deformationRevision = grassDeformationVersion;
+                depthKey.windRevision = sceneFrameDataCache.windRevision;
+                depthKey.animationFrame = sceneFrameDataCache.hasWind && !sceneGpu.grassInstances.empty()
+                    ? submittedFrameValue : 0;
+                depthKey.width = swapchain.extent().width;
+                depthKey.height = swapchain.extent().height;
+                hiZFeedbackKeys[currentFrame] = depthKey;
+            }
+
+            if (rtContactReadyThisFrame) {
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtContactProfileName);
+                rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(currentFrame),
+                    depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
+                    gtaoViewNormalBuffer.sampler(), directionalVisibilityPass.resultView(currentFrame),
+                    directionalVisibilityPass.resultSampler(currentFrame), rtContactShadowSettings);
+                rtContactActive = true;
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
@@ -1867,7 +2029,7 @@
                     lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader,
                         indirectDraws[currentFrame], commandOffset, countOffset);
                     lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader,
-                        foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                        foliageIndirectDraws[currentFrame], commandOffset, countOffset, true);
                 }
             }
             if (meshletForwardReady)
@@ -2051,64 +2213,6 @@
                 }
                 vkCmdPipelineBarrier2(commandBuffer, &waterDependency);
             }
-            if (brixelizer.hasStaticMeshes() && brixelizerDebugView != BrixelizerSystem::DebugView::Off) {
-                VkImageMemoryBarrier2 debugToCopy{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                debugToCopy.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                debugToCopy.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                debugToCopy.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                debugToCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-                debugToCopy.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                debugToCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                debugToCopy.image = brixelizer.debugImage();
-                debugToCopy.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkImageMemoryBarrier2 hdrToCopy{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                hdrToCopy.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-                hdrToCopy.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                hdrToCopy.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                hdrToCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                hdrToCopy.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                hdrToCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                hdrToCopy.image = hdrBuffer.image();
-                hdrToCopy.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                const std::array beforeCopy{debugToCopy, hdrToCopy};
-                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(beforeCopy.size());
-                dependency.pImageMemoryBarriers = beforeCopy.data();
-                vkCmdPipelineBarrier2(commandBuffer, &dependency);
-                const VkExtent2D extent = swapchain.extent();
-                const VkImageCopy region{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
-                                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
-                                         {extent.width, extent.height, 1}};
-                vkCmdCopyImage(commandBuffer, brixelizer.debugImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               hdrBuffer.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-                debugToCopy.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                debugToCopy.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-                debugToCopy.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                debugToCopy.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                debugToCopy.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                debugToCopy.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                hdrToCopy.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                hdrToCopy.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                hdrToCopy.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-                hdrToCopy.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                hdrToCopy.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                hdrToCopy.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                const std::array afterCopy{debugToCopy, hdrToCopy};
-                dependency.pImageMemoryBarriers = afterCopy.data();
-                vkCmdPipelineBarrier2(commandBuffer, &dependency);
-            }
-            if (brixelizerGIEnabled && renderGameViewport && !msaa.enabled() &&
-                brixelizerDebugView == BrixelizerSystem::DebugView::Off && brixelizer.hasStaticMeshes()) {
-                brixelizer.dispatchGI(commandBuffer, currentFrame,
-                    depthBuffer.imageView(), depthBuffer.sampler(),
-                    gtaoViewNormalBuffer.imageView(), gtaoViewNormalBuffer.sampler(),
-                    velocityBuffer.image(), hdrBuffer.image(), imageBasedLighting.environmentImage(),
-                    imageBasedLighting.environmentSize(), imageBasedLighting.environmentMipLevels(),
-                    cameraController.camera()->viewMatrix().native(),
-                    cameraController.camera()->projectionMatrix().native(),
-                    glm::inverse(cameraController.camera()->viewMatrix().native()),
-                    cameraController.camera()->position().native());
-            }
             }
 
             if (renderSceneViewport) {
@@ -2133,7 +2237,8 @@
                 }
                 VkImageMemoryBarrier2 depthToAttachment{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 depthToAttachment.srcStageMask = sceneViewportDepthInitialized
-                    ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE;
+                    ? (VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                    : VK_PIPELINE_STAGE_2_NONE;
                 depthToAttachment.srcAccessMask = sceneViewportDepthInitialized
                     ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
                 depthToAttachment.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
@@ -2174,7 +2279,7 @@
                     sceneForwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
                         shader, sceneIndirectDraws[currentFrame], commandOffset, countOffset);
                     sceneForwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
-                        shader, sceneFoliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                        shader, sceneFoliageIndirectDraws[currentFrame], commandOffset, countOffset, true);
                 }
                 if (!sceneGpu.grassInstances.empty()) {
                     const auto& lists = sceneGrassRenderLists[currentFrame];
@@ -2226,7 +2331,8 @@
                 depthToSampled.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
                 depthToSampled.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                depthToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                depthToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 depthToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
                 depthToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
                 depthToSampled.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
@@ -2238,6 +2344,7 @@
                 sceneToSampledDependency.pImageMemoryBarriers = sceneToSampled;
                 vkCmdPipelineBarrier2(commandBuffer, &sceneToSampledDependency);
                 sceneViewportDepthInitialized = true;
+                recordVsmPageRequests(commandBuffer, true);
 
                 const bool hasSceneLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
                 const bool hasSceneVirtualWater = sceneVirtualWaterRenderer.active();
@@ -2694,7 +2801,6 @@
             destroyRenderFinishedSemaphores();
 
             swapchain.recreate();
-            if (brixelizer.ready()) brixelizer.resize(swapchain.extent());
             registry.view<CameraComponent>([&](const Entity, CameraComponent& component) {
                 if (component.primary) {
                     component.setAspectRatio(static_cast<float>(swapchain.extent().width),
@@ -3007,18 +3113,6 @@
                 GE_PROFILE_SCOPE("GPU Object Update");
                 updateRenderableBuffers();
             }
-            if (brixelizerGeometryDirty) {
-                // The current slot was retired by acquireFrameImage() and its
-                // fence has already been reset. Retire only the other slots
-                // before replacing Brixelizer's registered instances.
-                for (std::size_t slot = 0; slot < inFlightFences.size(); ++slot) {
-                    if (slot == currentFrame) continue;
-                    if (vkWaitForFences(device, 1, &inFlightFences[slot], VK_TRUE, UINT64_MAX) != VK_SUCCESS)
-                        throw std::runtime_error("Could not retire Brixelizer geometry users");
-                }
-                refreshBrixelizerGeometry();
-                brixelizerGeometryDirty = false;
-            }
             const Vec3 sceneCameraPosition = cameraController.editorPosition();
             const float sceneCameraYaw = cameraController.editorYaw();
             const float sceneCameraPitch = cameraController.editorPitch();
@@ -3036,6 +3130,9 @@
             sceneViewportRendered = sceneViewportActive &&
                 (sceneViewportNeedsRender || sceneCameraChanged ||
                  scene.mutationRevision() != sceneViewportRenderedRevision ||
+                 sceneDescriptorPass.hasPendingPageUpdates() ||
+                 std::ranges::any_of(sceneVsmFeedbackPending, [](bool pending) { return pending; }) ||
+                 (sceneFrameDataCache.hasWind && !sceneGpu.grassInstances.empty()) ||
                  renderSettingsRevision != sceneViewportRenderedSettingsRevision ||
                  sceneVirtualWaterRenderer.active());
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
@@ -3045,12 +3142,15 @@
                 shadowClipmapsValid = false;
                 sceneShadowClipmapsValid = false;
                 gameShadowContextActive = renderGameViewport;
+                vsmRequestsReady.fill(false);
+                sceneVsmFeedbackPending.fill(false);
+                sceneVsmFeedbackCache = {};
+                sceneVsmReceiverFeedbackValid = false;
             }
             // A slot without a Game View depth pass cannot provide history
             // to the next frame, even if it contains an older pyramid.
             if (!renderGameViewport) {
                 hiZValid[currentFrame] = false;
-                brixelizer.invalidateGI();
             }
             // Scene View is deliberately not rendered in play mode. Its cache
             // cannot consume this frame's dirty list, so discard it lazily;
@@ -3061,9 +3161,6 @@
             {
                 GE_PROFILE_SCOPE("Update Uniforms");
                 updateUniformBuffer(currentFrame);
-                if (brixelizer.giHasHistory())
-                    shadowPass.setDiffuseGI(currentFrame,
-                        brixelizer.giDiffuseDescriptor(brixelizer.giLatestOutputSlot()));
             }
             if (sceneViewportRendered) {
                 updateSceneViewportUniformBuffer(currentFrame);

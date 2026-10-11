@@ -24,7 +24,6 @@
 #include "Engine/Renderer/Passes/RtContactShadowPass.h"
 #include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
 #include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
-#include "Engine/Renderer/Lighting/Brixelizer/BrixelizerSystem.h"
 #include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
 #include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/Renderer/shader_loader.h"
@@ -67,6 +66,8 @@
 #include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Renderer/Water/VirtualWaterRenderer.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
+#include "Engine/Renderer/Lighting/VsmFeedbackCache.h"
+#include "Engine/Renderer/Lighting/VsmPagePolicy.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
 #include "Engine/Renderer/Passes/TonemapPass.h"
 #include "Engine/Renderer/Passes/TemporalAaPass.h"
@@ -745,7 +746,6 @@ namespace Engine {
             // table. A scene reload replaces both buffers even at the same extent.
             rtContactShadowPass.destroy();
             directionalVisibilityPass.destroy();
-            brixelizer.setStaticMeshes(VK_NULL_HANDLE, 0, VK_NULL_HANDLE, 0, {});
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();
@@ -837,7 +837,6 @@ namespace Engine {
             createImageBasedLighting();
             createMeshBuffers();
             createInstanceBuffer();
-            refreshBrixelizerGeometry();
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
             lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
@@ -891,7 +890,6 @@ namespace Engine {
             // descriptor bindings and scene tables.  This is fence/timeline
             // based rather than a device-wide idle wait.
             waitForGlobalResourceRebuild();
-            brixelizer.setStaticMeshes(VK_NULL_HANDLE, 0, VK_NULL_HANDLE, 0, {});
 
             // ECS topology is not renderer topology.  Only resources whose
             // contents or descriptor bindings refer to the renderable tables
@@ -924,7 +922,6 @@ namespace Engine {
             createMaterialTextures();
             createMeshBuffers();
             createInstanceBuffer();
-            refreshBrixelizerGeometry();
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
             lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();

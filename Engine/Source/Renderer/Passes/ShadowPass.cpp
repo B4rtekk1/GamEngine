@@ -2,6 +2,7 @@
 #include "Engine/Renderer/Passes/ShadowPass.h"
 
 #include "Engine/Renderer/Lighting/ReflectionProbeManager.h"
+#include "Engine/Renderer/Lighting/VsmPagePolicy.h"
 
 #include "Engine/Math/Mat4.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
@@ -39,24 +40,8 @@ namespace Engine {
 
         bool clipPageShift(const Mat4 &previous, const Mat4 &current,
                            std::int32_t &shiftX, std::int32_t &shiftY) {
-            const glm::mat4 &oldMatrix = previous.native();
-            const glm::mat4 &newMatrix = current.native();
-            for (glm::length_t column = 0; column < 4; ++column) {
-                for (glm::length_t row = 0; row < 4; ++row) {
-                    if (column == 3 && (row == 0 || row == 1)) continue;
-                    if (std::abs(oldMatrix[column][row] - newMatrix[column][row]) > 1.0e-5F)
-                        return false;
-                }
-            }
-            const glm::vec4 oldOrigin = oldMatrix * glm::vec4{0.0F, 0.0F, 0.0F, 1.0F};
-            const glm::vec4 newOrigin = newMatrix * glm::vec4{0.0F, 0.0F, 0.0F, 1.0F};
-            const glm::vec2 pageDelta =
-                    ((glm::vec2{newOrigin} / newOrigin.w) - (glm::vec2{oldOrigin} / oldOrigin.w)) *
-                    (0.5F * static_cast<float>(ShadowMap::VirtualPagesPerAxis));
-            shiftX = static_cast<std::int32_t>(std::round(pageDelta.x));
-            shiftY = static_cast<std::int32_t>(std::round(pageDelta.y));
-            return std::abs(pageDelta.x - static_cast<float>(shiftX)) < 1.0e-3F &&
-                   std::abs(pageDelta.y - static_cast<float>(shiftY)) < 1.0e-3F;
+            return vsmClipPageShift(previous.native(), current.native(),
+                                   ShadowMap::VirtualPagesPerAxis, shiftX, shiftY);
         }
 
         glm::mat4 gpuMatrix(const Culling::GPUMat4 &source) {
@@ -115,7 +100,7 @@ namespace Engine {
             }
 
             // This is a compact list, not an array indexed by binding number.
-            VkDescriptorSetLayoutBinding bindings[21]{};
+            VkDescriptorSetLayoutBinding bindings[20]{};
             bindings[0] = {
                 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
@@ -197,8 +182,6 @@ namespace Engine {
                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // RT contact visibility
             bindings[19] = {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // resolved directional visibility
-            bindings[20] = {20, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // previous-frame diffuse GI
             const VkDescriptorSetLayoutCreateInfo layoutInfo{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
                 static_cast<std::uint32_t>(std::size(bindings)), bindings
@@ -214,7 +197,7 @@ namespace Engine {
             const VkDescriptorPoolSize poolSizes[] = {
                 {
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 6U *
-                                                               (MaxMaterialTextures + 11U +
+                                                               (MaxMaterialTextures + 10U +
                                                                 ReflectionProbeManager::TextureDescriptorCount)
                 },
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U},
@@ -305,7 +288,7 @@ namespace Engine {
                 const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
                 std::vector<VkDescriptorImageInfo> reflectionTextures(
                     ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
-                VkWriteDescriptorSet writes[19]{};
+                VkWriteDescriptorSet writes[18]{};
                 writes[0] = {
                     VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                     descriptorSets_[frame], 0, 0, 1,
@@ -402,9 +385,6 @@ namespace Engine {
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     &linearImageInfo, nullptr, nullptr
                 };
-                writes[18] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                    descriptorSets_[frame], 20, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    materialTextures.data(), nullptr, nullptr};
                 // Standard forward consumes bindings 3/7 as the clustered range
                 // headers and compact light-index list.  Grass descriptors below
                 // retain their vertex-only cluster/deformation bindings.
@@ -430,12 +410,13 @@ namespace Engine {
                 vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
                 for (VkWriteDescriptorSet &write: writes) write.dstSet = grassShadowDescriptorSets_[frame];
                 vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-                // Start from the generic scene contract. setShadowInstanceTransforms()
-                // replaces only 5/6 immediately before the shadow draw.
+                // Shadow bindings 3/7 retain source instances and indices for
+                // overflow fallback; 5/6 are rebound to compact transforms and
+                // material offsets immediately before the shadow draw.
                 writes[5].pBufferInfo = &instanceInfo;
                 writes[6].pBufferInfo = &instanceIndexInfo;
-                writes[7].pBufferInfo = &clusterRangeInfo;
-                writes[8].pBufferInfo = &clusterIndexInfo;
+                writes[7].pBufferInfo = &instanceInfo;
+                writes[8].pBufferInfo = &instanceIndexInfo;
                 for (VkWriteDescriptorSet &write: writes) write.dstSet = shadowDescriptorSets_[frame];
                 vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
                 for (VkWriteDescriptorSet &write: writes) write.dstSet = shadowTwoSidedDescriptorSets_[frame];
@@ -614,13 +595,6 @@ namespace Engine {
         gtaoDescriptorCacheValid_[frameIndex] = true;
     }
 
-    void ShadowPass::setDiffuseGI(const std::uint32_t frameIndex,
-                                  const VkDescriptorImageInfo& texture) const {
-        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-            descriptorSets_.at(frameIndex), 20, 0, 1,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr};
-        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-    }
 
     void ShadowPass::setContactShadowTexture(const std::uint32_t frameIndex,
                                               const VkDescriptorImageInfo &texture) const {
@@ -787,8 +761,8 @@ namespace Engine {
             // descriptor set. Their bindings 5/6 are overwritten at record time.
             writes[3].pBufferInfo = &instance;
             writes[4].pBufferInfo = &instanceIndex;
-            writes[5].pBufferInfo = &clusterRanges;
-            writes[6].pBufferInfo = &clusterIndices;
+            writes[5].pBufferInfo = &instance;
+            writes[6].pBufferInfo = &instanceIndex;
             for (VkDescriptorSet set: {shadowDescriptorSets_[frame], shadowTwoSidedDescriptorSets_[frame]}) {
                 for (VkWriteDescriptorSet &write: writes) write.dstSet = set;
                 vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
@@ -979,6 +953,7 @@ namespace Engine {
         deferredRequests_.clear();
         pendingPageCommits_.clear();
         atlasContentValid_ = false;
+        pageUpdatesPending_ = false;
     }
 
     void ShadowPass::preparePages(
@@ -992,11 +967,15 @@ namespace Engine {
         const std::uint32_t pageUpdateBudget) {
         constexpr std::int32_t pageCount =
                 static_cast<std::int32_t>(ShadowMap::VirtualPagesPerAxis);
+        // preparePages may be called again after a frame was skipped. Pending
+        // ownership changes have never reached the atlas; discard them safely.
+        if (!pendingPageCommits_.empty()) invalidateCache();
         ++cacheClock_;
         pagesToRender_.clear();
         pendingPageCommits_.clear();
         preparedFrameIndex_ = frameIndex;
         const std::uint32_t maxPageUpdates = std::min(pageUpdateBudget, ShadowMap::PhysicalPageCount);
+        pageUpdatesPending_ = false;
 
         // A queued virtual coordinate is meaningful only for the clipmap layout
         // that produced it. Discard it if that layout changes; the current frame's
@@ -1041,16 +1020,16 @@ namespace Engine {
                         minimumUv.x >= 1.0F || minimumUv.y >= 1.0F)
                         continue;
                     const std::int32_t minimumX = std::clamp(
-                        static_cast<std::int32_t>(std::floor(minimumUv.x * pageCount)) - 1,
+                        static_cast<std::int32_t>(std::floor(std::clamp(minimumUv.x, 0.0F, 1.0F) * pageCount)) - 1,
                         0, pageCount - 1);
                     const std::int32_t minimumY = std::clamp(
-                        static_cast<std::int32_t>(std::floor(minimumUv.y * pageCount)) - 1,
+                        static_cast<std::int32_t>(std::floor(std::clamp(minimumUv.y, 0.0F, 1.0F) * pageCount)) - 1,
                         0, pageCount - 1);
                     const std::int32_t maximumX = std::clamp(
-                        static_cast<std::int32_t>(std::floor(maximumUv.x * pageCount)) + 1,
+                        static_cast<std::int32_t>(std::floor(std::clamp(maximumUv.x, 0.0F, 1.0F) * pageCount)) + 1,
                         0, pageCount - 1);
                     const std::int32_t maximumY = std::clamp(
-                        static_cast<std::int32_t>(std::floor(maximumUv.y * pageCount)) + 1,
+                        static_cast<std::int32_t>(std::floor(std::clamp(maximumUv.y, 0.0F, 1.0F) * pageCount)) + 1,
                         0, pageCount - 1);
                     for (std::int32_t y = minimumY; y <= maximumY; ++y) {
                         for (std::int32_t x = minimumX; x <= maximumX; ++x) {
@@ -1183,6 +1162,13 @@ namespace Engine {
         }
         std::vector<std::uint32_t> requests;
         requests.reserve(ShadowMap::PhysicalPageCount);
+        std::vector<std::uint32_t> overflowRequests;
+        std::array<bool, ShadowMap::VirtualPageCount> overflowQueued{};
+        const auto queueOverflow = [&](const std::uint32_t key) {
+            if (overflowQueued[key]) return;
+            overflowQueued[key] = true;
+            overflowRequests.push_back(key);
+        };
         // Reserve atlas capacity for progressively coarser clip levels.  A page
         // missed at a detailed level can then fall through to a resident coarse
         // level instead of producing a fully lit, page-shaped hole.
@@ -1197,12 +1183,14 @@ namespace Engine {
                                           const std::int32_t maximumX, const std::int32_t maximumY) {
             for (std::int32_t y = minimumY; y <= maximumY; ++y) {
                 for (std::int32_t x = minimumX; x <= maximumX; ++x) {
-                    if (levelCounts[level] >= levelBudgets[level] ||
-                        requests.size() >= ShadowMap::PhysicalPageCount)
-                        return;
                     const std::uint32_t key = virtualPageIndex(
                         level, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
                     if (requested[key]) continue;
+                    if (levelCounts[level] >= levelBudgets[level] ||
+                        requests.size() >= ShadowMap::PhysicalPageCount) {
+                        queueOverflow(key);
+                        continue;
+                    }
                     requested[key] = true;
                     requests.push_back(key);
                     ++levelCounts[level];
@@ -1211,12 +1199,12 @@ namespace Engine {
         };
         // Keep complete coarse coverage independently of delayed GPU feedback,
         // camera direction, and fine-level oversubscription. These pages never
-        // compete with rotating fine-page requests for their reserved capacity.
+        // compete with fine-page requests for their reserved capacity.
         requestRectangle(ShadowMap::ClipLevelCount - 1,
                          ShadowMap::FallbackFirstPage, ShadowMap::FallbackFirstPage,
                          ShadowMap::FallbackFirstPage + ShadowMap::FallbackPagesPerAxis - 1,
                          ShadowMap::FallbackFirstPage + ShadowMap::FallbackPagesPerAxis - 1);
-        if (feedbackValid || !deferredRequests_.empty()) {
+        if (feedbackValid) {
             // The compute pass emits only set bits, so this is O(requested pages)
             // rather than O(all virtual pages). Atomic compaction makes its
             // output order unspecified; deduplicate before scheduling.
@@ -1231,26 +1219,13 @@ namespace Engine {
             std::ranges::sort(orderedRequests);
             orderedRequests.erase(std::unique(orderedRequests.begin(), orderedRequests.end()),
                                   orderedRequests.end());
-            // Old misses get the first chance at a tile. Rotate the starting
-            // coordinate each frame so a persistent excess of receiver requests
-            // cannot permanently favor low virtual page indices.
-            const std::uint32_t firstLocal =
-                    static_cast<std::uint32_t>((cacheClock_ * 257) % pagesPerLevelForRequests);
             std::ranges::sort(orderedRequests, [&](const std::uint32_t left,
                                                    const std::uint32_t right) {
-                const std::uint32_t leftLevel = left / pagesPerLevelForRequests;
-                const std::uint32_t rightLevel = right / pagesPerLevelForRequests;
-                if (leftLevel != rightLevel) return leftLevel < rightLevel;
-                const bool leftDeferred = left < deferred.size() && deferred[left];
-                const bool rightDeferred = right < deferred.size() && deferred[right];
-                if (leftDeferred != rightDeferred) return leftDeferred;
-                const std::uint32_t leftRank =
-                        (left % pagesPerLevelForRequests + pagesPerLevelForRequests - firstLocal) %
-                        pagesPerLevelForRequests;
-                const std::uint32_t rightRank =
-                        (right % pagesPerLevelForRequests + pagesPerLevelForRequests - firstLocal) %
-                        pagesPerLevelForRequests;
-                return leftRank < rightRank;
+                return vsmRequestBefore(left, right,
+                    left < pageTable_.size() && pageTable_[left] != ShadowMap::InvalidPage,
+                    right < pageTable_.size() && pageTable_[right] != ShadowMap::InvalidPage,
+                    left < deferred.size() && deferred[left],
+                    right < deferred.size() && deferred[right], pagesPerLevelForRequests);
             });
             for (const std::uint32_t key: orderedRequests) {
                 if (key >= ShadowMap::VirtualPageCount) continue;
@@ -1262,6 +1237,7 @@ namespace Engine {
                 if (levelCounts[level] >= levelBudgets[level] ||
                     requests.size() >= ShadowMap::PhysicalPageCount) {
                     deferred[key] = pageTable_[key] == ShadowMap::InvalidPage;
+                    queueOverflow(key);
                     continue;
                 }
                 requested[key] = true;
@@ -1283,16 +1259,16 @@ namespace Engine {
                         minimumUv.x >= 1.0F || minimumUv.y >= 1.0F)
                         continue;
                     const std::int32_t minimumX = std::clamp(
-                        static_cast<std::int32_t>(std::floor(minimumUv.x * pageCount)) - 1,
+                        static_cast<std::int32_t>(std::floor(std::clamp(minimumUv.x, 0.0F, 1.0F) * pageCount)) - 1,
                         0, pageCount - 1);
                     const std::int32_t minimumY = std::clamp(
-                        static_cast<std::int32_t>(std::floor(minimumUv.y * pageCount)) - 1,
+                        static_cast<std::int32_t>(std::floor(std::clamp(minimumUv.y, 0.0F, 1.0F) * pageCount)) - 1,
                         0, pageCount - 1);
                     const std::int32_t maximumX = std::clamp(
-                        static_cast<std::int32_t>(std::floor(maximumUv.x * pageCount)) + 1,
+                        static_cast<std::int32_t>(std::floor(std::clamp(maximumUv.x, 0.0F, 1.0F) * pageCount)) + 1,
                         0, pageCount - 1);
                     const std::int32_t maximumY = std::clamp(
-                        static_cast<std::int32_t>(std::floor(maximumUv.y * pageCount)) + 1,
+                        static_cast<std::int32_t>(std::floor(std::clamp(maximumUv.y, 0.0F, 1.0F) * pageCount)) + 1,
                         0, pageCount - 1);
                     // Request the actual projected footprint even when a large
                     // receiver (terrain, walls) spans many pages.  Per-level budgets
@@ -1300,6 +1276,26 @@ namespace Engine {
                     requestRectangle(level, minimumX, minimumY, maximumX, maximumY);
                 }
             }
+
+        // Quotas reserve coverage, but must not strand capacity when another
+        // level has no demand. Borrow the unused slots after all reservations
+        // are satisfied, retaining the same stable admission order as feedback.
+        std::ranges::sort(overflowRequests);
+        overflowRequests.erase(std::unique(overflowRequests.begin(), overflowRequests.end()),
+                               overflowRequests.end());
+        std::ranges::sort(overflowRequests, [&](const auto left, const auto right) {
+            return vsmRequestBefore(left, right,
+                pageTable_[left] != ShadowMap::InvalidPage,
+                pageTable_[right] != ShadowMap::InvalidPage,
+                deferred[left], deferred[right],
+                ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis);
+        });
+        for (const std::uint32_t key: overflowRequests) {
+            if (requests.size() >= ShadowMap::PhysicalPageCount) break;
+            if (requested[key]) continue;
+            requested[key] = true;
+            requests.push_back(key);
+        }
 
         constexpr std::uint32_t pagesPerLevel =
                 ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
@@ -1326,6 +1322,7 @@ namespace Engine {
                 // sampling shader could observe stale atlas contents.
                 if (pagesToRender_.size() >= maxPageUpdates) {
                     deferred[key] = true;
+                    pageUpdatesPending_ = true;
                     continue;
                 }
                 physical = ShadowMap::InvalidPage;
@@ -1362,7 +1359,7 @@ namespace Engine {
                 physicalPages_[physical] = PhysicalPage{
                     static_cast<std::uint16_t>(local % ShadowMap::VirtualPagesPerAxis),
                     static_cast<std::uint16_t>(local / ShadowMap::VirtualPagesPerAxis),
-                    static_cast<std::uint8_t>(level), true, false, cacheClock_
+                    static_cast<std::uint8_t>(level), true, true, cacheClock_
                 };
                 // Do not publish pageTable_[key] yet. The physical tile still
                 // contains its previous depth until record() has cleared and
@@ -1372,24 +1369,24 @@ namespace Engine {
                 scheduled[physical] = true;
             } else {
                 physicalPages_[physical].lastUsed = cacheClock_;
-                if (physicalPages_[physical].dirty &&
-                    pagesToRender_.size() < maxPageUpdates) {
-                    physicalPages_[physical].dirty = false;
-                    pagesToRender_.push_back(physical);
-                    scheduled[physical] = true;
-                }
             }
         }
 
-        // Refresh unrequested dirty pages with the remaining budget. Missing
-        // coverage must be allocated first: moving casters must not consume
-        // every update while the scene-wide fallback is still incomplete.
-        for (std::uint32_t physical = 0; physical < physicalPages_.size() &&
-                                         pagesToRender_.size() < maxPageUpdates;
-             ++physical) {
-            PhysicalPage &page = physicalPages_[physical];
-            if (!page.allocated || !page.dirty) continue;
-            page.dirty = false;
+        // Fill missing coverage before spending the remaining budget on
+        // refreshes. Oldest rendered tiles go first, so continuous animation
+        // cannot starve the same tiles or finer levels every frame.
+        std::vector<std::uint32_t> dirtyPages;
+        dirtyPages.reserve(ShadowMap::PhysicalPageCount);
+        for (std::uint32_t physical = 0; physical < physicalPages_.size(); ++physical)
+            if (physicalPages_[physical].allocated && physicalPages_[physical].dirty && !scheduled[physical])
+                dirtyPages.push_back(physical);
+        std::ranges::sort(dirtyPages, [&](const auto left, const auto right) {
+            const auto& a = physicalPages_[left];
+            const auto& b = physicalPages_[right];
+            return vsmRefreshBefore(left, right, a.lastRendered, b.lastRendered, a.level, b.level);
+        });
+        for (const auto physical : dirtyPages) {
+            if (pagesToRender_.size() >= maxPageUpdates) break;
             pagesToRender_.push_back(physical);
             scheduled[physical] = true;
         }
@@ -1398,6 +1395,9 @@ namespace Engine {
         deferredRequests_.reserve(ShadowMap::PhysicalPageCount);
         for (std::uint32_t key = 0; key < ShadowMap::VirtualPageCount; ++key)
             if (deferred[key]) deferredRequests_.push_back(key);
+        for (std::uint32_t physical = 0; physical < physicalPages_.size(); ++physical)
+            if (physicalPages_[physical].allocated && physicalPages_[physical].dirty && !scheduled[physical])
+                pageUpdatesPending_ = true;
 
         // Scroll/invalidation changes only remap already-rendered tiles and are
         // safe to publish now. Newly allocated entries are intentionally absent
@@ -1413,10 +1413,13 @@ namespace Engine {
         if (afterShaderReads) {
             const VkBufferMemoryBarrier2 before{
                 .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                 .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE
             };
             const VkDependencyInfo dependency{
@@ -1433,6 +1436,8 @@ namespace Engine {
             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
             .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE
         };
         const VkDependencyInfo dependency{
@@ -1459,7 +1464,9 @@ namespace Engine {
                             const Culling::IndexedIndirectDrawCount *const grassIndirectDraw,
                             const std::uint32_t grassCommandsPerPage) {
         (void) updateMask;
-        if (objectCount == 0) {
+        const bool hasGrassCasters = grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr &&
+                                    grassIndirectDraw->valid() && grassCommandsPerPage != 0;
+        if (objectCount == 0 && !hasGrassCasters) {
             invalidateCache();
             atlasContentValid_ = false;
         }
@@ -1525,13 +1532,16 @@ namespace Engine {
                                         ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                                         : VK_PIPELINE_STAGE_2_NONE;
         atlasBarrier.srcAccessMask = physicalAtlasInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-        atlasBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+        atlasBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
         atlasBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         atlasBarrier.oldLayout = physicalAtlasInitialized
                                      ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                      : VK_IMAGE_LAYOUT_UNDEFINED;
         atlasBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        atlasBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        atlasBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         atlasBarrier.image = shadowMap_->image();
         atlasBarrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
         VkDependencyInfo atlasDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -1590,7 +1600,7 @@ namespace Engine {
                                0, sizeof(Mat4), &pageMatrix);
             if (objectCount != 0 && indirectDraw.valid()) {
                 indirectDraw.record(commandBuffer,
-                                    sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
+                                    sizeof(VkDrawIndexedIndirectCommand) * cullingPass.maxDrawCount() * pageIndex,
                                     sizeof(std::uint32_t) * pageIndex);
             }
             if (objectCount != 0 && twoSidedIndirectDraw.valid()) {
@@ -1598,7 +1608,7 @@ namespace Engine {
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipelineLayout_, 0, 1, &twoSidedSceneDescriptorSet, 0, nullptr);
                 twoSidedIndirectDraw.record(commandBuffer,
-                                            sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
+                                            sizeof(VkDrawIndexedIndirectCommand) * twoSidedCullingPass.maxDrawCount() * pageIndex,
                                             sizeof(std::uint32_t) * pageIndex);
                 vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1632,6 +1642,8 @@ namespace Engine {
         atlasToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
         atlasToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         atlasToSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        atlasToSampled.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        atlasToSampled.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         atlasToSampled.image = shadowMap_->image();
         atlasToSampled.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
         VkDependencyInfo atlasToSampledDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -1654,7 +1666,11 @@ namespace Engine {
         }
         atlasInitialized_ = true;
         shadowMap_->markInitialized();
-        if (objectCount != 0) atlasContentValid_ = true;
+        if (objectCount != 0 || hasGrassCasters) atlasContentValid_ = true;
+        for (const std::uint32_t physical : pagesToRender_) {
+            physicalPages_[physical].dirty = false;
+            physicalPages_[physical].lastRendered = cacheClock_;
+        }
         pagesToRender_.clear();
     }
 

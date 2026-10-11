@@ -77,11 +77,6 @@
         RtContactShadowPass rtContactShadowPass;
         DirectionalVisibilityPass directionalVisibilityPass;
         AccelerationStructureManager accelerationStructures;
-        BrixelizerSystem brixelizer;
-        BrixelizerSystem::DebugView brixelizerDebugView{BrixelizerSystem::DebugView::Off};
-        bool brixelizerEnabled{false};
-        bool brixelizerGIEnabled{false};
-        bool brixelizerGeometryDirty{false};
         bool rayTracingBlasDirty{true};
         // TLAS input is reconstructed only when ECS render state changes. Each
         // frame slot still receives its initial build before being reused.
@@ -455,6 +450,18 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> vsmCompactedPageCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> vsmPageMarkingUniformBuffers;
         std::array<bool, MAX_FRAMES_IN_FLIGHT> vsmRequestsReady{};
+        std::array<bool, MAX_FRAMES_IN_FLIGHT> vsmRequestsFromScene{};
+        std::array<bool, MAX_FRAMES_IN_FLIGHT> sceneVsmFeedbackPending{};
+        VsmFeedbackCache sceneVsmFeedbackCache;
+        VsmFeedbackKey sceneVsmFeedbackKey;
+        std::vector<std::uint32_t> sceneVsmReceiverRequests;
+        std::array<Mat4, ShadowMap::ClipLevelCount> sceneVsmReceiverMatrices{};
+        bool sceneVsmReceiverFeedbackValid{};
+        std::array<VsmFeedbackCache, MAX_FRAMES_IN_FLIGHT> vsmFeedbackCaches;
+        // Coverage of the depth source, recorded when its Hi-Z is produced.
+        std::array<VsmFeedbackKey, MAX_FRAMES_IN_FLIGHT> hiZFeedbackKeys;
+        // Virtual page keys are valid only in the layout that generated them.
+        std::array<std::array<Mat4, ShadowMap::ClipLevelCount>, MAX_FRAMES_IN_FLIGHT> vsmRequestClipMatrices{};
         // Forward+ lists are view-relative: the Game and Scene cameras can
         // have different extents and depth partitions in the same frame.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> clusteredLightRangeBuffers;
@@ -591,6 +598,7 @@
         // in this frame. ShadowPass evicts only overlapping virtual pages
         // instead of rebuilding the complete atlas for one moving body/blade.
         std::vector<Culling::GPUObjectData> dirtyShadowObjects;
+        std::uint64_t lastGrassShadowWindRevision{std::numeric_limits<std::uint64_t>::max()};
         // CPU-side cache for particle obstacles.  ParticleSystem receives
         // this vector only when collider-related ECS data actually changed.
         std::vector<Particles::ParticleCollider> cachedParticleColliders;

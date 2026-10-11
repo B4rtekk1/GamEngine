@@ -58,7 +58,10 @@ add_library(GameEngineImNodes STATIC ${imnodes_SOURCE_DIR}/imnodes.cpp)
 target_include_directories(GameEngineImNodes PUBLIC ${imnodes_SOURCE_DIR})
 target_link_libraries(GameEngineImNodes PUBLIC DearImGui)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
-# Prefer an installed VMA, then fall back to the header bundled with FidelityFX.
+# Prefer an installed VMA, then fall back to the standalone vendored header.
+if(VMA_INCLUDE_DIR AND NOT EXISTS "${VMA_INCLUDE_DIR}/vk_mem_alloc.h")
+    unset(VMA_INCLUDE_DIR CACHE)
+endif()
 find_path(VMA_INCLUDE_DIR
     NAMES vk_mem_alloc.h
     HINTS
@@ -66,7 +69,7 @@ find_path(VMA_INCLUDE_DIR
         "$ENV{VULKAN_SDK}/Include"
         "$ENV{VULKAN_SDK}/include/vma"
         "$ENV{VULKAN_SDK}/include"
-    PATHS "${PROJECT_SOURCE_DIR}/ThridParty/FidelityFX-SDK/framework/cauldron/framework/libs/memoryallocator"
+    PATHS "${PROJECT_SOURCE_DIR}/ThridParty/VulkanMemoryAllocator"
     REQUIRED)
 
 # The cooker uses only the portable block codec. Do not add Compressonator's

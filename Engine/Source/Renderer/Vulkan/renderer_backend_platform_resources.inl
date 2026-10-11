@@ -108,31 +108,6 @@
                 GE_PROFILE_SCOPE("Renderer.InstanceBuffers");
                 createInstanceBuffer();
             });
-            if (const char* debug = std::getenv("GAMEENGINE_BRIXELIZER_DEBUG")) {
-                const std::string_view view{debug};
-                if (view == "distance") brixelizerDebugView = BrixelizerSystem::DebugView::Distance;
-                else if (view == "gradient") brixelizerDebugView = BrixelizerSystem::DebugView::Gradient;
-                else if (view == "brick") brixelizerDebugView = BrixelizerSystem::DebugView::BrickId;
-                else if (view == "cascade") brixelizerDebugView = BrixelizerSystem::DebugView::CascadeId;
-                brixelizerEnabled = brixelizerDebugView != BrixelizerSystem::DebugView::Off;
-            }
-            if (const char* gi = std::getenv("GAMEENGINE_BRIXELIZER_GI")) {
-                const std::string_view value{gi};
-                brixelizerGIEnabled = value == "1" || value == "true" || value == "on";
-                brixelizerEnabled = brixelizerEnabled || brixelizerGIEnabled;
-            }
-            if (const char* enabled = std::getenv("GAMEENGINE_BRIXELIZER")) {
-                const std::string_view value{enabled};
-                brixelizerEnabled = brixelizerEnabled || value == "1" || value == "true" || value == "on";
-            }
-            if (brixelizerEnabled && (!msaa.enabled() || brixelizerDebugView != BrixelizerSystem::DebugView::Off)) {
-                timeInitialization("Brixelizer SDF", [&] {
-                    brixelizer.create(vulkanDevice.physical(), device, vulkanDevice.allocator(),
-                                      swapchain.extent(), MAX_FRAMES_IN_FLIGHT,
-                                      commandPool, vulkanDevice.graphicsQueue(), assetManager);
-                    refreshBrixelizerGeometry();
-                });
-            }
             timeInitialization("Uniform buffers", [&] {
                 GE_PROFILE_SCOPE("Renderer.UniformBuffers");
                 createUniformBuffers();
@@ -206,7 +181,17 @@
             }
             std::vector<const char*> extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
 
-            if (useValidation) {
+            // GPU capture labels are useful in Release too. Enable the
+            // optional extension independently of validation layers.
+            uint32_t availableExtensionCount = 0;
+            vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount, nullptr);
+            std::vector<VkExtensionProperties> availableExtensions(availableExtensionCount);
+            vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount, availableExtensions.data());
+            const bool debugUtilsAvailable = std::ranges::any_of(availableExtensions,
+                [](const VkExtensionProperties& extension) {
+                    return std::strcmp(extension.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0;
+                });
+            if (useValidation || debugUtilsAvailable) {
                 extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
             }
             return extensions;

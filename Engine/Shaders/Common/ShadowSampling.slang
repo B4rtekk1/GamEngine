@@ -696,6 +696,8 @@ float3 shadowDebugColor(uint view, ShadowSampleDebug debug)
     }
     if (view == SHADOW_DEBUG_DESIRED_CLIP_LEVEL || view == SHADOW_DEBUG_RESOLVED_CLIP_LEVEL)
     {
+        if (view == SHADOW_DEBUG_RESOLVED_CLIP_LEVEL && debug.resolvedResident == 0u)
+            return float3(0.02, 0.02, 0.02);
         static const float3 colors[7] = {
             float3(0.90, 0.20, 0.20), float3(0.95, 0.60, 0.15), float3(0.90, 0.90, 0.20),
             float3(0.20, 0.80, 0.30), float3(0.15, 0.70, 0.90), float3(0.30, 0.35, 0.95),
@@ -706,6 +708,7 @@ float3 shadowDebugColor(uint view, ShadowSampleDebug debug)
     }
     if (view == SHADOW_DEBUG_FALLBACK_DELTA)
     {
+        if (debug.resolvedResident == 0u) return float3(0.02, 0.02, 0.02);
         const uint delta = max(debug.resolvedClipLevel, debug.desiredClipLevel) - debug.desiredClipLevel;
         if (delta == 0u) return float3(0.10, 0.90, 0.20);
         if (delta == 1u) return float3(1.00, 0.90, 0.10);

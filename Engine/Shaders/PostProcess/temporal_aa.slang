@@ -16,6 +16,12 @@ struct Settings {
     float projectionA, projectionB;
 };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
+// A 16x16 output tile and a one-pixel halo share the filtered current
+// samples used by the clipping statistics. Store channels separately so
+// adjacent lanes access adjacent shared-memory words.
+groupshared float tileRed[18 * 18];
+groupshared float tileGreen[18 * 18];
+groupshared float tileBlue[18 * 18];
 float3 reinhard(float3 color) { return color / (color + 1.0); }
 float3 reinhardInverse(float3 color) { return color / max(1.0 - color, 1e-5); }
 float viewDepth(float deviceDepth) {
@@ -71,7 +77,6 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const int2 extent = int2(width, height);
     const float2 resolution = float2(width, height);
     const float2 texel = 1.0 / resolution;
-    if (any(dispatchId.xy >= uint2(extent))) return;
     // The resolve writes stable, unjittered pixels. Locate each output pixel's
     // corresponding sample in the jittered current render.
     const float2 outputUv = (float2(dispatchId.xy) + 0.5) * texel;
@@ -80,8 +85,22 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const float2 previousJitter = float2(settings.previousJitterX,
                                          settings.previousJitterY) * 0.5;
     const float2 jitterDelta = currentJitter - previousJitter;
+    const uint lane = threadId.y * 16u + threadId.x;
+    for (uint index = lane; index < 18u * 18u; index += 256u) {
+        const int2 tilePixel = int2(groupId.xy) * 16 + int2(index % 18u, index / 18u) - 1;
+        const float2 sampleUv = clamp((float2(tilePixel) + 0.5) * texel - currentJitter,
+                                     texel * 0.5, 1.0 - texel * 0.5);
+        const float3 sample = reinhard(max(currentFrame.SampleLevel(sampleUv, 0.0).rgb, 0.0));
+        tileRed[index] = sample.r;
+        tileGreen[index] = sample.g;
+        tileBlue[index] = sample.b;
+    }
+    // Partial workgroups must populate the halo and reach the barrier too.
+    GroupMemoryBarrierWithGroupSync();
+    if (any(dispatchId.xy >= uint2(extent))) return;
     const float2 currentUv = clamp(outputUv - currentJitter, texel * 0.5, 1.0 - texel * 0.5);
-    const float3 currentTm = reinhard(max(currentFrame.SampleLevel(currentUv, 0.0).rgb, 0.0));
+    const uint centerIndex = (threadId.y + 1u) * 18u + threadId.x + 1u;
+    const float3 currentTm = float3(tileRed[centerIndex], tileGreen[centerIndex], tileBlue[centerIndex]);
     const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.SampleLevel(currentUv, 0.0).y) : 0u;
     const bool waterPixel = (waterQuality & 0x80000000u) != 0;
     const float currentDepth = waterPixel ? waterSurfaceFrame.SampleLevel(currentUv, 0.0).z
@@ -92,8 +111,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     // depth convention is near=0, so select the velocity at the nearest depth
     // in a compact 3x3 footprint before reprojection.
     float nearestDepth = currentDepth;
-    float2 velocitySample = waterPixel ? waterVelocityFrame.SampleLevel(currentUv, 0.0).xy
-                                       : velocityFrame.SampleLevel(currentUv, 0.0).xy;
+    float2 nearestUv = currentUv;
+    bool nearestWater = waterPixel;
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
             const float2 sampleUv = clamp(currentUv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
@@ -103,11 +122,15 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
                                                   : currentDepthFrame.SampleLevel(sampleUv, 0.0).r;
             if (sampleDepth < nearestDepth) {
                 nearestDepth = sampleDepth;
-                velocitySample = sampleWater ? waterVelocityFrame.SampleLevel(sampleUv, 0.0).xy
-                                             : velocityFrame.SampleLevel(sampleUv, 0.0).xy;
+                nearestUv = sampleUv;
+                nearestWater = sampleWater;
             }
         }
     }
+    // Fetch motion only for the winning depth sample, rather than on every
+    // intermediate improvement while scanning the neighbourhood.
+    const float2 velocitySample = nearestWater ? waterVelocityFrame.SampleLevel(nearestUv, 0.0).xy
+                                               : velocityFrame.SampleLevel(nearestUv, 0.0).xy;
 
     // Velocity includes the jitter in both projection matrices. Subtract it
     // from the current UV to locate the corresponding previous-frame sample.
@@ -122,15 +145,27 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const float historyViewDepth = historyDepthFrame.SampleLevel(historyUv, 0.0).r;
     const bool depthMatches = abs(currentViewDepth - historyViewDepth) <=
         0.02 * max(currentViewDepth, historyViewDepth);
+    if (!historyInBounds || !depthMatches || settings.historyWeight <= 0.0) {
+        resolvedFrame[dispatchId.xy] = float4(reinhardInverse(currentTm), 1.0);
+        resolvedDepthFrame[dispatchId.xy] = currentViewDepth;
+        resolvedHistoryFrame[dispatchId.xy] = float4(currentTm, 1.0);
+        return;
+    }
 
     // Compute clipping statistics around the reconstructed current sample.
     float3 mean = 0.0;
     float3 meanSquared = 0.0;
     float totalWeight = 0.0;
+    // At viewport edges the original shader clamps the centre before adding
+    // offsets. Preserve that footprint; interior pixels use the shared tile.
+    const bool clampedCenter = any(currentUv != outputUv - currentJitter);
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
             const float2 sampleUv = clamp(currentUv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
-            const float3 sample = reinhard(max(currentFrame.SampleLevel(sampleUv, 0.0).rgb, 0.0));
+            const uint index = uint(int(centerIndex) + y * 18 + x);
+            const float3 sample = clampedCenter
+                ? reinhard(max(currentFrame.SampleLevel(sampleUv, 0.0).rgb, 0.0))
+                : float3(tileRed[index], tileGreen[index], tileBlue[index]);
             const float weight = exp(-3.0 * float(x * x + y * y) / 4.0);
             mean += sample * weight;
             meanSquared += sample * sample * weight;

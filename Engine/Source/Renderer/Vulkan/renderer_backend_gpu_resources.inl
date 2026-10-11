@@ -58,8 +58,7 @@
             const VkDeviceSize indirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
                 std::max<std::size_t>(1, instanceBatches.size()) * MaterialProgramSlotCount;
             const VkDeviceSize shadowIndirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
-                std::min<std::size_t>(std::max<std::size_t>(1, instanceBatches.size()),
-                                      ShadowMap::MaxCasterInstancesPerPage) * ShadowMap::MaxPageUpdatesPerFrame;
+                std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::MaxPageUpdatesPerFrame;
             const VkDeviceSize shadowCandidateBytes = sizeof(std::uint32_t) *
                 std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::ClipLevelCount;
             const VkDeviceSize shadowTransformBytes = sizeof(RendererInstanceData) *
@@ -121,7 +120,7 @@
             // Passes and indirect draws require a non-zero physical capacity.
             // Runtime culling still receives objectCount, which may be zero.
             const auto passCapacity = genericCapacity;
-            const auto shadowPassCapacity = std::min(passCapacity, ShadowMap::MaxCasterInstancesPerPage);
+            const auto shadowPassCapacity = passCapacity;
             const auto clusterCountFor = [](const VkExtent2D extent) {
                 const std::uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
                 const std::uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
@@ -1233,6 +1232,11 @@
             for (Buffer& buffer : vsmCompactedPageCountBuffers) buffer.destroy();
             for (Buffer& buffer : vsmPageMarkingUniformBuffers) buffer.destroy();
             vsmRequestsReady.fill(false);
+            vsmRequestsFromScene.fill(false);
+            sceneVsmFeedbackPending.fill(false);
+            sceneVsmFeedbackCache = {};
+            sceneVsmReceiverFeedbackValid = false;
+            sceneVsmReceiverRequests.clear();
             for (Buffer& buffer : clusteredLightRangeBuffers) buffer.destroy();
             for (Buffer& buffer : clusteredLightIndexBuffers) buffer.destroy();
             for (Buffer& buffer : sceneClusteredLightRangeBuffers) buffer.destroy();
@@ -1620,21 +1624,7 @@
             Vec3& previousCameraPosition, Vec3& previousLightDirection,
             bool& valid) const {
             const DirectionalLight light = directionalLight();
-            const float cameraJump = valid
-                ? (cameraPosition - previousCameraPosition).length()
-                : std::numeric_limits<float>::max();
-            const float lightAgreement = valid
-                ? dot(light.direction, previousLightDirection)
-                : -1.0F;
-            const bool invalidate = !valid || cameraJump > 8.0F || lightAgreement < 0.9995F;
-            constexpr std::uint32_t allClipLevels = (1u << ShadowMap::ClipLevelCount) - 1u;
-            std::uint32_t updateMask = invalidate ? allClipLevels : 0x1u;
-            if (!invalidate) {
-                for (std::uint32_t level = 1; level < ShadowMap::ClipLevelCount; ++level) {
-                    if ((shadowClipFrameIndex & ((1u << level) - 1u)) == 0)
-                        updateMask |= 1u << level;
-                }
-            }
+            std::uint32_t updateMask = 0;
 
             constexpr std::array<float, 6> baseExtents{
                 6.0F, 12.0F, 24.0F, 48.0F, 96.0F, 192.0F};
@@ -1651,7 +1641,6 @@
             const Vec3 lightUp = cross(right, direction).normalized();
 
             for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
-                if ((updateMask & (1u << level)) == 0) continue;
                 const float extent = level < baseExtents.size() ? baseExtents[level] : farExtent;
                 const Vec3 clipCenter = level + 1 == ShadowMap::ClipLevelCount
                     ? sceneCenter : cameraPosition;
@@ -1667,15 +1656,28 @@
                 // Keep depth encoding independent of the camera so pages can
                 // be remapped when the clipmap scrolls without being redrawn.
                 const float alongLight = dot(sceneCenter, direction);
-                const Vec3 target = right * snappedX + lightUp * snappedY + direction * alongLight;
                 const float lightDistance = sceneRadius * 2.0F + extent;
-                const Mat4 lightView = Mat4::lookAt(target - direction * lightDistance,
-                                                    target, lightUp);
+                // Construct the basis directly. lookAt(target - direction * d,
+                // target) loses precision when subtracting large world positions,
+                // changing the depth/basis during what should be a pure scroll.
+                glm::mat4 view{1.0F};
+                view[0] = {right.x(), lightUp.x(), -direction.x(), 0.0F};
+                view[1] = {right.y(), lightUp.y(), -direction.y(), 0.0F};
+                view[2] = {right.z(), lightUp.z(), -direction.z(), 0.0F};
+                view[3] = {-snappedX, -snappedY, alongLight - lightDistance, 1.0F};
+                const Mat4 lightView{view};
                 const Mat4 lightProjection = Mat4::scale(
                     Mat4::ortho(-extent, extent, -extent, extent, 0.1F,
                                 sceneRadius * 4.0F + extent * 2.0F),
                     Vec3{1.0F, -1.0F, 1.0F});
-                matrices[level] = lightProjection * lightView;
+                const Mat4 next = lightProjection * lightView;
+                // Matrix work is tiny compared with rerasterization. Update all
+                // changed levels immediately, including slow light motion and
+                // scene-bound changes, instead of leaving coarse levels stale.
+                if (!valid || matrices[level].native() != next.native()) {
+                    matrices[level] = next;
+                    updateMask |= 1u << level;
+                }
             }
             previousCameraPosition = cameraPosition;
             previousLightDirection = light.direction;

@@ -21,19 +21,21 @@ struct VsmPageMarkingUniforms
 [[vk::binding(1, 0)]] RWStructuredBuffer<uint> requestedPageBits;
 [[vk::binding(2, 0)]] ConstantBuffer<VsmPageMarkingUniforms> uniforms;
 
-void markPage(const uint level, const float2 uv)
-{
-    if (any(uv < 0.0) || any(uv >= 1.0)) return;
-    const uint2 page = min(uint2(uv * uniforms.pageCountPerAxis),
-                           uniforms.pageCountPerAxis - 1);
-    const uint pageIndex = level * uniforms.pageCountPerAxis * uniforms.pageCountPerAxis +
-                           page.y * uniforms.pageCountPerAxis + page.x;
-    InterlockedOr(requestedPageBits[pageIndex >> 5], 1u << (pageIndex & 31));
-}
+// One shared bitset per workgroup; duplicate requests coalesce in parallel.
+static const uint REQUEST_WORD_COUNT = (7u * 32u * 32u + 31u) / 32u;
+groupshared uint groupPageBits[REQUEST_WORD_COUNT];
 
 void markPageAndNeighbours(const uint encodedPage)
 {
     if (encodedPage == 0xffffffffu) return;
+    // With 32 pages per axis each word is one complete row. Coalesce only
+    // centres here; the flush dilates rows after all receivers have finished.
+    // This replaces nine contended shared atomics per request with one.
+    if (uniforms.pageCountPerAxis == 32u)
+    {
+        InterlockedOr(groupPageBits[encodedPage >> 5], 1u << (encodedPage & 31));
+        return;
+    }
     const uint pagesPerLevel = uniforms.pageCountPerAxis * uniforms.pageCountPerAxis;
     const uint level = encodedPage / pagesPerLevel;
     const uint local = encodedPage - level * pagesPerLevel;
@@ -46,7 +48,7 @@ void markPageAndNeighbours(const uint encodedPage)
         int2 neighbour = page + int2(x, y);
         if (any(neighbour < int2(0)) || any(neighbour >= int2(uniforms.pageCountPerAxis))) continue;
         const uint pageIndex = level * pagesPerLevel + uint(neighbour.y) * uniforms.pageCountPerAxis + uint(neighbour.x);
-        InterlockedOr(requestedPageBits[pageIndex >> 5], 1u << (pageIndex & 31));
+        InterlockedOr(groupPageBits[pageIndex >> 5], 1u << (pageIndex & 31));
     }
 }
 
@@ -59,82 +61,77 @@ float4 reconstructWorld(const uint2 pixel, const float depth)
                                          : float4(homogeneous.xyz / homogeneous.w, 1.0);
 }
 
-groupshared uint groupPages[128];
-
 [numthreads(8, 8, 1)]
 [shader("compute")]
 void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID)
 {
     const uint localIndex = groupThreadId.y * 8 + groupThreadId.x;
-    groupPages[localIndex] = 0xffffffffu;
-    groupPages[64 + localIndex] = 0xffffffffu;
+    for (uint word = localIndex; word < REQUEST_WORD_COUNT; word += 64u)
+        groupPageBits[word] = 0u;
+    GroupMemoryBarrierWithGroupSync();
     const bool inBounds = threadId.x < uniforms.depthWidth && threadId.y < uniforms.depthHeight;
     const float depth = inBounds ? receiverDepth.Load(int3(threadId.xy, 0)) : 1.0;
     if (inBounds && depth < 0.999999)
     {
         const float4 world = reconstructWorld(threadId.xy, depth);
-        const uint2 leftPixel = uint2(threadId.x == 0 ? 0 : threadId.x - 1, threadId.y);
-        const uint2 rightPixel = uint2(min(threadId.x + 1, uniforms.depthWidth - 1), threadId.y);
-        const uint2 upPixel = uint2(threadId.x, threadId.y == 0 ? 0 : threadId.y - 1);
-        const uint2 downPixel = uint2(threadId.x, min(threadId.y + 1, uniforms.depthHeight - 1));
-        const float4 leftWorld = reconstructWorld(leftPixel, receiverDepth.Load(int3(leftPixel, 0)));
-        const float4 rightWorld = reconstructWorld(rightPixel, receiverDepth.Load(int3(rightPixel, 0)));
-        const float4 upWorld = reconstructWorld(upPixel, receiverDepth.Load(int3(upPixel, 0)));
-        const float4 downWorld = reconstructWorld(downPixel, receiverDepth.Load(int3(downPixel, 0)));
+        // Match the resolve's 2x2 quad derivatives, including sky and odd
+        // viewport edges. Four unrelated neighbours used to request a coarser
+        // level than the resolve actually sampled at depth discontinuities.
+        const uint2 rightPixel = uint2(min(threadId.x ^ 1u, uniforms.depthWidth - 1u), threadId.y);
+        const uint2 downPixel = uint2(threadId.x, min(threadId.y ^ 1u, uniforms.depthHeight - 1u));
+        const float rightDepth = receiverDepth.Load(int3(rightPixel, 0));
+        const float downDepth = receiverDepth.Load(int3(downPixel, 0));
+        const float4 rightWorld = reconstructWorld(rightPixel, rightDepth < 0.999999 ? rightDepth : depth);
+        const float4 downWorld = reconstructWorld(downPixel, downDepth < 0.999999 ? downDepth : depth);
         const uint pagesPerLevel = uniforms.pageCountPerAxis * uniforms.pageCountPerAxis;
-        uint selectedLevel = 0xffffffffu;
         // Select the finest clip level whose virtual texel is no smaller
         // than the receiver's one-pixel footprint.  Mark one coarser level
         // as a cache-miss fallback, not all seven clipmaps.
         [loop] for (uint level = 0; level < uniforms.clipLevelCount; ++level)
         {
             const float4 lightClip = mul(world, uniforms.clipMatrices[level]);
-            const float4 leftClip = mul(leftWorld, uniforms.clipMatrices[level]);
             const float4 rightClip = mul(rightWorld, uniforms.clipMatrices[level]);
-            const float4 upClip = mul(upWorld, uniforms.clipMatrices[level]);
             const float4 downClip = mul(downWorld, uniforms.clipMatrices[level]);
-            if (abs(lightClip.w) < 1.0e-6 || abs(leftClip.w) < 1.0e-6 ||
-                abs(rightClip.w) < 1.0e-6 || abs(upClip.w) < 1.0e-6 ||
+            if (abs(lightClip.w) < 1.0e-6 || abs(rightClip.w) < 1.0e-6 ||
                 abs(downClip.w) < 1.0e-6) continue;
             const float2 lightUv = lightClip.xy / lightClip.w * 0.5 + 0.5;
             if (any(lightUv < 0.0) || any(lightUv >= 1.0)) continue;
-            const float2 leftUv = leftClip.xy / leftClip.w * 0.5 + 0.5;
             const float2 rightUv = rightClip.xy / rightClip.w * 0.5 + 0.5;
-            const float2 upUv = upClip.xy / upClip.w * 0.5 + 0.5;
             const float2 downUv = downClip.xy / downClip.w * 0.5 + 0.5;
-            const float2 centerToLeft = lightUv - leftUv;
-            const float2 centerToRight = rightUv - lightUv;
-            const float2 centerToUp = lightUv - upUv;
-            const float2 centerToDown = downUv - lightUv;
-            const float footprintInTexels = shadowTexelFootprintFromGradients(
-                centerToLeft, centerToRight, centerToUp, centerToDown);
+            const float2 dx = rightUv - lightUv;
+            const float2 dy = downUv - lightUv;
+            const float footprintInTexels = shadowTexelFootprintFromGradients(dx, dx, dy, dy);
             if (footprintInTexels <= shadowTexelFootprintThreshold(uniforms.shadowQuality) ||
                 level + 1 == uniforms.clipLevelCount)
             {
                 const uint2 page = min(uint2(lightUv * uniforms.pageCountPerAxis), uniforms.pageCountPerAxis - 1);
-                groupPages[localIndex] = level * pagesPerLevel + page.y * uniforms.pageCountPerAxis + page.x;
+                markPageAndNeighbours(level * pagesPerLevel + page.y * uniforms.pageCountPerAxis + page.x);
                 const uint fallbackLevel = min(level + 1, uniforms.clipLevelCount - 1);
                 const float4 fallbackClip = mul(world, uniforms.clipMatrices[fallbackLevel]);
                 const float2 fallbackUv = fallbackClip.xy / fallbackClip.w * 0.5 + 0.5;
                 if (all(fallbackUv >= 0.0) && all(fallbackUv < 1.0) && fallbackLevel != level)
                 {
                     const uint2 fallbackPage = min(uint2(fallbackUv * uniforms.pageCountPerAxis), uniforms.pageCountPerAxis - 1);
-                    groupPages[64 + localIndex] = fallbackLevel * pagesPerLevel + fallbackPage.y * uniforms.pageCountPerAxis + fallbackPage.x;
+                    markPageAndNeighbours(fallbackLevel * pagesPerLevel + fallbackPage.y * uniforms.pageCountPerAxis + fallbackPage.x);
                 }
                 break;
             }
         }
     }
     GroupMemoryBarrierWithGroupSync();
-    if (localIndex != 0) return;
-    // Nearby receivers overwhelmingly map to the same page.  Collapse the
-    // complete 8x8 tile before touching the tiny global request bitset.
-    [unroll] for (uint index = 0; index < 128; ++index)
+    // Flush each nonempty word once. All 64 lanes participate; there is no
+    // quadratic serial scan or wave-size-dependent correctness assumption.
+    for (uint word = localIndex; word < REQUEST_WORD_COUNT; word += 64u)
     {
-        const uint page = groupPages[index];
-        bool first = page != 0xffffffffu;
-        [unroll] for (uint prior = 0; prior < index; ++prior)
-            first = first && groupPages[prior] != page;
-        if (first) markPageAndNeighbours(page);
+        uint bits = groupPageBits[word];
+        if (uniforms.pageCountPerAxis == 32u)
+        {
+            // Keep dilation inside its clip level, including corner pages.
+            const uint row = word & 31u;
+            if (row > 0u) bits |= groupPageBits[word - 1u];
+            if (row < 31u) bits |= groupPageBits[word + 1u];
+            bits |= (bits << 1u) | (bits >> 1u);
+        }
+        if (bits != 0u) InterlockedOr(requestedPageBits[word], bits);
     }
 }

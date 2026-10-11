@@ -49,7 +49,8 @@ namespace Engine {
                           std::uint32_t shaderSlot,
                           const Culling::IndexedIndirectDrawCount& indirectDraw,
                           VkDeviceSize commandOffset = 0,
-                          VkDeviceSize countOffset = 0) const;
+                          VkDeviceSize countOffset = 0,
+                          bool twoSided = false) const;
 
         void drawMeshletMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
                                  std::uint32_t shaderSlot,
@@ -78,6 +79,7 @@ namespace Engine {
 
     private:
         std::array<GraphicsPipeline, MaterialShaderCount> materialPipelines_;
+        std::array<GraphicsPipeline, MaterialShaderCount> twoSidedMaterialPipelines_;
         std::array<GraphicsPipeline, MaterialShaderCount> meshletMaterialPipelines_;
         GraphicsPipeline foliagePipeline_;
         GraphicsPipeline grassPipeline_;

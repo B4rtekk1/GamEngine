@@ -937,7 +937,9 @@ namespace Engine::RenderGraph {
             }
         };
         for (std::uint32_t resource = 0; resource < resources_.size(); ++resource) {
-            if (resources_[resource].uploadTimeline == 0) {
+            // Cache the consumer even when this frame has no upload. A later
+            // frame can reuse this topology with a nonzero upload ticket.
+            if (!resources_[resource].imported) {
                 continue;
             }
             for (const auto pass: order_) {
@@ -962,7 +964,7 @@ namespace Engine::RenderGraph {
             }
         }
         for (std::uint32_t resource = 0; resource < buffers_.size(); ++resource) {
-            if (buffers_[resource].uploadTimeline == 0) {
+            if (!buffers_[resource].imported) {
                 continue;
             }
             for (const auto pass: order_) {

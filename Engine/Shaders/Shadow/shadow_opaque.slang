@@ -2,12 +2,10 @@
 // foliage casters remain in shadow_map.slang, where discard is required.
 import Common.SceneData;
 import Common.Displacement;
+import Common.ShadowCasterData;
 
 struct PushConstants { float4x4 lightSpace; };
-struct ShadowInstanceTransform { float4 row0; float4 row1; float4 row2; };
-[[vk::binding(5, 0)]] StructuredBuffer<ShadowInstanceTransform> shadowTransforms;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> shadowMaterialOffsets;
 [[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
 
 struct ShadowVertexInput
@@ -25,8 +23,9 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
                               uint baseInstance : SV_StartInstanceLocation)
 {
     const uint transformIndex = baseInstance + instanceIndex;
-    const ShadowInstanceTransform transform = shadowTransforms[transformIndex];
-    const uint materialIndex = shadowMaterialOffsets[transformIndex] + input.materialIndex;
+    uint materialOffset;
+    const ShadowInstanceTransform transform = loadShadowCaster(transformIndex, materialOffset);
+    const uint materialIndex = materialOffset + input.materialIndex;
     MaterialData material = materials[materialIndex];
     float3 localPosition = input.position;
     localPosition = displaceMaterialPosition(material, localPosition, input.normal,

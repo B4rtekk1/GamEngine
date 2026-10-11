@@ -12,6 +12,29 @@
 
 namespace Engine {
     namespace {
+        // Command-buffer-local ranges work on graphics and async compute
+        // without mixing timestamp origins from different queues.
+        class GpuLabel final {
+        public:
+            GpuLabel(VkCommandBuffer commandBuffer, PFN_vkCmdBeginDebugUtilsLabelEXT begin,
+                     PFN_vkCmdEndDebugUtilsLabelEXT end, const char* name)
+                : commandBuffer_(commandBuffer), end_(begin && end ? end : nullptr) {
+                if (end_) {
+                    const VkDebugUtilsLabelEXT label{
+                        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+                        .pLabelName = name,
+                        .color = {0.2F, 0.7F, 0.9F, 1.0F}};
+                    begin(commandBuffer_, &label);
+                }
+            }
+            ~GpuLabel() { if (end_) end_(commandBuffer_); }
+            GpuLabel(const GpuLabel&) = delete;
+            GpuLabel& operator=(const GpuLabel&) = delete;
+        private:
+            VkCommandBuffer commandBuffer_;
+            PFN_vkCmdEndDebugUtilsLabelEXT end_;
+        };
+
         struct DepthPrefilterSettings {
             glm::mat4 inverseProjection;
             float effectRadius, effectFalloffRange;
@@ -115,6 +138,10 @@ namespace Engine {
             throw std::invalid_argument("GTAO supports at most three denoise passes");
         destroy();
         device_ = device;
+        beginLabel_ = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+            vkGetDeviceProcAddr(device_, "vkCmdBeginDebugUtilsLabelEXT"));
+        endLabel_ = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
+            vkGetDeviceProcAddr(device_, "vkCmdEndDebugUtilsLabelEXT"));
         allocator_ = allocator;
         quality_ = quality;
         fullExtent_ = fullExtent;
@@ -426,10 +453,14 @@ namespace Engine {
                           const GtaoExternalState externalState) {
         if (frame >= FramesInFlight)
             throw std::out_of_range("Invalid GTAO frame slot");
+        const GpuLabel gtaoLabel{cmd, beginLabel_, endLabel_, "GTAO"};
         const bool transitionResult = !externalState.graphOwnsResultState;
         if (!initialized_)
             clearImages(cmd, externalState.graphOwnsResultState);
-        buildLinearDepth(cmd, frame, depth, depthSampler, inverseProjection);
+        {
+            const GpuLabel depthLabel{cmd, beginLabel_, endLabel_, "GTAO.DepthPrefilter"};
+            buildLinearDepth(cmd, frame, depth, depthSampler, inverseProjection);
+        }
         const auto beginInternalWrite = [&](VkImage image, VkPipelineStageFlags2 previousStages) {
             barrier(cmd, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, previousStages,
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
@@ -523,7 +554,10 @@ namespace Engine {
         MainSettings main{{1.f / inverse[0][0], 1.f / inverse[1][1]}, 1.f, 1.f, sampleIndex, 0.f,
                           linearDepthMipCount_ - 1 - sourceMip};
         main.padding = useExternalNormals ? 1.f : 0.f;
-        dispatch(0, main, halfExtent_);
+        {
+            const GpuLabel mainLabel{cmd, beginLabel_, endLabel_, "GTAO.Main"};
+            dispatch(0, main, halfExtent_);
+        }
         barrier(cmd, raw_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -537,6 +571,7 @@ namespace Engine {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         const HdrBuffer *denoised = &raw_;
         for (uint32_t pass = 0; pass < quality_.denoisePassCount; ++pass) {
+            const GpuLabel denoiseLabel{cmd, beginLabel_, endLabel_, "GTAO.Denoise"};
             HdrBuffer &output = (quality_.denoisePassCount - pass) % 2 == 1 ? filtered_ : scratch_;
             if (pass > 1)
                 barrier(cmd, output.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
@@ -555,6 +590,7 @@ namespace Engine {
             denoised = &output;
         }
         if (!nativeResolution_) {
+            const GpuLabel upsampleLabel{cmd, beginLabel_, endLabel_, "GTAO.Upsample"};
             update(2,
                    {
                        {denoised->sampler(), denoised->imageView(), VK_IMAGE_LAYOUT_GENERAL},
@@ -654,6 +690,8 @@ namespace Engine {
         resultFormat_ = VK_FORMAT_UNDEFINED;
         allocator_ = {};
         device_ = {};
+        beginLabel_ = nullptr;
+        endLabel_ = nullptr;
         reset();
     }
 } // namespace Engine

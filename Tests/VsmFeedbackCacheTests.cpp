@@ -52,6 +52,18 @@ TEST(VsmFeedbackCacheTests, ReceiverAndRenderChangesInvalidateCoverage) {
     changed = original;
     ++changed.quality;
     EXPECT_TRUE(cache.needsUpdate(changed));
+    changed = original;
+    ++changed.transformRevision;
+    EXPECT_TRUE(cache.needsUpdate(changed));
+    changed = original;
+    ++changed.deformationRevision;
+    EXPECT_TRUE(cache.needsUpdate(changed));
+    changed = original;
+    ++changed.windRevision;
+    EXPECT_TRUE(cache.needsUpdate(changed));
+    changed = original;
+    ++changed.animationFrame;
+    EXPECT_TRUE(cache.needsUpdate(changed));
 }
 
 TEST(VsmFeedbackCacheTests, FrameSlotsKeepIndependentCoverage) {

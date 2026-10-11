@@ -135,9 +135,9 @@ void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot,
         }
         else
         {
-            // The per-page caster budget is bounded. Drop this draw rather
-            // than letting an overflow read another page's slice.
-            command.instanceCount = 0;
+            // High bit selects the source scene streams in the shadow VS.
+            // Preserve the complete batch without growing per-page scratch.
+            command.firstInstance = objectData.firstInstance | 0x80000000u;
         }
     }
     commands[drawSlot * culling.maxDrawCount + destinationIndex] = command;

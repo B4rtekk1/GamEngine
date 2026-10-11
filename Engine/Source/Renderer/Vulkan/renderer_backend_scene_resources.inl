@@ -1338,7 +1338,7 @@
                 return;
             }
 
-            hasShadowCasters = false;
+            hasShadowCasters = !sceneGpu.grassInstances.empty();
             for (const InstanceBatch& batch : instanceBatches) {
                 if (batch.castShadow) {
                     hasShadowCasters = true;
@@ -1411,38 +1411,6 @@
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
 
-        void refreshBrixelizerGeometry() {
-            if (!brixelizer.ready()) return;
-            std::vector<BrixelizerSystem::StaticMesh> meshes;
-            meshes.reserve(renderables.size());
-            for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
-                const InstanceBatch& batch = instanceBatches[batchIndex];
-                if (batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
-                    batch.indexCount < 3) continue;
-                for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
-                    if (renderableIndex >= instanceModels.size()) continue;
-                    const RenderableRecord& record = renderables[renderableIndex];
-                    if (record.dynamic || record.displacementBoundsPadding > 1.0e-6F) continue;
-                    const RendererInstanceData& source = instanceModels[renderableIndex];
-                    const glm::quat rotation{source.rotation.w, source.rotation.x,
-                                             source.rotation.y, source.rotation.z};
-                    glm::mat4 transform = glm::mat4_cast(rotation);
-                    transform[0] *= source.scaleBase.x;
-                    transform[1] *= source.scaleBase.y;
-                    transform[2] *= source.scaleBase.z;
-                    transform[3] = glm::vec4{source.positionMaterial.x, source.positionMaterial.y,
-                                               source.positionMaterial.z, 1.0F};
-                    meshes.push_back({.worldBounds = record.geometryLocalBounds.transformed(transform),
-                                      .transform = transform,
-                                      .firstVertex = record.firstVertex,
-                                      .vertexCount = record.vertexCount,
-                                      .firstIndex = batch.firstIndex,
-                                      .indexCount = batch.indexCount});
-                }
-            }
-            brixelizer.setStaticMeshes(vertexBuffer.handle(), vertexBuffer.size(),
-                                       indexBuffer.handle(), indexBuffer.size(), meshes);
-        }
 
         void createInstanceBuffer() {
             // Resource creation can happen before the first render frame, so
@@ -2224,6 +2192,22 @@
                 object.model.data[15] = 1.0F;
                 dirtyShadowObjects.push_back(object);
             };
+            const auto appendGrassShadowBounds = [&] {
+                for (const auto& cluster : sceneGpu.grassClusters) {
+                    const float centerY = glm::unpackHalf1x16(cluster.draw.w & 0xffffU);
+                    const float halfHeight = glm::unpackHalf1x16(cluster.draw.w >> 16U);
+                    const float padding = halfHeight + cluster.originExtent.w;
+                    appendDirtyShadowBounds({
+                        Vec3{cluster.originExtent.x - padding, centerY - padding,
+                             cluster.originExtent.y - padding},
+                        Vec3{cluster.originExtent.x + cluster.originExtent.z + padding,
+                             centerY + padding, cluster.originExtent.y + cluster.originExtent.z + padding}});
+                }
+            };
+            // Wind changes vertex positions without changing ECS transforms.
+            const bool grassWindChanged = lastGrassShadowWindRevision != sceneFrameDataCache.windRevision;
+            if (sceneFrameDataCache.hasWind || grassWindChanged) appendGrassShadowBounds();
+            lastGrassShadowWindRevision = sceneFrameDataCache.windRevision;
             const std::uint64_t transformRevision = registry.componentRevision<Transform>();
             const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
             const std::uint64_t terrainGrassRevision = registry.componentRevision<TerrainGrassComponent>();
@@ -2263,7 +2247,10 @@
                         for (const std::size_t index : grass.dirtyInstances) updateOne(index);
                     }
                 });
-                if (deformationChanged) ++grassDeformationVersion;
+                if (deformationChanged) {
+                    ++grassDeformationVersion;
+                    if (!sceneFrameDataCache.hasWind) appendGrassShadowBounds();
+                }
             }
             if (transformRevision == lastTransformRevision &&
                 meshRendererRevision == lastMeshRendererRevision &&
@@ -2321,11 +2308,9 @@
             auto& changedBatches = changedRenderableBatches;
             changedBatches.clear();
             bool displacementChanged = false;
-            bool staticBrixelizerGeometryChanged = false;
             for (const std::size_t index : changedIndices) {
                 const Entity entity = renderables[index].entity;
                 RenderableRecord& record = renderables[index];
-                staticBrixelizerGeometryChanged |= !record.dynamic;
                 if (!readRegistry.has<Transform>(entity)) {
                     sceneGpu.database.removeInstance(SceneGpuResources::instanceSourceKey(
                                                          entity, record.sectionIndex),
@@ -2638,7 +2623,6 @@
             // The previous vertex position uses the current height parameters.
             // Discard TAA history when they change until previous material data is available.
             if (displacementChanged) temporalAaPass.reset();
-            if (brixelizer.ready() && staticBrixelizerGeometryChanged) brixelizerGeometryDirty = true;
             uploadPendingRenderableBuffers();
             registry.view<TerrainGrassComponent>([](const Entity, const TerrainGrassComponent& grass) {
                 grass.clearDirtyInstances();
@@ -2765,9 +2749,11 @@
             const auto frustumPlanes = extractFrustumPlanes(lightViewProjection);
             for (std::size_t i = 0; i < frustumPlanes.size(); ++i)
                 std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));
-            data.cameraPosition = {0.0F, 0.0F, 0.0F, 1.0F};
+            const Vec3 shadowCamera = sceneViewportActive
+                ? cameraController.editorPosition() : cameraController.camera()->position();
+            data.cameraPosition = {shadowCamera.x(), shadowCamera.y(), shadowCamera.z(), 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
-            data.maxDrawCount = std::min(data.objectCount, ShadowMap::MaxCasterInstancesPerPage);
+            data.maxDrawCount = shadowCullingPasses[frame].maxDrawCount();
             // Shadow culling uses only the light frustum. Camera Hi-Z cannot safely
             // reject casters which are invisible to the camera but visible to the light.
             data.enableOcclusionCulling = 0;

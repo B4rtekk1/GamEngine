@@ -27,7 +27,7 @@ namespace Engine {
 
     class ShadowPass final {
     public:
-        ShadowPass() = default;
+        ShadowPass() { invalidateCache(); }
 
         ~ShadowPass();
 
@@ -82,7 +82,6 @@ namespace Engine {
 
         /** Binds the full-resolution GTAO visibility texture for one safe frame slot. */
         void setGtaoTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
-        void setDiffuseGI(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
         void setContactShadowTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
 
         void destroy() noexcept;
@@ -120,6 +119,7 @@ namespace Engine {
             std::uint32_t pageUpdateBudget = ShadowMap::PhysicalPageCount);
 
         void invalidateCache() noexcept;
+        [[nodiscard]] bool hasPendingPageUpdates() const noexcept { return pageUpdatesPending_; }
 
         [[nodiscard]] const std::array<std::uint32_t, ShadowMap::VirtualPageCount>&
         pageTable() const noexcept { return pageTable_; }
@@ -164,6 +164,7 @@ namespace Engine {
             bool allocated{};
             bool dirty{};
             std::uint64_t lastUsed{};
+            std::uint64_t lastRendered{};
         };
 
         // A mapping is intentionally pending while its physical tile is
@@ -194,6 +195,7 @@ namespace Engine {
         std::vector<PendingPageCommit> pendingPageCommits_;
         std::uint32_t preparedFrameIndex_{};
         std::uint64_t cacheClock_{};
+        bool pageUpdatesPending_{};
         VkDevice device_{VK_NULL_HANDLE};
         // The two view contexts keep independent virtual page tables, but
         // render into the renderer-owned physical atlas.
