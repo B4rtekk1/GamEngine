@@ -44,6 +44,8 @@ struct ForwardVertexOutput
     [[vk::location(6)]] float2 texCoord1;
     [[vk::location(9)]] float3 baseWorldPosition;
     [[vk::location(10)]] float3 worldDisplacementDirection;
+    [[vk::location(11)]] nointerpolation uint crackSlot;
+    [[vk::location(12)]] float2 crackPosition;
 #if FORWARD_OUTPUT_VELOCITY
     [[vk::location(7)]] noperspective float2 currentNdc;
     [[vk::location(8)]] float4 previousClip;
@@ -100,6 +102,8 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     output.worldDisplacementDirection = mul(normalize(input.normal) * instance.scaleBase.xyz,
                                             rotationMatrix);
     output.materialIndex = materialIndex;
+    output.crackSlot = asuint(instance.scaleBase.w);
+    output.crackPosition = input.position.xy;
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
     output.tangent = float4(mul(displaced.tangent.xyz * instance.scaleBase.xyz, rotationMatrix),
@@ -133,6 +137,8 @@ struct ForwardFragmentInput
     [[vk::location(6)]] float2 texCoord1;
     [[vk::location(9)]] float3 baseWorldPosition;
     [[vk::location(10)]] float3 worldDisplacementDirection;
+    [[vk::location(11)]] nointerpolation uint crackSlot;
+    [[vk::location(12)]] float2 crackPosition;
 #if FORWARD_OUTPUT_VELOCITY
     [[vk::location(7)]] noperspective float2 currentNdc;
     [[vk::location(8)]] float4 previousClip;
@@ -151,6 +157,8 @@ struct ForwardFragmentOutput
 // Immutable opaque snapshot: never sample the HDR attachment being written.
 [[vk::binding(0, 1)]] Sampler2D opaqueSceneColor;
 [[vk::binding(1, 1)]] Sampler2D opaqueSceneDepth;
+[[vk::binding(2, 1)]] Sampler2DArray glassCrackAtlas;
+[[vk::binding(4, 1)]] StructuredBuffer<float4> glassCrackMetadata;
 
 float2 glassUv(MaterialData m, uint slot, float2 uv0, float2 uv1)
 {
@@ -304,6 +312,28 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         N = normalize(tangent * xy.x * m.extensionScalars.x +
                       bitangent * xy.y * m.extensionScalars.x + N * z);
         if (dot(N, V) < 0.0) N = geometricNormal;
+    }
+    // Localized fracture roughness and normal perturbation; the remaining pane
+    // retains its original optical properties. Slots are shared by its shards.
+    if (input.crackSlot != 0)
+    {
+        uint slot = input.crackSlot - 1;
+        float2 size = max(glassCrackMetadata[slot].xy, float2(0.001));
+        float2 uv = input.crackPosition / size + 0.5;
+        float active = glassCrackMetadata[slot].w;
+        float crack = glassCrackAtlas.SampleLevel(float3(uv, slot), 0.0).r * active;
+        float2 step = float2(1.0 / 128.0);
+        float2 gradient = float2(
+            glassCrackAtlas.SampleLevel(float3(uv + float2(step.x, 0), slot), 0.0).r -
+            glassCrackAtlas.SampleLevel(float3(uv - float2(step.x, 0), slot), 0.0).r,
+            glassCrackAtlas.SampleLevel(float3(uv + float2(0, step.y), slot), 0.0).r -
+            glassCrackAtlas.SampleLevel(float3(uv - float2(0, step.y), slot), 0.0).r);
+        gradient *= active;
+        float3 tangent = normalize(input.tangent.xyz - N * dot(N, input.tangent.xyz));
+        float3 bitangent = cross(N, tangent) * input.tangent.w;
+        N = normalize(N + (tangent * gradient.x + bitangent * gradient.y) * 0.18);
+        roughness = lerp(roughness, max(roughness, 0.5), crack);
+        transmission *= 1.0 - crack * 0.22;
     }
     float ior = max(m.glassParams.y, 1.0);
     float f0Scalar = pow((ior - 1.0) / (ior + 1.0), 2.0);

@@ -5,8 +5,12 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <vk_mem_alloc.h>
+#include <cstdint>
+#include "Engine/Renderer/Vulkan/MemoryBudgetManager.h"
 
 namespace Engine {
+class Scene;
 namespace Culling { class IndexedIndirectDrawCount; }
 
 /**
@@ -18,12 +22,15 @@ namespace Culling { class IndexedIndirectDrawCount; }
  */
 class GlassPass final {
 public:
-    void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat,
+    void create(VkDevice device, VmaAllocator allocator, VkFormat colorFormat, VkFormat depthFormat,
                 VkSampleCountFlagBits samples, VkFormat depthResolveFormat,
                 VkResolveModeFlagBits depthResolveMode, VkDescriptorSetLayout sceneLayout,
                 Assets::AssetManager& assets, bool velocity,
                 const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth);
     void destroy() noexcept;
+    [[nodiscard]] std::vector<GpuSceneMemoryAllocation> memoryAllocations() const;
+    /** Incrementally stamps changed pane regions on the GPU, before rendering. */
+    void recordCracks(VkCommandBuffer commandBuffer, const Scene &scene, std::uint32_t frameIndex);
     void begin(VkCommandBuffer commandBuffer, VkImageView colorView, VkImageView depthView,
                VkImageView velocityView, VkImageView colorResolveView, VkImageView depthResolveView, VkExtent2D extent,
                VkDescriptorSet sceneDescriptorSet, std::uint32_t frameIndex,
@@ -37,6 +44,21 @@ private:
     static constexpr std::uint32_t FramesInFlight = 2;
     void createSceneDescriptors(const VkDescriptorImageInfo& opaqueColor,
                                 const VkDescriptorImageInfo& opaqueDepth);
+    static constexpr unsigned AtlasSlots = 512, AtlasResolution = 128;
+    void createCrackResources(Assets::AssetManager &assets);
+    VmaAllocator allocator_{};
+    VkImage crackAtlas_{};
+    VmaAllocation crackAtlasMemory_{};
+    VkImageView crackAtlasView_{};
+    VkSampler crackSampler_{};
+    VkPipeline crackPipeline_{};
+    VkPipelineLayout crackPipelineLayout_{};
+    bool crackAtlasInitialized_{};
+    std::array<VkBuffer, FramesInFlight> crackMetadata_{};
+    std::array<VmaAllocation, FramesInFlight> crackMetadataMemory_{};
+    std::array<void *, FramesInFlight> crackMetadataMapped_{};
+    struct CrackSlot { std::uint64_t uuid{}; std::size_t submitted{}; std::uint32_t historyStart{}; bool reverse{}; };
+    std::array<CrackSlot, AtlasSlots> crackSlots_{};
     GraphicsPipeline pipeline_;
     VkDevice device_{VK_NULL_HANDLE};
     VkDescriptorSetLayout sceneTextureLayout_{VK_NULL_HANDLE};

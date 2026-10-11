@@ -19,6 +19,7 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Physics/PhysicsSystem.h"
+#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Core/Camera.h"
 
 #include <memory>
@@ -232,6 +233,33 @@ namespace Engine {
         [[nodiscard]] Actor activeDirectionalLight() noexcept;
 
         /** Returns this scene's gameplay-facing physics queries. */
+        [[nodiscard]] MeshHandle glassGeometryHandle(const std::shared_ptr<Mesh> &geometry) {
+            for (const auto &entry : glassGeometryHandles_)
+                if (entry.source().get() == geometry.get()) return entry;
+            MeshHandle handle{geometry};
+            if (glassGeometryHandles_.size() < 128) glassGeometryHandles_.push_back(handle);
+            return handle;
+        }
+        [[nodiscard]] std::uint32_t glassDynamicFragmentBudget() const noexcept {
+            return std::min(glassSimulationSettings_.maxDynamicFragmentsGlobal, glassDynamicBudget_);
+        }
+        void reportGlassPhysicsCost(double milliseconds) noexcept {
+            glassPhysicsAverageMs_ = glassPhysicsAverageMs_ == 0 ? milliseconds : glassPhysicsAverageMs_*0.9 + milliseconds*0.1;
+            const auto maximum = glassSimulationSettings_.maxDynamicFragmentsGlobal;
+            if (!glassSimulationSettings_.adaptivePhysicsBudget) { glassDynamicBudget_ = maximum; return; }
+            glassDynamicBudget_ = std::min(glassDynamicBudget_, maximum);
+            const auto minimum = std::min(16U, maximum);
+            const auto target = glassSimulationSettings_.targetPhysicsCpuMs;
+            if (glassPhysicsAverageMs_ > target)
+                glassDynamicBudget_ = std::max(minimum, glassDynamicBudget_*4U/5U);
+            else if (glassPhysicsAverageMs_ < target*0.6)
+                glassDynamicBudget_ = std::min(maximum, glassDynamicBudget_+8U);
+        }
+        [[nodiscard]] const std::vector<GlassParticleBurst> &glassParticleBursts() const noexcept { return glassParticleBursts_; }
+        void queueGlassParticleBurst(GlassParticleBurst burst) { if (glassParticleBursts_.size() < 1024) glassParticleBursts_.push_back(burst); }
+        void clearGlassParticleBursts() noexcept { glassParticleBursts_.clear(); }
+        [[nodiscard]] GlassSimulationSettings &glassSimulationSettings() noexcept { return glassSimulationSettings_; }
+        [[nodiscard]] const GlassSimulationSettings &glassSimulationSettings() const noexcept { return glassSimulationSettings_; }
         [[nodiscard]] Physics &physics() noexcept { return physics_; }
         [[nodiscard]] const Physics &physics() const noexcept { return physics_; }
 
@@ -428,6 +456,7 @@ namespace Engine {
         void destroy(const Entity entity) {
             GameObject* target = findByEntity(entity);
             if (target == nullptr) return;
+            GlassDestructionSystem::onActorDestroyed(*this, entity);
 
             // A parent owns the lifetime of its descendants. Work on a copy as
             // destroy() erases entries from objects_.
@@ -451,6 +480,10 @@ namespace Engine {
             // renderer could still find and draw the live registry entity.
             (*owner)->destroy(); //NOLINT
             objects_.erase(owner);
+        }
+
+        [[nodiscard]] std::uint64_t renderTopologyRevision() const noexcept {
+            return registry_.renderTopologyRevision();
         }
 
         [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
@@ -620,6 +653,11 @@ namespace Engine {
         }
 
         Registry registry_;
+        std::vector<MeshHandle> glassGeometryHandles_;
+        std::uint32_t glassDynamicBudget_{~std::uint32_t{0}};
+        double glassPhysicsAverageMs_{};
+        std::vector<GlassParticleBurst> glassParticleBursts_;
+        GlassSimulationSettings glassSimulationSettings_;
         Physics physics_;
         std::vector<std::unique_ptr<GameObject> > objects_;
         std::unordered_map<std::string, ObjectId> names_;

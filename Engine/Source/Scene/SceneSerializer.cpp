@@ -1200,17 +1200,31 @@ namespace Engine {
                     << glass.thickness << ' ' << glass.fractureThreshold << ' ' << glass.density << ' '
                     << glass.maxFragments << ' ' << glass.maxDynamicFragments << ' ' << glass.seed << ' '
                     << glass.fragmentLifetime << ' ' << glass.fractured << ' ' << glass.fullyDestroyed << ' '
-                    << glass.fragments.size() << ' ' << glass.bonds.size() << ' ' << glass.hadPhysicalSupport << '\n';
+                    << glass.fragments.size() << ' ' << glass.bonds.size() << ' ' << glass.hadPhysicalSupport << ' '
+                    << unsigned(glass.type) << ' ' << unsigned(glass.supportMode) << ' ' << unsigned(glass.supportEdges) << ' '
+                    << glass.layers << ' ' << glass.bondStrength << ' ' << glass.crackWidth << ' '
+                    << glass.accumulatedEnergy << ' ' << unsigned(glass.renderState) << ' ' << glass.impactCount << ' ' << glass.cracks.size() << '\n';
                 for (const auto &fragment : glass.fragments) {
                     serialized << fragment.center.x << ' ' << fragment.center.y << ' ' << fragment.area << ' '
                         << fragment.damage << ' ' << fragment.attached << ' ' << fragment.frameSupported << ' '
-                        << fragment.polygon.size();
+                        << fragment.anchorDamage << ' ' << fragment.layerDamage.size();
+                    for (float damage : fragment.layerDamage) serialized << ' ' << damage;
+                    serialized << ' ' << fragment.polygon.size();
                     for (auto point : fragment.polygon) serialized << ' ' << point.x << ' ' << point.y;
                     serialized << '\n';
                 }
                 for (const auto &bond : glass.bonds)
                     serialized << bond.first << ' ' << bond.second << ' ' << bond.center.x << ' '
-                        << bond.center.y << ' ' << bond.damage << '\n';
+                        << bond.center.y << ' ' << bond.damage << ' ' << bond.edgeStart.x << ' ' << bond.edgeStart.y << ' '
+                        << bond.edgeEnd.x << ' ' << bond.edgeEnd.y << ' ' << bond.length << ' ' << bond.strength << ' '
+                        << bond.accumulatedDamage << ' ' << bond.broken << '\n';
+                for (const auto &crack : glass.cracks)
+                    serialized << crack.position.x << ' ' << crack.position.y << ' ' << crack.radius << ' '
+                        << crack.intensity << ' ' << crack.seed << '\n';
+            }
+            if (registry.has<GlassFragmentBindingComponent>(entity)) {
+                const auto &binding = registry.get<GlassFragmentBindingComponent>(entity);
+                serialized << "GLASS_FRAGMENT_BINDING " << binding.paneUuid << ' ' << binding.fragmentIndex << '\n';
             }
             if (registry.has<GlassDebrisComponent>(entity))
                 serialized << "GLASS_DEBRIS " << registry.get<GlassDebrisComponent>(entity).remainingLifetime << '\n';
@@ -1492,7 +1506,7 @@ namespace Engine {
             version != TerrainMaterialLayersFormatVersion &&
             version != WaterBodyFormatVersion &&
             version != WaterExecutionPolicyFormatVersion &&
-            version != WaterExecutionTierFormatVersion && version != 26 && version != 27 && version != FormatVersion - 2 &&
+            version != WaterExecutionTierFormatVersion && version != 26 && version != 27 && version != 28 && version != 29 && version != 30 && version != FormatVersion - 2 &&
             version != FormatVersion - 1 &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
@@ -1736,10 +1750,33 @@ namespace Engine {
                     const auto fragmentCount = readCount(input, "glass fragments", 128);
                     const auto bondCount = readCount(input, "glass bonds", 8192);
                     if (version >= 31) glass.hadPhysicalSupport = read<bool>(input, "glass physical support");
+                    std::size_t crackCount = 0;
+                    if (version >= 33) {
+                        const auto type = read<unsigned>(input, "glass type"), support = read<unsigned>(input, "glass support");
+                        const auto edges = read<unsigned>(input, "glass support edges");
+                        glass.layers = read<unsigned>(input, "glass layers");
+                        glass.bondStrength = readFloat(input, "glass bond strength");
+                        glass.crackWidth = readFloat(input, "glass crack width");
+                        glass.accumulatedEnergy = readFloat(input, "glass accumulated energy");
+                        const auto state = read<unsigned>(input, "glass render state");
+                        glass.impactCount = read<unsigned>(input, "glass impact count");
+                        crackCount = readCount(input, "glass cracks", 128);
+                        if (glass.impactCount < crackCount) invalidScene("invalid glass impact history");
+                        if (type > 3 || support > 2 || edges > 15 || state > 2 || glass.layers < 1 || glass.layers > 16 ||
+                            glass.bondStrength <= 0 || glass.crackWidth <= 0 || glass.accumulatedEnergy < 0)
+                            invalidScene("invalid glass material settings");
+                        glass.type = static_cast<GlassType>(type);
+                        glass.supportMode = static_cast<GlassSupportMode>(support);
+                        glass.supportEdges = static_cast<std::uint8_t>(edges);
+                        glass.renderState = static_cast<GlassRenderState>(state);
+                    } else {
+                        glass.supportMode = GlassSupportMode::Bottom;
+                        glass.renderState = glass.fractured ? GlassRenderState::Fractured : GlassRenderState::Intact;
+                    }
                     if (glass.size.x < 0.01F || glass.size.y < 0.01F || glass.thickness < 0.001F ||
                         glass.fractureThreshold <= 0.0F || glass.density <= 0.0F || glass.fragmentLifetime <= 0.0F ||
                         glass.maxFragments < 4 || glass.maxFragments > 128 || glass.maxDynamicFragments > 128 ||
-                        (!glass.fractured && fragmentCount != 0)) invalidScene("invalid glass settings");
+                        (version < 32 && !glass.fractured && fragmentCount != 0)) invalidScene("invalid glass settings");
                     for (std::size_t i = 0; i < fragmentCount; ++i) {
                         GlassFragment fragment;
                         fragment.center.x = readFloat(input, "fragment center x");
@@ -1748,6 +1785,16 @@ namespace Engine {
                         fragment.damage = readFloat(input, "fragment damage");
                         fragment.attached = read<bool>(input, "fragment attached");
                         fragment.frameSupported = read<bool>(input, "fragment support");
+                        if (version >= 33) {
+                            fragment.anchorDamage = readFloat(input, "fragment anchor damage");
+                            const auto layers = readCount(input, "fragment layers", 16);
+                            if (layers != 0 && (glass.type != GlassType::Armored || layers != glass.layers)) invalidScene("invalid fragment layers");
+                            for (std::size_t layer=0; layer<layers; ++layer) {
+                                const float damage = readFloat(input, "fragment layer damage");
+                                if (damage < 0 || damage > glass.fractureThreshold) invalidScene("invalid layer damage");
+                                fragment.layerDamage.push_back(damage);
+                            }
+                        }
                         const auto points = readCount(input, "fragment vertices", 256);
                         if (points < 3 || fragment.area < 0.0F || fragment.damage < 0.0F) invalidScene("invalid glass fragment");
                         for (std::size_t j = 0; j < points; ++j) {
@@ -1763,11 +1810,34 @@ namespace Engine {
                         bond.center.x = readFloat(input, "bond x");
                         bond.center.y = readFloat(input, "bond y");
                         bond.damage = readFloat(input, "bond damage");
+                        if (version >= 33) {
+                            bond.edgeStart.x = readFloat(input, "bond start x"); bond.edgeStart.y = readFloat(input, "bond start y");
+                            bond.edgeEnd.x = readFloat(input, "bond end x"); bond.edgeEnd.y = readFloat(input, "bond end y");
+                            bond.length = readFloat(input, "bond length"); bond.strength = readFloat(input, "bond strength");
+                            bond.accumulatedDamage = readFloat(input, "bond accumulated damage");
+                            bond.broken = read<bool>(input, "bond broken");
+                            if (bond.length <= 0 || bond.strength <= 0 || bond.accumulatedDamage < 0)
+                                invalidScene("invalid glass bond strength");
+                        } else { bond.accumulatedDamage = bond.damage; bond.broken = bond.damage >= 1; }
                         if (bond.first >= fragmentCount || bond.second >= fragmentCount || bond.damage < 0.0F)
                             invalidScene("invalid glass bond");
                         glass.bonds.push_back(bond);
                     }
+                    for (std::size_t i = 0; i < crackCount; ++i) {
+                        GlassCrack crack;
+                        crack.position.x = readFloat(input, "crack x"); crack.position.y = readFloat(input, "crack y");
+                        crack.radius = readFloat(input, "crack radius"); crack.intensity = readFloat(input, "crack intensity");
+                        crack.seed = read<unsigned>(input, "crack seed");
+                        if (crack.radius <= 0 || crack.intensity < 0 || crack.intensity > 1) invalidScene("invalid glass crack");
+                        glass.cracks.push_back(crack);
+                    }
                     loaded.add<GlassDestructionComponent>(entity, std::move(glass));
+                } else if (component == "GLASS_FRAGMENT_BINDING") {
+                    if (version < 32 || loaded.has<GlassFragmentBindingComponent>(entity)) invalidScene("invalid glass binding");
+                    GlassFragmentBindingComponent binding;
+                    binding.paneUuid = read<std::uint64_t>(input, "glass pane uuid");
+                    binding.fragmentIndex = read<unsigned>(input, "glass fragment index");
+                    loaded.add<GlassFragmentBindingComponent>(entity, binding);
                 } else if (component == "GLASS_DEBRIS") {
                     if (version < 30 || loaded.has<GlassDebrisComponent>(entity)) invalidScene("invalid glass debris");
                     loaded.add<GlassDebrisComponent>(entity, GlassDebrisComponent{readFloat(input, "debris lifetime")});
@@ -2224,6 +2294,15 @@ namespace Engine {
             }
         }
 
+        TransformSystem::invalidate(loaded);
+        TransformSystem::updateDirty(loaded);
+        std::vector<Entity> legacyGlassCandidates;
+        loaded.view<Transform, MeshRenderer, ColliderComponent>([&](Entity entity, const auto &, const auto &renderer, const auto &) {
+            if (renderer.material.pbr.transmission > 0.0F && !loaded.has<GlassDestructionComponent>(entity))
+                legacyGlassCandidates.push_back(entity);
+        });
+        for (auto entity : legacyGlassCandidates) GlassDestructionSystem::prepareLegacyPane(loaded, entity);
+
         loaded.view<ColliderComponent, MeshRenderer>([&](const Entity entity,
                                                         ColliderComponent &collider,
                                                         const MeshRenderer &renderer) {
@@ -2234,20 +2313,49 @@ namespace Engine {
                     : renderer.mesh.source();
             }
         });
-        loaded.view<GlassDestructionComponent, MeshRenderer>([](const Entity,
+        std::unordered_map<const Mesh *, MeshHandle> sharedGlassHandles;
+        loaded.view<GlassDestructionComponent, MeshRenderer>([version, &sharedGlassHandles](const Entity,
             GlassDestructionComponent &glass, MeshRenderer &renderer) {
-            if (!glass.fractured) return;
-            // Version 30 treated every perimeter cell as permanently supported.
-            const float bottom = -glass.size.y * 0.5F;
-            for (auto &fragment : glass.fragments) {
-                fragment.frameSupported = false;
-                for (std::size_t i = 0; i < fragment.polygon.size(); ++i) {
-                    const auto a = fragment.polygon[i], b = fragment.polygon[(i + 1) % fragment.polygon.size()];
-                    fragment.frameSupported |= std::abs(a.y - bottom) < 1.0e-5F &&
-                        std::abs(b.y - bottom) < 1.0e-5F && glm::distance(a, b) > 1.0e-5F;
+            if (glass.fragments.empty()) return;
+            if (version < 33) {
+                const float bottom = -glass.size.y * 0.5F;
+                for (auto &fragment : glass.fragments) {
+                    fragment.frameSupported = false;
+                    for (std::size_t i = 0; i < fragment.polygon.size(); ++i) {
+                        const auto a = fragment.polygon[i], b = fragment.polygon[(i+1)%fragment.polygon.size()];
+                        fragment.frameSupported |= std::abs(a.y-bottom) < 1.0e-5F &&
+                            std::abs(b.y-bottom) < 1.0e-5F && glm::distance(a,b) > 1.0e-5F;
+                    }
+                }
+                for (auto &bond : glass.bonds) {
+                    std::vector<glm::vec2> common;
+                    for (auto a : glass.fragments[bond.first].polygon)
+                        for (auto b : glass.fragments[bond.second].polygon)
+                            if (glm::distance(a,b) < 1.0e-5F && std::ranges::none_of(common,
+                                [&](auto p) { return glm::distance(p,a) < 1.0e-5F; })) common.push_back(a);
+                    if (common.size() >= 2) { bond.edgeStart = common[0]; bond.edgeEnd = common[1];
+                        bond.length = glm::distance(common[0],common[1]); }
                 }
             }
-            renderer.mesh = MeshHandle{GlassDestructionSystem::renderMesh(glass)};
+            GlassDestructionSystem::restoreGeometryCache(glass);
+            auto packed = GlassDestructionSystem::renderMesh(glass); // Also restores immutable shard colliders.
+            renderer.mesh = MeshHandle{std::move(packed)};
+            const auto [cached, inserted] = sharedGlassHandles.try_emplace(renderer.mesh.source().get(), renderer.mesh);
+            if (!inserted) renderer.mesh = cached->second;
+        });
+        loaded.view<GlassFragmentBindingComponent, ColliderComponent>([&](const Entity entity,
+            GlassFragmentBindingComponent &binding, ColliderComponent &collider) {
+            const auto found = entitiesByUuid.find(binding.paneUuid);
+            if (found == entitiesByUuid.end() || !loaded.has<GlassDestructionComponent>(found->second))
+                invalidScene("missing glass pane for fragment");
+            binding.paneEntity = found->second;
+            auto &glass = loaded.get<GlassDestructionComponent>(binding.paneEntity);
+            if (binding.fragmentIndex >= glass.fragments.size()) invalidScene("invalid glass fragment binding");
+            auto &fragment = glass.fragments[binding.fragmentIndex];
+            if (fragment.attached || loaded.valid(fragment.debrisEntity)) invalidScene("duplicate or attached glass debris binding");
+            fragment.debrisEntity = entity;
+            if (auto *mesh = std::get_if<MeshCollider>(&collider.shape)) mesh->mesh = fragment.collisionGeometry;
+            else invalidScene("glass debris requires mesh collision");
         });
         registry = std::move(loaded);
         // Registry replacement preserves its address, but invalidates all

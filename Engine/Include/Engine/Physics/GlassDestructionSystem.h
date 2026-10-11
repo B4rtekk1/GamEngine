@@ -6,6 +6,7 @@
 
 namespace Engine {
     class Scene;
+    class Registry;
     class Mesh;
     class PhysicsSystem;
     struct GlassImpact final {
@@ -23,6 +24,11 @@ namespace Engine {
             GlassDestructionComponent settings = {}, PBRMaterial material = {});
         /** Returns false for invalid, below-threshold or off-surface impacts. */
         static bool onImpact(Scene &scene, Entity entity, const GlassImpact &impact);
+        /** Prepare compatible old presets at load time, outside the impact frame. */
+        static bool prepareLegacyPane(Registry &registry, Entity entity);
+        /** Reuse an authored template only when loaded polygons match exactly. */
+        static void restoreGeometryCache(GlassDestructionComponent &glass);
+        static void onActorDestroyed(Scene &scene, Entity entity);
         static void update(Scene &scene, float deltaTime, const PhysicsSystem *physics = nullptr);
         /** Stable packed fragment sections, used by GPU indirect rendering and scene loading. */
         [[nodiscard]] static std::shared_ptr<Mesh> renderMesh(const GlassDestructionComponent &glass);

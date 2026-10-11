@@ -314,6 +314,8 @@ namespace Engine {
                     (info.properties & hostVisible) != 0, (info.properties & hostCoherent) != 0, info.bytes,
                 });
             };
+            for (const auto &allocation : glassPass.memoryAllocations()) result.push_back(allocation);
+            for (const auto &allocation : sceneGlassPass.memoryAllocations()) result.push_back(allocation);
             append("Instances", gpuSceneInstanceBuffers[currentFrame]);
             append("Meshes", gpuSceneMeshBuffers[currentFrame]);
             append("Materials", gpuSceneMaterialBuffers[currentFrame]);
@@ -877,6 +879,7 @@ namespace Engine {
         // backend and Scene View images: adding an object must not look like a
         // complete scene reload to the editor.
         void synchronizeSceneResources(const Scene &updatedScene) {
+            GE_PROFILE_SCOPE("SceneSyncCPU");
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }

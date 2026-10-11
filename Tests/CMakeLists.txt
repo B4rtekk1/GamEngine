@@ -123,3 +123,10 @@ gtest_discover_tests(TaskSchedulerTests)
 gtest_discover_tests(RenderGraphTests)
 gtest_discover_tests(PhysicsMeshTests)
 gtest_discover_tests(ShaderGraphCompilerTests)
+
+# Explicitly invoked CPU benchmark; kept out of the ordinary test suite.
+add_executable(GlassDestructionBenchmark GlassDestructionBenchmark.cpp)
+target_link_libraries(GlassDestructionBenchmark PRIVATE Engine)
+gameengine_enable_warnings(GlassDestructionBenchmark)
+gameengine_enable_sanitizers(GlassDestructionBenchmark)
+gameengine_copy_runtime_dependencies(GlassDestructionBenchmark)

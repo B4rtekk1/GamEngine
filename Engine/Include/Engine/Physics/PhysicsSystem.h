@@ -12,6 +12,10 @@
 namespace Engine {
     class Scene;
 
+    struct PhysicsDiagnostics final {
+        double collisionCookingCpuMs{};
+        std::uint64_t convexCookCount{}, triangleCookCount{}, actorCreations{}, glassShapeUpdates{};
+    };
     struct RaycastHit final {
         Actor actor;
         Vec3 point;
@@ -35,6 +39,8 @@ namespace Engine {
         explicit PhysicsSystem(Vec3 gravity = {0.0F, -9.81F, 0.0F}) noexcept //NOLINT g = 9.81
             : gravity_(gravity) {
         }
+
+        [[nodiscard]] PhysicsDiagnostics diagnostics() const noexcept;
 
         /** Advances dynamic rigid bodies in a scene by one simulation step. */
         void update(Scene &scene, float deltaTime) const;

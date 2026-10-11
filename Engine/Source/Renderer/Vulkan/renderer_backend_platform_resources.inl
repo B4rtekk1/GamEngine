@@ -598,7 +598,7 @@
                              {(msaa.enabled() ? hiZDepthBuffer : depthBuffer).sampler(),
                               (msaa.enabled() ? hiZDepthBuffer : depthBuffer).imageView(),
                               VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
-            glassPass.create(device, HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
+            glassPass.create(device, vulkanDevice.allocator(), HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
                              msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                              msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
                              shadowPass.descriptorSetLayout(), assetManager,
@@ -620,11 +620,11 @@
         }
 
         void createParticleResources() {
-            if (!scene.isParticleScene() || scene.particleEntity() == NullEntity ||
+            bool hasGlass = false;
+            registry.view<GlassDestructionComponent>([&](Entity, const auto &) { hasGlass = true; });
+            if (!hasGlass && (!scene.isParticleScene() || scene.particleEntity() == NullEntity ||
                 (!registry.has<ParticleEmitterComponent>(scene.particleEntity()) &&
-                 !registry.has<SmokeEmitterComponent>(scene.particleEntity()))) {
-                return;
-            }
+                 !registry.has<SmokeEmitterComponent>(scene.particleEntity())))) return;
 
             if (!particleSystem) {
                 particleSystem = std::make_unique<Particles::ParticleSystem>(
@@ -634,10 +634,13 @@
                     if (registry.has<Transform>(scene.particleEntity())) { emitter.position = registry.get<Transform>(scene.particleEntity()).position;
 }
                     particleSystem->setEmitter(emitter);
-                } else {
+                } else if (registry.has<ParticleEmitterComponent>(scene.particleEntity())) {
                     auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
                     if (registry.has<Transform>(scene.particleEntity())) { emitter.position = registry.get<Transform>(scene.particleEntity()).position;
 }
+                    particleSystem->setEmitter(emitter);
+                } else {
+                    Particles::ParticleEmitter emitter; emitter.spawnRate = 0;
                     particleSystem->setEmitter(emitter);
                 }
             }

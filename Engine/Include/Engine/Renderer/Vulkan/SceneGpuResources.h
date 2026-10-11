@@ -78,6 +78,7 @@ namespace Engine {
             // Revision of the ECS world transform last uploaded to the GPU.
             // Do not retain a second full Transform here: ECS owns it.
             std::uint64_t lastWorldRevision{std::numeric_limits<std::uint64_t>::max()};
+            Entity lastTransformEntity{NullEntity}; // Detect pane-to-shard pose ownership changes.
             std::uint8_t transformDirtyFrames{0};
             std::uint8_t materialDirtyFrames{0};
             std::uint8_t cullingDirtyFrames{0};

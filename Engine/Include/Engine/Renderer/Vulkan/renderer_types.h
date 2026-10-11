@@ -143,7 +143,7 @@ namespace Engine {
         glm::vec4 positionMaterial{};
         // Quaternion stored as xyzw.
         glm::vec4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
-        // xyz: non-uniform scale; w is std430 padding.
+        // xyz: non-uniform scale; w: bit-cast glass crack atlas slot + 1 (zero for other materials).
         glm::vec4 scaleBase{1.0F, 1.0F, 1.0F, 0.0F};
     };
     static_assert(sizeof(RendererInstanceData) == 48);

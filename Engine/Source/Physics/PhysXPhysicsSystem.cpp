@@ -1,5 +1,7 @@
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Physics/GlassDestructionSystem.h"
+#include "Engine/Core/Profiler.h"
+#include <chrono>
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/TaskScheduler.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
@@ -387,6 +389,7 @@ namespace Engine {
     }
 
     struct PhysicsSystem::BroadPhaseCache final {
+        mutable PhysicsDiagnostics diagnostics;
         struct ActorRecord final {
             physx::PxRigidActor *actor{};
             Transform lastTransform{};
@@ -395,6 +398,8 @@ namespace Engine {
             std::uint64_t poseWorldRevision{};
             Vec3 lastLinearVelocity;
             Vec3 lastAngularVelocity;
+            std::vector<physx::PxShape *> glassShapes;
+            physx::PxShape *intactGlassShape{};
         };
 
         struct CookedMeshKey final {
@@ -540,12 +545,17 @@ namespace Engine {
             description.flags = physx::PxConvexFlag::eCOMPUTE_CONVEX;
             description.vertexLimit = 255; //NOLINT uint8_t
 
+            GE_PROFILE_SCOPE("CollisionCookingCPU");
+            const auto cookStart = std::chrono::steady_clock::now();
+            ++diagnostics.convexCookCount;
             physx::PxDefaultMemoryOutputStream output;
             if (!PxCookConvexMesh(cookingParameters, description, output)) {
                 return nullptr;
             }
             physx::PxDefaultMemoryInputData input{output.getData(), output.getSize()};
-            return context->physics->createConvexMesh(input);
+            auto *result = context->physics->createConvexMesh(input);
+            diagnostics.collisionCookingCpuMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-cookStart).count();
+            return result;
         }
 
         physx::PxTriangleMesh *cookTriangleMesh(const Mesh &mesh, const Vec3 &scale) const {
@@ -570,12 +580,17 @@ namespace Engine {
             // winding so PhysX contact normals point out of the rendered mesh.
             description.triangles.data = mesh.indices.data();
 
+            GE_PROFILE_SCOPE("CollisionCookingCPU");
+            const auto cookStart = std::chrono::steady_clock::now();
+            ++diagnostics.triangleCookCount;
             physx::PxDefaultMemoryOutputStream output;
             if (!PxCookTriangleMesh(cookingParameters, description, output)) {
                 return nullptr;
             }
             physx::PxDefaultMemoryInputData input{output.getData(), output.getSize()};
-            return context->physics->createTriangleMesh(input);
+            auto *result = context->physics->createTriangleMesh(input);
+            diagnostics.collisionCookingCpuMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-cookStart).count();
+            return result;
         }
 
         physx::PxConvexMesh *cachedConvexMesh(const std::shared_ptr<const Mesh> &source, const Vec3 &scale) {
@@ -775,7 +790,34 @@ namespace Engine {
                 toPhysX(state.angularVelocity * DegreesToRadians), false);
         }
 
+        bool attachGlass(physx::PxRigidActor &actor, const GlassDestructionComponent &glass,
+            const ColliderComponent &collider, const Transform &transform, std::vector<physx::PxShape *> &shapes) {
+            using namespace physx;
+            auto *material = context->physics->createMaterial(std::max(collider.friction, 0.0F),
+                std::max(collider.friction, 0.0F), std::clamp(collider.restitution, 0.0F, 1.0F));
+            if (!material) return false;
+            const auto scale = absoluteScale(transform);
+            bool success = true;
+            for (const auto &fragment : glass.fragments) {
+                auto *convex = fragment.collisionGeometry ? cachedConvexMesh(fragment.collisionGeometry, scale) : nullptr;
+                auto *shape = convex ? attachGeometry(actor, PxConvexMeshGeometry{convex}, *material,
+                    PxTransform{toPhysX(Vec3{fragment.center.x, fragment.center.y, 0.0F} * scale)}, collider.isTrigger) : nullptr;
+                if (!shape) {
+                    success = false;
+                    break;
+                }
+                const bool active = glass.fractured && fragment.attached;
+                shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, active && !collider.isTrigger);
+                shape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, active);
+                shape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, active && collider.isTrigger);
+                shapes.push_back(shape);
+            }
+            material->release();
+            return success;
+        }
+
         ActorRecord createActor(const Entity entity, Registry &owner, Transform &transform) {
+            ++diagnostics.actorCreations;
             using namespace physx;
             RigidbodyComponent *body = owner.has<RigidbodyComponent>(entity)
                                            ? &owner.get<RigidbodyComponent>(entity)
@@ -792,9 +834,21 @@ namespace Engine {
                 throw std::runtime_error("PhysX rigid actor creation failed");
             }
             actor->userData = reinterpret_cast<void *>(static_cast<std::uintptr_t>(entity));
+            std::vector<PxShape *> glassShapes;
+            PxShape *intactGlassShape = nullptr;
             if (owner.has<ColliderComponent>(entity)) {
                 const ColliderComponent &collider = owner.get<ColliderComponent>(entity);
-                if (!attachCollider(*actor, collider, transform, dynamic)) {
+                const bool compoundGlass = !dynamic && owner.has<GlassDestructionComponent>(entity);
+                bool attached = true;
+                if (compoundGlass) {
+                    const auto &glass = owner.get<GlassDestructionComponent>(entity);
+                    if (!glass.fractured) {
+                        attached = attachCollider(*actor, collider, transform, false);
+                        actor->getShapes(&intactGlassShape, 1);
+                    }
+                    attached = attached && attachGlass(*actor, glass, collider, transform, glassShapes);
+                } else attached = attachCollider(*actor, collider, transform, dynamic);
+                if (!attached) {
                     actor->release();
                     throw std::runtime_error("PhysX collider creation/cooking failed");
                 }
@@ -807,6 +861,8 @@ namespace Engine {
                 .scaleWorldRevision = owner.get<Transform>(entity).worldRevision(),
                 .poseWorldRevision = owner.get<Transform>(entity).worldRevision(),
             };
+            record.glassShapes = std::move(glassShapes);
+            record.intactGlassShape = intactGlassShape;
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
                 configureRigidBody(rigid, *body);
@@ -855,8 +911,30 @@ namespace Engine {
                 removeActor(entity);
                 return;
             }
-            removeActor(entity);
             Transform world = TransformSystem::worldTransform(owner, entity);
+            const auto existing = actors.find(entity);
+            if (existing != actors.end() && owner.has<GlassDestructionComponent>(entity) &&
+                owner.has<ColliderComponent>(entity) && existing->second.bodyType == RigidbodyType::Static &&
+                same(existing->second.lastTransform.scale, world.scale)) {
+                auto &record = existing->second;
+                const auto &glass = owner.get<GlassDestructionComponent>(entity);
+                const auto &collider = owner.get<ColliderComponent>(entity);
+                if (record.glassShapes.size() == glass.fragments.size()) {
+                    ++diagnostics.glassShapeUpdates;
+                    if (record.intactGlassShape) {
+                        record.intactGlassShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, !glass.fractured && !collider.isTrigger);
+                        record.intactGlassShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, !glass.fractured);
+                    }
+                    for (std::size_t i = 0; i < record.glassShapes.size(); ++i) {
+                        const bool active = glass.fractured && glass.fragments[i].attached;
+                        auto *shape = record.glassShapes[i];
+                        shape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, active && !collider.isTrigger);
+                        shape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, active);
+                    }
+                    return;
+                }
+            }
+            removeActor(entity);
             actors.emplace(entity, createActor(entity, owner, world));
         }
 
@@ -905,6 +983,7 @@ namespace Engine {
         }
 
         void ensureWorld(Registry &owner) {
+            GE_PROFILE_SCOPE("PhysicsActorSyncCPU");
             pruneCookedMeshes();
             if (registry != &owner) {
                 rebuild(owner);
@@ -957,6 +1036,7 @@ namespace Engine {
         }
 
         void pushEcsState(Registry &owner) {
+            GE_PROFILE_SCOPE("PhysicsStatePushCPU");
             using namespace physx;
             for (auto &[entity, record]: actors) {
                 // Transform owns Static and Kinematic poses. Dynamic poses are
@@ -1050,6 +1130,10 @@ namespace Engine {
         }
     };
 
+    PhysicsDiagnostics PhysicsSystem::diagnostics() const noexcept {
+        return broadPhaseCache_ ? broadPhaseCache_->diagnostics : PhysicsDiagnostics{};
+    }
+
     void PhysicsSystem::reset() const noexcept {
         broadPhaseCache_.reset();
     }
@@ -1071,8 +1155,13 @@ namespace Engine {
         runtime.ensureWorld(registry);
         runtime.physicsScene->setGravity(toPhysX(gravity_));
         runtime.pushEcsState(registry);
-        runtime.physicsScene->simulate(deltaTime);
-        runtime.physicsScene->fetchResults(true);
+        {
+            GE_PROFILE_SCOPE("PhysXSimulationCPU");
+            const auto simulationStart = std::chrono::steady_clock::now();
+            runtime.physicsScene->simulate(deltaTime);
+            runtime.physicsScene->fetchResults(true);
+            scene.reportGlassPhysicsCost(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-simulationStart).count());
+        }
         runtime.pullPhysXState(registry);
         trampleTerrainGrass(registry, deltaTime);
     }

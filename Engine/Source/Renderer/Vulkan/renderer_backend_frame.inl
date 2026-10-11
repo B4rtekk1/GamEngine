@@ -2187,6 +2187,10 @@
                             swapchain.extent(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
                     // The previous dynamic rendering scope wrote HDR/velocity.
                     vkCmdPipelineBarrier2(commandBuffer, &waterDependency);
+                    static const auto glassCrackProfileName = Profiler::registerName("GlassCrackAtlasGPU");
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, glassCrackProfileName);
+                    glassPass.recordCracks(commandBuffer, scene, currentFrame);
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                     glassPass.begin(commandBuffer,
                         msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(), depthBuffer.imageView(),
                         velocityBuffer.imageView(), msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
@@ -2447,6 +2451,7 @@
                         glassDependency.imageMemoryBarrierCount = 1;
                         glassDependency.pImageMemoryBarriers = &toGlass;
                         vkCmdPipelineBarrier2(commandBuffer, &glassDependency);
+                        sceneGlassPass.recordCracks(commandBuffer, scene, currentFrame);
                         sceneGlassPass.begin(commandBuffer, sceneViewportTarget.color().imageView(),
                             sceneViewportDepthBuffer.imageView(), VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE,
                             sceneViewportTarget.extent(), sceneDescriptorPass.descriptorSet(currentFrame), currentFrame,
@@ -3053,7 +3058,10 @@
         }
 
         void updateParticleSystemForFrame() {
+            if (!particleSystem && !scene.glassParticleBursts().empty()) createParticleResources();
             if (!particleSystem) { return; }
+            for (const auto &burst : scene.glassParticleBursts()) particleSystem->enqueueGlassBurst(burst);
+            scene.clearGlassParticleBursts();
 
             const Entity particleEntity = scene.particleEntity();
             const bool hasEmitter = particleEntity != NullEntity &&

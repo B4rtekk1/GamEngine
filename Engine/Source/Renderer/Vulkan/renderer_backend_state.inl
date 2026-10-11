@@ -218,6 +218,7 @@
         std::uint32_t& materialSlots;
         std::uint64_t& lastTransformRevision;
         std::uint64_t& lastMeshRendererRevision;
+        std::uint64_t lastGlassDestructionRevision{std::numeric_limits<std::uint64_t>::max()};
         std::uint64_t& lastTerrainGrassRevision;
         std::uint64_t& lastParentRevision;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyTransforms;
@@ -825,3 +826,6 @@
             }
             record.*dirtyFrames |= allFrameBits;
         }
+
+        struct GlassAtlasOwner { Entity entity{NullEntity}; std::uint64_t uuid{}; };
+        std::array<GlassAtlasOwner, 512> glassAtlasOwners{};

@@ -1153,7 +1153,7 @@
                                 sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
                                 section.meshletCount, section.localBounds, usesFoliagePipeline,
                                 effectiveMaterial.alphaMode, effectiveMaterial.doubleSided,
-                                registry.has<GlassDestructionComponent>(entity),
+                                false,
                                 metadata.materials.empty(),
                                 metadata.materials.empty() ? 0U : section.materialIndex,
                                 effectiveMaterial);
@@ -2013,6 +2013,7 @@
         }
 
         void uploadPendingGPUSceneDatabase(const std::uint32_t frame) {
+            GE_PROFILE_SCOPE("GPUSceneUploadCPU");
             collectGPUSceneDatabaseChanges();
             auto& pending = sceneGpu.pendingDatabaseUploads[frame];
             if (pending.instances.empty() && pending.meshes.empty() && pending.materials.empty() &&
@@ -2122,6 +2123,7 @@
         // must therefore be uploaded once per buffer, even after the registry
         // revision itself has stopped changing.
         void uploadPendingRenderableBuffers() {
+            GE_PROFILE_SCOPE("RenderableUploadCPU");
             if (instanceBuffers[currentFrame].handle() == VK_NULL_HANDLE) { return;
 }
 
@@ -2190,6 +2192,7 @@
         }
 
         void updateRenderableBuffers() {
+            GE_PROFILE_SCOPE("RenderableUpdateCPU");
             const auto modelFromInstance = [](const RendererInstanceData& instance) {
                 const glm::quat rotation{instance.rotation.w, instance.rotation.x,
                                          instance.rotation.y, instance.rotation.z,};
@@ -2234,6 +2237,7 @@
             lastGrassShadowWindRevision = sceneFrameDataCache.windRevision;
             const std::uint64_t transformRevision = registry.componentRevision<Transform>();
             const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
+            const std::uint64_t glassRevision = registry.componentRevision<GlassDestructionComponent>();
             const std::uint64_t terrainGrassRevision = registry.componentRevision<TerrainGrassComponent>();
             const std::uint64_t parentRevision = registry.componentRevision<ParentComponent>();
             if (terrainGrassRevision != lastTerrainGrassRevision) {
@@ -2278,6 +2282,7 @@
             }
             if (transformRevision == lastTransformRevision &&
                 meshRendererRevision == lastMeshRendererRevision &&
+                glassRevision == lastGlassDestructionRevision &&
                 terrainGrassRevision == lastTerrainGrassRevision &&
                 parentRevision == lastParentRevision) {
                 uploadPendingRenderableBuffers();
@@ -2288,6 +2293,7 @@
             changedIndices.clear();
             constexpr std::uint8_t transformChange = 1U;
             constexpr std::uint8_t rendererChange = 2U;
+            constexpr std::uint8_t glassChange = 4U;
             if (renderableChangeMarks.size() != renderables.size()) {
                 renderableChangeMarks.assign(renderables.size(), 0);
                 renderableChangeKinds.assign(renderables.size(), 0);
@@ -2314,6 +2320,13 @@
                     }
                 };
                 const auto addChangedEntity = [&](const Entity entity, const std::uint8_t kind) {
+                    if (registry.has<GlassFragmentBindingComponent>(entity)) {
+                        const auto &binding = registry.get<GlassFragmentBindingComponent>(entity);
+                        const auto pane = sceneGpu.renderableIndices.find(binding.paneEntity);
+                        if (pane != sceneGpu.renderableIndices.end())
+                            for (auto index : pane->second)
+                                if (renderables[index].sectionIndex == binding.fragmentIndex) addIndex(index, kind);
+                    }
                     const auto it = sceneGpu.renderableIndices.find(entity);
                     if (it != sceneGpu.renderableIndices.end())
                         for (const std::size_t index : it->second) addIndex(index, kind);
@@ -2323,6 +2336,8 @@
                 }
                 registry.forEachComponentChangedSince<MeshRenderer>(lastMeshRendererRevision,
                     [&](const Entity entity) { addChangedEntity(entity, rendererChange); });
+                registry.forEachComponentChangedSince<GlassDestructionComponent>(lastGlassDestructionRevision,
+                    [&](const Entity entity) { addChangedEntity(entity, glassChange); });
             }
 
             const Registry& readRegistry = registry;
@@ -2332,6 +2347,8 @@
             auto& changedBatches = changedRenderableBatches;
             changedBatches.clear();
             bool displacementChanged = false;
+            {
+            GE_PROFILE_SCOPE("RenderableRecordsCPU");
             for (const std::size_t index : changedIndices) {
                 const Entity entity = renderables[index].entity;
                 RenderableRecord& record = renderables[index];
@@ -2342,7 +2359,7 @@
                     record.renderProxy.instance = InvalidGPUSceneInstanceId;
                     continue;
                 }
-                const auto& transform = readRegistry.get<Transform>(entity);
+                const auto& transform = readRegistry.get<Transform>(glassSectionEntity(record));
                 if (record.waterOnly) {
                     const bool transformChanged = lastTransformRevision ==
                         std::numeric_limits<std::uint64_t>::max() ||
@@ -2388,13 +2405,16 @@
                 const bool hasRendererChange = lastMeshRendererRevision ==
                     std::numeric_limits<std::uint64_t>::max() ||
                     renderableChangeKinds[index] & rendererChange;
+                const bool hasGlassChange = renderableChangeKinds[index] & glassChange;
                 const MeshRenderer* renderer = &readRegistry.get<MeshRenderer>(entity);
-                glm::mat4 model = worldModel(entity);
+                glm::mat4 model = glassSectionModel(record);
                 const auto shadowBounds = [&](const glm::mat4& instanceModel) {
                     return record.localBounds.transformed(instanceModel);
                 };
-                const bool transformChanged = hasTransformChange &&
-                    (!optimizationFeatures.transformCaching ||
+                const bool transformChanged = (hasTransformChange ||
+                    ((hasRendererChange || hasGlassChange) && readRegistry.has<GlassDestructionComponent>(entity))) &&
+                    (hasRendererChange || !optimizationFeatures.transformCaching ||
+                     record.lastTransformEntity != glassSectionEntity(record) ||
                      record.lastWorldRevision != transform.worldRevision());
                 if (transformChanged) {
                     rtTlasInputDirty = true;
@@ -2428,8 +2448,9 @@
                         decomposedTranslation, std::bit_cast<float>(record.materialTableOffset)};
                     rendererInstance.rotation = glm::vec4{decomposedRotation.x, decomposedRotation.y,
                                                            decomposedRotation.z, decomposedRotation.w};
-                    rendererInstance.scaleBase = glm::vec4{decomposedScale, 0.0F};
+                    rendererInstance.scaleBase = glm::vec4{decomposedScale, glassCrackSlot(entity)};
                     record.lastWorldRevision = transform.worldRevision();
+                    record.lastTransformEntity = glassSectionEntity(record);
                     sceneGpu.moveRenderableToCell(index,
                         SceneGpuResources::cellFor(record.localBounds.transformed(model)));
                     if (record.batchIndex < instanceBatches.size() &&
@@ -2442,8 +2463,7 @@
                     changedBatches.push_back(record.batchIndex);
                 }
                 bool materialChanged = false;
-                if (hasRendererChange && readRegistry.has<GlassDestructionComponent>(entity)) {
-                    instanceBatches[record.batchIndex].indexCount = liveBatchIndexCount(record.batchIndex);
+                if ((hasRendererChange || hasGlassChange) && readRegistry.has<GlassDestructionComponent>(entity)) {
                     markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                     changedBatches.push_back(record.batchIndex);
                     rtTlasInputDirty = true;
@@ -2543,7 +2563,10 @@
                     const InstanceBatch& batch = instanceBatches[record.batchIndex];
                     const GPUSceneDatabase::GPUMesh mesh{
                         .firstIndex = batch.firstIndex,
-                        .indexCount = batch.indexCount,
+                        // Mesh ranges are immutable; visibility is per instance.
+                        .indexCount = record.sectionIndex < renderer->mesh.resource()->metadata.sections.size()
+                            ? renderer->mesh.resource()->metadata.sections[record.sectionIndex].indexCount
+                            : renderer->mesh.resource()->metadata.indexCount,
                         .vertexOffset = 0,
                         .lod1IndexCount = batch.lod1IndexCount,
                         .lod2IndexCount = batch.lod2IndexCount,
@@ -2599,6 +2622,7 @@
                                 record.renderProxy.instance, worldMatrix, record.localBounds,
                                 record.displacementBoundsPadding);
                         }
+                        if (hasGlassChange) sceneGpu.database.updateInstanceFlags(record.renderProxy.instance, instanceFlags);
                         if (hasRendererChange) {
                             sceneGpu.database.updateMesh(record.renderProxy.mesh, mesh);
                             sceneGpu.database.updateMaterial(record.renderProxy.material, material);
@@ -2607,7 +2631,9 @@
                     }
                 }
             }
+            }
             if (gpuObjects.size() == instanceBatches.size() && !changedBatches.empty()) {
+                GE_PROFILE_SCOPE("RenderableBoundsCPU");
                 std::ranges::sort(changedBatches);
                 changedBatches.erase(std::ranges::unique(changedBatches).begin(), changedBatches.end());
                 for (const std::size_t batchIndex : changedBatches) {
@@ -2615,9 +2641,12 @@
                     AABB bounds{};
                     bool initialized = false;
                     bool displacedGeometry = false;
+                    instanceBatches[batchIndex].indexCount = liveBatchIndexCount(batchIndex);
+                    // Recompute a shared batch once, rather than once per section instance.
+                    gpuObjects[batchIndex].indexCount = instanceBatches[batchIndex].indexCount;
                     for (std::size_t index : sceneGpu.batchRenderableIndices[batchIndex]) {
                         const RenderableRecord& record = renderables[index];
-                        if (!readRegistry.has<Transform>(record.entity)) continue;
+                        if (!readRegistry.has<Transform>(record.entity) || !glassSectionVisible(record)) continue;
                         displacedGeometry |= record.displacementBoundsPadding > 1.0e-6F;
                         const glm::mat4 instanceModel = modelFromInstance(instanceModels[index]);
                         const AABB worldBounds = record.localBounds.transformed(instanceModel);
@@ -2675,6 +2704,7 @@
             });
             lastTransformRevision = transformRevision;
             lastMeshRendererRevision = meshRendererRevision;
+            lastGlassDestructionRevision = glassRevision;
             lastTerrainGrassRevision = terrainGrassRevision;
             lastParentRevision = parentRevision;
         }

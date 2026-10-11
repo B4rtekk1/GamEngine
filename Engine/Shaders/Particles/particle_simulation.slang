@@ -12,14 +12,24 @@ import Particles.SimulationTypes;
 [shader("compute")]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
-    uint id = dispatchThreadId.x;
+    bool spawnOnly = sim.maxVelocity.w > 0.5;
+    if (spawnOnly && dispatchThreadId.x >= sim.spawnCount) return;
+    uint id = spawnOnly ? (sim.spawnStart + dispatchThreadId.x) % sim.maxParticles : dispatchThreadId.x;
     if (id >= sim.maxParticles)
         return;
 
     Particle particle = particles[id];
     float dt = min(sim.deltaTime, 0.1);
 
-    if (particle.positionLife.w > 0.0)
+    if (!spawnOnly && particle.positionLife.w > 0.0 && particle.spawnData.y < 0.0)
+    {
+        particle.velocitySize.xyz += float3(0, -9.81, 0) * dt;
+        particle.velocitySize.xyz *= 1.0 / (1.0 + 0.08 * dt);
+        particle.positionLife.xyz += particle.velocitySize.xyz * dt;
+        particle.positionLife.w -= dt;
+        particle.color.a = particle.spawnData.w * saturate(particle.positionLife.w / 0.4);
+    }
+    else if (!spawnOnly && particle.positionLife.w > 0.0)
     {
         float age = clamp(1.0 - particle.positionLife.w /
                           max(particle.spawnData.z, 0.001), 0.0, 1.0);
@@ -103,7 +113,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
                               sim.maxLifeMaxSize.x, particleRandom(state));
         float initialSize = lerp(sim.minVelocityMinSize.w,
                                  sim.maxLifeMaxSize.y, particleRandom(state));
-        float finalSize = initialSize * lerp(1.65, 2.35, particleRandom(state));
+        float finalSize = sim.maxLifeMaxSize.z > 0.5 ? -initialSize : initialSize * lerp(1.65, 2.35, particleRandom(state));
         particle.positionLife = float4(sim.emitterPositionMinLife.xyz + spawnOffset,
                                        lifetime);
         particle.velocitySize = float4(
@@ -115,6 +125,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     particles[id] = particle;
+    if (spawnOnly) return;
     if (particle.positionLife.w > 0.0)
     {
         uint compactIndex;

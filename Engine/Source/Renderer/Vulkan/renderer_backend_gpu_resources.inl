@@ -1,10 +1,60 @@
+        [[nodiscard]] float glassCrackSlot(Entity entity) {
+            if (!scene.registry().has<GlassDestructionComponent>(entity)) return 0.0F;
+            const auto &glass = scene.registry().get<GlassDestructionComponent>(entity);
+            const auto uuid = scene.registry().get<UUIDComponent>(entity).value;
+            if (glass.crackAtlasIndex < glassAtlasOwners.size()) {
+                const auto &owner = glassAtlasOwners[glass.crackAtlasIndex];
+                if (owner.entity == entity && owner.uuid == uuid) return std::bit_cast<float>(glass.crackAtlasIndex + 1U);
+            }
+            for (unsigned slot = 0; slot < glassAtlasOwners.size(); ++slot) {
+                auto &owner = glassAtlasOwners[slot];
+                if (owner.entity == entity && owner.uuid == uuid) {
+                    glass.crackAtlasIndex = slot;
+                    return std::bit_cast<float>(slot + 1U);
+                }
+                if (!scene.registry().valid(owner.entity) || !scene.registry().has<GlassDestructionComponent>(owner.entity) ||
+                    !scene.registry().has<UUIDComponent>(owner.entity) || scene.registry().get<UUIDComponent>(owner.entity).value != owner.uuid) {
+                    owner = {entity, uuid}; glass.crackAtlasIndex = slot;
+                    return std::bit_cast<float>(slot + 1U);
+                }
+            }
+            glass.crackAtlasIndex = ~0U;
+            return 0.0F;
+        }
+
         // Glass keeps immutable packed geometry. Detached sections are inactive
         // GPU objects; compute culling compacts only the live indirect commands.
         [[nodiscard]] bool glassSectionVisible(const RenderableRecord &record) const {
             if (!scene.registry().has<GlassDestructionComponent>(record.entity)) return true;
             const auto &glass = scene.registry().get<GlassDestructionComponent>(record.entity);
-            return !glass.fullyDestroyed && (!glass.fractured ||
-                (record.sectionIndex < glass.fragments.size() && glass.fragments[record.sectionIndex].attached));
+            // Fragment slots and the final intact slot are reserved at load time.
+            // Legacy unprepared meshes still draw normally until preparation.
+            const auto &sections = scene.registry().get<MeshRendererComponent>(record.entity).mesh.resource()->metadata.sections;
+            if (sections.size() != glass.fragments.size() + 1) return !glass.fractured;
+            if (record.sectionIndex >= glass.fragments.size()) return !glass.fractured;
+            if (!glass.fractured) return false;
+            const auto &fragment = glass.fragments[record.sectionIndex];
+            return fragment.attached || scene.registry().valid(fragment.debrisEntity);
+        }
+
+        [[nodiscard]] Entity glassSectionEntity(const RenderableRecord &record) const {
+            if (scene.registry().has<GlassDestructionComponent>(record.entity)) {
+                const auto &glass = scene.registry().get<GlassDestructionComponent>(record.entity);
+                if (glass.fractured && record.sectionIndex < glass.fragments.size()) {
+                    const auto &fragment = glass.fragments[record.sectionIndex];
+                    if (!fragment.attached && scene.registry().valid(fragment.debrisEntity))
+                        return fragment.debrisEntity;
+                }
+            }
+            return record.entity;
+        }
+
+        [[nodiscard]] glm::mat4 glassSectionModel(const RenderableRecord &record) const {
+            const auto source = glassSectionEntity(record);
+            const auto model = scene.registry().get<Transform>(source).worldMatrix().native();
+            if (source == record.entity) return model;
+            const auto &fragment = scene.registry().get<GlassDestructionComponent>(record.entity).fragments[record.sectionIndex];
+            return glm::translate(model, glm::vec3{-fragment.center, 0.0F});
         }
 
         [[nodiscard]] std::uint32_t liveBatchIndexCount(std::size_t batchIndex) const {
@@ -1528,7 +1578,7 @@
                 sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
             std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> noHiZInfos{};
             noHiZInfos.fill(depthInfo);
-            sceneGlassPass.create(device, HdrBuffer::Format, sampledDepth.format(),
+            sceneGlassPass.create(device, vulkanDevice.allocator(), HdrBuffer::Format, sampledDepth.format(),
                 VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE,
                 sceneDescriptorPass.descriptorSetLayout(), assetManager, false,
                 {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},

@@ -114,7 +114,31 @@ void ParticleSystem::update(float deltaTime) {
         uploadColliders();
         uploadedColliders_ = activeColliders_;
     }
+    glassBurstSimulations_.clear();
     nextSpawnIndex_ = (nextSpawnIndex_ + spawnCount) % maxParticles_;
+    uint32_t burstBudget = maxParticles_ / 2;
+    for (const auto &burst : pendingGlassBursts_) {
+        const auto count = std::min(burst.count, burstBudget);
+        if (count == 0) break;
+        ParticleSimulationData data{};
+        data.spawnStart = nextSpawnIndex_; data.spawnCount = count;
+        data.maxParticles = maxParticles_; data.spawnSeed = burst.seed;
+        data.emitterPositionMinLife[0] = burst.position.x; data.emitterPositionMinLife[1] = burst.position.y;
+        data.emitterPositionMinLife[2] = burst.position.z; data.emitterPositionMinLife[3] = burst.lifetime;
+        for (unsigned axis = 0; axis < 3; ++axis) {
+            data.minVelocityMinSize[axis] = burst.velocity[axis] - 0.2F;
+            data.maxVelocity[axis] = burst.velocity[axis] + 0.2F;
+        }
+        data.minVelocityMinSize[3] = burst.size;
+        data.maxVelocity[3] = 1.0F; // Spawn-only dispatch, before compaction.
+        data.color[0] = 0.68F; data.color[1] = 0.82F; data.color[2] = 0.92F; data.color[3] = 0.65F;
+        data.maxLifeMaxSize[0] = burst.lifetime; data.maxLifeMaxSize[1] = burst.size;
+        data.maxLifeMaxSize[2] = 1.0F; // Glass LOD, stored persistently on the particle.
+        glassBurstSimulations_.push_back(data);
+        nextSpawnIndex_ = (nextSpawnIndex_ + count) % maxParticles_;
+        burstBudget -= count;
+    }
+    pendingGlassBursts_.clear();
     spawnSeed_ += spawnCount;
 }
 
@@ -153,6 +177,18 @@ void ParticleSystem::recordCompute(VkCommandBuffer commandBuffer, VkPipeline pip
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout,
                             0, 1, &descriptorSets_[0][frame], 0, nullptr);
+    VkBufferMemoryBarrier2 spawnBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+    spawnBarrier.srcStageMask = spawnBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    spawnBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    spawnBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    spawnBarrier.buffer = particleBuffer_; spawnBarrier.size = VK_WHOLE_SIZE;
+    VkDependencyInfo spawnDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    spawnDependency.bufferMemoryBarrierCount = 1; spawnDependency.pBufferMemoryBarriers = &spawnBarrier;
+    for (const auto &burst : glassBurstSimulations_) {
+        vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(burst), &burst);
+        vkCmdDispatch(commandBuffer, (burst.spawnCount + 255U)/256U, 1, 1);
+        vkCmdPipelineBarrier2(commandBuffer, &spawnDependency);
+    }
     vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(ParticleSimulationData), &simulation_);
     vkCmdDispatch(commandBuffer, (maxParticles_ + 255u) / 256u, 1, 1);
