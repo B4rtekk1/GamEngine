@@ -1,25 +1,46 @@
+        void synchronizeGlassAtlasSlots() {
+            const Registry &readRegistry=registry;
+            std::array<GlassAtlasOwner,512> owners{};
+            std::unordered_map<Entity,unsigned> slots;
+            unsigned count=0;
+            // Keep surviving panes in their previous order, then fill new slots.
+            for (const auto &owner:glassAtlasOwners) {
+                if (!readRegistry.valid(owner.entity) || !readRegistry.has<GlassDestructionComponent>(owner.entity) ||
+                    !readRegistry.has<MeshRendererComponent>(owner.entity) || !readRegistry.has<UUIDComponent>(owner.entity) ||
+                    readRegistry.get<UUIDComponent>(owner.entity).value!=owner.uuid) continue;
+                slots.emplace(owner.entity,count); owners[count++]=owner;
+            }
+            readRegistry.view<GlassDestructionComponent,MeshRendererComponent,UUIDComponent>(
+                [&](Entity entity,const auto &,const auto &,const auto &uuid) {
+                    if (count>=owners.size() || slots.contains(entity)) return;
+                    slots.emplace(entity,count); owners[count++]={entity,uuid.value};
+                });
+            glassAtlasOwners=owners; glassAtlasPaneCount=count;
+            readRegistry.view<GlassDestructionComponent,MeshRendererComponent,UUIDComponent>(
+                [&](Entity entity,const auto &glass,const auto &,const auto &) {
+                    const auto entry=slots.find(entity);
+                    const unsigned slot=entry==slots.end() ? ~0U : entry->second;
+                    if (glass.crackAtlasIndex==slot) return;
+                    glass.crackAtlasIndex=slot;
+                    registry.markChanged<GlassDestructionComponent>(entity);
+                    const auto records=sceneGpu.renderableIndices.find(entity);
+                    if (records==sceneGpu.renderableIndices.end()) return;
+                    for (auto index:records->second) {
+                        instanceModels[index].scaleBase.w=slot==~0U ? 0.0F : std::bit_cast<float>(slot+1U);
+                        markDirty(index,&RenderableRecord::transformDirtyFrames,dirtyTransforms);
+                    }
+                });
+        }
+
         [[nodiscard]] float glassCrackSlot(Entity entity) {
-            if (!scene.registry().has<GlassDestructionComponent>(entity)) return 0.0F;
-            const auto &glass = scene.registry().get<GlassDestructionComponent>(entity);
-            const auto uuid = scene.registry().get<UUIDComponent>(entity).value;
-            if (glass.crackAtlasIndex < glassAtlasOwners.size()) {
-                const auto &owner = glassAtlasOwners[glass.crackAtlasIndex];
-                if (owner.entity == entity && owner.uuid == uuid) return std::bit_cast<float>(glass.crackAtlasIndex + 1U);
-            }
-            for (unsigned slot = 0; slot < glassAtlasOwners.size(); ++slot) {
-                auto &owner = glassAtlasOwners[slot];
-                if (owner.entity == entity && owner.uuid == uuid) {
-                    glass.crackAtlasIndex = slot;
-                    return std::bit_cast<float>(slot + 1U);
-                }
-                if (!scene.registry().valid(owner.entity) || !scene.registry().has<GlassDestructionComponent>(owner.entity) ||
-                    !scene.registry().has<UUIDComponent>(owner.entity) || scene.registry().get<UUIDComponent>(owner.entity).value != owner.uuid) {
-                    owner = {entity, uuid}; glass.crackAtlasIndex = slot;
-                    return std::bit_cast<float>(slot + 1U);
-                }
-            }
-            glass.crackAtlasIndex = ~0U;
-            return 0.0F;
+            const Registry &readRegistry=registry;
+            if (!readRegistry.has<GlassDestructionComponent>(entity)) return 0.0F;
+            const auto &glass=readRegistry.get<GlassDestructionComponent>(entity);
+            const unsigned slot=glass.crackAtlasIndex;
+            if (slot>=glassAtlasPaneCount) return 0.0F;
+            const auto &owner=glassAtlasOwners[slot];
+            if (owner.entity!=entity || owner.uuid!=readRegistry.get<UUIDComponent>(entity).value) return 0.0F;
+            return std::bit_cast<float>(slot+1U);
         }
 
         // Glass keeps immutable packed geometry. Detached sections are inactive
@@ -63,7 +84,7 @@
             if (indices.empty() || !scene.registry().has<GlassDestructionComponent>(renderables[indices.front()].entity))
                 return batch.indexCount;
             for (auto index : sceneGpu.batchRenderableIndices[batchIndex])
-                if (glassSectionVisible(renderables[index])) {
+                if (renderables[index].visible) {
                     const auto *resource = static_cast<const MeshGpuResource *>(batch.mesh);
                     const auto &sections = resource->metadata.sections;
                     const auto section = renderables[index].sectionIndex;
@@ -1582,7 +1603,7 @@
                 VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE,
                 sceneDescriptorPass.descriptorSetLayout(), assetManager, false,
                 {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                depthInfo);
+                depthInfo, glassAtlasPaneCount);
             // Bind depth to keep the descriptor valid, but deliberately turn
             // Hi-Z off: the Scene View owns no independent pyramid yet.
             sceneVirtualWaterRenderer.create(

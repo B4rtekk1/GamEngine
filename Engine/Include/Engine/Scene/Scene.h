@@ -240,6 +240,12 @@ namespace Engine {
             if (glassGeometryHandles_.size() < 128) glassGeometryHandles_.push_back(handle);
             return handle;
         }
+        void beginGlassSimulationStep() noexcept { glassNewDynamicFragments_ = 0; }
+        [[nodiscard]] bool reserveGlassDynamicFragment() noexcept {
+            if (glassNewDynamicFragments_ >= glassSimulationSettings_.maxNewDynamicFragmentsPerStep) return false;
+            ++glassNewDynamicFragments_;
+            return true;
+        }
         [[nodiscard]] std::uint32_t glassDynamicFragmentBudget() const noexcept {
             return std::min(glassSimulationSettings_.maxDynamicFragmentsGlobal, glassDynamicBudget_);
         }
@@ -655,6 +661,7 @@ namespace Engine {
         Registry registry_;
         std::vector<MeshHandle> glassGeometryHandles_;
         std::uint32_t glassDynamicBudget_{~std::uint32_t{0}};
+        std::uint32_t glassNewDynamicFragments_{};
         double glassPhysicsAverageMs_{};
         std::vector<GlassParticleBurst> glassParticleBursts_;
         GlassSimulationSettings glassSimulationSettings_;

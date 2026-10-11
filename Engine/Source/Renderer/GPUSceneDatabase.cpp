@@ -93,6 +93,7 @@ namespace Engine {
                                                const std::uint32_t flags) {
         if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) { return;
 }
+        if (m_instances[instanceId].flags == flags) return;
         m_instances[instanceId].flags = flags;
         markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
     }

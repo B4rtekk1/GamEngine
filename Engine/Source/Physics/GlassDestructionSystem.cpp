@@ -127,80 +127,116 @@ namespace Engine {
                 }
             }
             glass.fractureTemplate.reset(); glass.intactRenderGeometry.reset();
-            // Radial/concentric template: O(cells), with exponentially graded ring
-            // spacing. Shared edges are indexed once, rather than comparing cell pairs.
+            // Radial cracks precede transverse cracks in ordinary plate glass.
+            // Keep every leaf convex so collision geometry follows actual holes.
             glass.fractureRenderGeometry.reset();
             glass.fragments.clear();
             glass.bonds.clear();
             std::mt19937 random(glass.seed);
             std::uniform_real_distribution<float> unit(0.0F, 1.0F);
             const glm::vec2 half = glass.size * 0.5F;
-            const auto rays = std::clamp(static_cast<unsigned>(std::sqrt(float(glass.maxFragments))), 4U, 16U);
-            const auto rings = std::max(1U, glass.maxFragments / rays);
-            const float outer = glm::length(glass.size) * 2.0F;
-            std::vector<glm::vec2> directions;
-            const float rotation = unit(random) * glm::two_pi<float>();
-            for (unsigned i = 0; i < rays; ++i) {
-                const float angle = rotation + glm::two_pi<float>() *
-                    (float(i) + (unit(random) - 0.5F) * 0.25F) / float(rays);
-                directions.push_back({std::cos(angle), std::sin(angle)});
+            struct Branch { std::vector<glm::vec2> polygon; float angle, curvature; };
+            std::vector<Branch> cells{{{{-half.x,-half.y},{half.x,-half.y},
+                {half.x,half.y},{-half.x,half.y}}, unit(random)*glm::two_pi<float>(), 0}};
+            auto areaOf = [](const std::vector<glm::vec2> &polygon) {
+                float area = 0;
+                for (std::size_t i=0; i<polygon.size(); ++i) {
+                    const auto a=polygon[i], b=polygon[(i+1)%polygon.size()];
+                    area += a.x*b.y-a.y*b.x;
+                }
+                return area*0.5F;
+            };
+            const float minArea = glass.size.x*glass.size.y / float(glass.maxFragments*64);
+            if (glass.type != GlassType::Tempered) {
+                const auto rectangle = cells.front().polygon;
+                cells.clear();
+                const unsigned rays = std::min(glass.maxFragments, 8U + glass.seed % 5U);
+                const float spacing = glm::two_pi<float>() / float(rays);
+                const float phase = unit(random) * spacing;
+                std::vector<float> angles;
+                for (unsigned i = 0; i < rays; ++i)
+                    angles.push_back(phase + (float(i) + (unit(random)-0.5F)*0.45F)*spacing);
+                for (unsigned i = 0; i < rays; ++i) {
+                    const float a = angles[i], b = i+1 < rays ? angles[i+1] : angles[0]+glm::two_pi<float>();
+                    const glm::vec2 first{std::sin(a), -std::cos(a)};
+                    const glm::vec2 second{-std::sin(b), std::cos(b)};
+                    auto polygon = clip(clip(rectangle, first, glm::dot(hit, first)),
+                        second, glm::dot(hit, second));
+                    if (areaOf(polygon) > Epsilon*Epsilon)
+                        cells.push_back({std::move(polygon), (a+b)*0.5F, 0});
+                }
             }
-            if (glass.type != GlassType::Tempered) for (unsigned ring = 0; ring < rings; ++ring) {
-                const auto radius = [&](unsigned r) {
-                    const float t = float(r) / float(rings);
-                    return outer * (std::exp(t * 3.5F) - 1.0F) / (std::exp(3.5F) - 1.0F);
-                };
-                const float inner = radius(ring), outside = radius(ring + 1);
-                for (unsigned ray = 0; ray < rays; ++ray) {
-                    const auto a = directions[ray], b = directions[(ray + 1) % rays];
-                    std::vector<glm::vec2> polygon;
-                    if (ring == 0) polygon = {hit, hit + a * outside, hit + b * outside};
-                    else polygon = {hit + a * inner, hit + a * outside, hit + b * outside, hit + b * inner};
-                    for (const auto boundary : std::array<glm::vec2, 4>{{{1,0},{-1,0},{0,1},{0,-1}}})
-                        polygon = clip(polygon, boundary, glm::dot(glm::abs(boundary), half));
-                    // Clipping a vertex on a boundary can duplicate that vertex.
-                    std::vector<glm::vec2> clean;
-                    for (auto point : polygon)
-                        if (clean.empty() || glm::distance(clean.back(), point) > Epsilon) clean.push_back(point);
-                    if (clean.size() > 1 && glm::distance(clean.front(), clean.back()) <= Epsilon) clean.pop_back();
-                    if (clean.size() < 3) continue;
-                    GlassFragment fragment;
-                    if (glass.type == GlassType::Armored) fragment.layerDamage.assign(glass.layers, 0);
-                    fragment.polygon = std::move(clean);
-                    float twiceArea = 0.0F;
-                    glm::vec2 centroid{};
-                    for (std::size_t k = 0; k < fragment.polygon.size(); ++k) {
-                        const auto a0 = fragment.polygon[k], b0 = fragment.polygon[(k + 1) % fragment.polygon.size()];
-                        const float cross = a0.x * b0.y - a0.y * b0.x;
-                        twiceArea += cross;
-                        centroid += (a0 + b0) * cross;
-                        fragment.frameSupported |= supportedEdge(glass, a0, b0);
+            for (unsigned attempt=0; cells.size()<glass.maxFragments && attempt<glass.maxFragments*8; ++attempt) {
+                std::size_t selected=0; float best=-1;
+                for (std::size_t i=0; i<cells.size(); ++i) {
+                    glm::vec2 center{};
+                    for (auto point:cells[i].polygon) center+=point;
+                    center/=float(cells[i].polygon.size());
+                    const float proximity = glass.type == GlassType::Tempered ? 1.0F :
+                        std::pow(0.06F+glm::distance(center,hit)/glm::length(glass.size), 1.5F);
+                    const float score=areaOf(cells[i].polygon)/proximity*(0.8F+unit(random)*0.4F);
+                    if (score>best) {best=score; selected=i;}
+                }
+                auto branch=cells[selected];
+                glm::vec2 center{};
+                for (auto point:branch.polygon) center+=point;
+                center/=float(branch.polygon.size());
+                branch.curvature=branch.curvature*0.85F+(unit(random)-0.5F)*0.3F;
+                branch.angle+=branch.curvature;
+                if (glass.type != GlassType::Tempered) {
+                    const auto radial = center-hit;
+                    // Transverse cuts form irregular rings; occasional branching
+                    // cuts leave long sharp splinters between the primary rays.
+                    branch.angle = std::atan2(radial.y, radial.x) +
+                        (unit(random)<0.72F ? glm::half_pi<float>() : 0.0F) +
+                        (unit(random)-0.5F)*0.4F;
+                }
+                const glm::vec2 normal{-std::sin(branch.angle),std::cos(branch.angle)};
+                // First cracks start at the actual hit; later branches inherit
+                // direction and split at unequal offsets, with denser local chips.
+                const auto origin=cells.size()==1 ? hit :
+                    glm::mix(center,branch.polygon[unsigned(unit(random)*float(branch.polygon.size()))%branch.polygon.size()],
+                        0.12F+unit(random)*0.28F);
+                auto left=clip(branch.polygon,normal,glm::dot(origin,normal));
+                auto right=clip(branch.polygon,-normal,-glm::dot(origin,normal));
+                if (areaOf(left)<minArea || areaOf(right)<minArea) {
+                    cells[selected].angle+=0.73F; continue;
+                }
+                cells[selected]={std::move(left),branch.angle+0.55F+unit(random)*0.6F,branch.curvature};
+                cells.push_back({std::move(right),branch.angle-0.55F-unit(random)*0.6F,branch.curvature});
+            }
+            // Resolve T junctions so both sides of a shared crack use identical
+            // segments. This also makes bond edges the visual crack graph.
+            std::vector<glm::vec2> nodes;
+            const float tolerance=std::max(glass.size.x,glass.size.y)*Epsilon;
+            for (const auto &cell:cells) for (auto point:cell.polygon)
+                if (std::ranges::none_of(nodes,[&](auto other){return glm::distance(point,other)<tolerance;})) nodes.push_back(point);
+            for (auto &cell:cells) {
+                GlassFragment fragment;
+                for (std::size_t i=0; i<cell.polygon.size(); ++i) {
+                    const auto a=cell.polygon[i], b=cell.polygon[(i+1)%cell.polygon.size()], edge=b-a;
+                    const float length2=glm::dot(edge,edge);
+                    if (length2<tolerance*tolerance) continue;
+                    std::vector<std::pair<float,glm::vec2>> points;
+                    for (auto node:nodes) {
+                        const float t=glm::dot(node-a,edge)/length2;
+                        if (t>=-Epsilon && t<1.0F-Epsilon && glm::distance(node,a+edge*t)<tolerance)
+                            points.emplace_back(t,node);
                     }
-                    if (twiceArea <= Epsilon * Epsilon) continue;
-                    fragment.area = twiceArea * 0.5F;
-                    fragment.center = centroid / (3.0F * twiceArea);
-                    glass.fragments.push_back(std::move(fragment));
+                    std::ranges::sort(points,{},&std::pair<float,glm::vec2>::first);
+                    for (const auto &point:points) fragment.polygon.push_back(point.second);
                 }
-            }
-            if (glass.type == GlassType::Tempered) {
-                const auto columns = std::clamp(static_cast<unsigned>(std::sqrt(float(glass.maxFragments) * glass.size.x/glass.size.y)),
-                    2U, glass.maxFragments/2);
-                const auto rows = glass.maxFragments/columns;
-                std::vector<float> xs{-half.x}, ys{-half.y};
-                for (unsigned i=1; i<columns; ++i) xs.push_back(-half.x + glass.size.x *
-                    (float(i)+(unit(random)-0.5F)*0.35F)/float(columns));
-                for (unsigned i=1; i<rows; ++i) ys.push_back(-half.y + glass.size.y *
-                    (float(i)+(unit(random)-0.5F)*0.35F)/float(rows));
-                xs.push_back(half.x); ys.push_back(half.y);
-                for (unsigned y=0; y<rows; ++y) for (unsigned x=0; x<columns; ++x) {
-                    GlassFragment fragment;
-                    fragment.polygon = {{xs[x],ys[y]}, {xs[x+1],ys[y]}, {xs[x+1],ys[y+1]}, {xs[x],ys[y+1]}};
-                    fragment.center = {(xs[x]+xs[x+1])*0.5F, (ys[y]+ys[y+1])*0.5F};
-                    fragment.area = (xs[x+1]-xs[x])*(ys[y+1]-ys[y]);
-                    for (unsigned edge=0; edge<4; ++edge)
-                        fragment.frameSupported |= supportedEdge(glass, fragment.polygon[edge], fragment.polygon[(edge+1)%4]);
-                    glass.fragments.push_back(std::move(fragment));
+                if (glass.type==GlassType::Armored) fragment.layerDamage.assign(glass.layers,0);
+                float twiceArea=0; glm::vec2 centroid{};
+                for (std::size_t i=0; i<fragment.polygon.size(); ++i) {
+                    const auto a=fragment.polygon[i], b=fragment.polygon[(i+1)%fragment.polygon.size()];
+                    const float cross=a.x*b.y-a.y*b.x;
+                    twiceArea+=cross; centroid+=(a+b)*cross;
+                    fragment.frameSupported|=supportedEdge(glass,a,b);
                 }
+                if (twiceArea<=Epsilon*Epsilon) continue;
+                fragment.area=twiceArea*0.5F; fragment.center=centroid/(3.0F*twiceArea);
+                glass.fragments.push_back(std::move(fragment));
             }
             using Key = std::array<std::int64_t, 4>;
             struct Edge { unsigned fragment; glm::vec2 a, b; };
@@ -365,6 +401,29 @@ namespace Engine {
             const float kineticBudget = std::max(0.0F, impact.energy *
                 std::clamp(simulation.kineticEnergyFraction, 0.0F, 1.0F));
             const float velocityScale = weightSum > Epsilon ? std::sqrt(2.0F * kineticBudget / weightSum) : 0.0F;
+            const auto launchSeed = glass.seed ^ (glass.impactCount * 1664525U);
+            const auto glassType = glass.type;
+            auto launchVelocity = [&](const GlassFragment &fragment, std::uint32_t index) {
+                const float directionLength = impact.worldDirection.length();
+                if (directionLength <= Epsilon) return glm::vec3{};
+                const auto forward = impact.worldDirection.native() / directionLength;
+                auto lateral = glm::vec3{matrix * glm::vec4{fragment.center-hit, 0, 0}};
+                lateral -= forward * glm::dot(lateral, forward);
+                const float distance = glm::length(lateral);
+                if (distance > Epsilon) lateral /= distance;
+                // Stable asymmetry avoids identical flight paths while preserving
+                // the allocated kinetic energy for both rigid and GPU debris.
+                std::uint32_t hash = launchSeed ^ (index * 747796405U + 2891336453U);
+                hash = (hash ^ (hash >> 16U)) * 2246822519U;
+                hash ^= hash >> 13U;
+                const float variation = float(hash & 0xffffU) / 65535.0F;
+                const float spread = (glassType == GlassType::Tempered ? 0.45F : 0.28F) *
+                    (0.65F + variation*0.7F) * std::min(distance / impact.radius, 1.0F);
+                const auto direction = glm::normalize(forward + lateral*spread +
+                    glm::cross(forward, lateral)*spread*(variation-0.5F)*0.3F);
+                const float speed = std::min(simulation.maxLinearSpeed, velocityScale*influence(fragment.center));
+                return direction*speed;
+            };
             registry.get<GlassDestructionComponent>(entity).bondSolverCpuMs +=
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-solverStart).count();
             GE_PROFILE_SCOPE("DebrisSpawnCPU");
@@ -374,13 +433,10 @@ namespace Engine {
                 const auto fragment = registry.get<GlassDestructionComponent>(entity).fragments[fragmentIndex];
                 if (paneActive >= settings.maxDynamicFragments || active >= scene.glassDynamicFragmentBudget() ||
                     fragment.area * world.scale.x() * world.scale.y() < simulation.minDynamicFragmentArea ||
-                    settings.maxDynamicFragments == 0) {
+                    settings.maxDynamicFragments == 0 || !scene.reserveGlassDynamicFragment()) {
                     if (scene.glassParticleBursts().size() < 1024) {
                         const auto position = glm::vec3{matrix * glm::vec4{fragment.center, 0, 1}};
-                        const float speed = std::min(std::max(simulation.maxLinearSpeed, 0.0F), velocityScale * influence(fragment.center));
-                        const auto direction = impact.worldDirection.native();
-                        const float magnitude = glm::length(direction);
-                        const auto velocity = magnitude > Epsilon ? direction * (speed/magnitude) : glm::vec3{};
+                        const auto velocity = launchVelocity(fragment, fragmentIndex);
                         scene.queueGlassParticleBurst({position, velocity,
                             std::clamp(std::sqrt(fragment.area * world.scale.x() * world.scale.y()), 0.008F, 0.12F),
                             settings.fragmentLifetime, registry.get<GlassDestructionComponent>(entity).type == GlassType::Tempered ? 4U : 1U,
@@ -403,18 +459,8 @@ namespace Engine {
                 const float mass = std::max(0.001F, fragment.area * settings.thickness * settings.density * volumeScale);
                 registry.add<ColliderComponent>(debrisEntity, ColliderComponent{.shape = MeshCollider{shard}, .offset = {}, .friction = 0.4F, .restitution = 0.15F});
                 registry.add<RigidbodyComponent>(debrisEntity, RigidbodyComponent{.mass = mass});
-                const float directionLength = impact.worldDirection.length();
                 RigidbodyState state;
-                const float speed = std::min(std::max(simulation.maxLinearSpeed, 0.0F), velocityScale * influence(fragment.center));
-                glm::vec3 velocity{};
-                if (directionLength > Epsilon) {
-                    const auto forward = impact.worldDirection.native() / directionLength;
-                    auto lateral = glm::vec3{matrix * glm::vec4{fragment.center-hit, 0, 0}};
-                    lateral -= forward * glm::dot(lateral, forward);
-                    const float length = glm::length(lateral);
-                    if (length > Epsilon) lateral /= length;
-                    velocity = glm::normalize(forward + lateral * 0.08F) * speed;
-                }
+                const auto velocity = launchVelocity(fragment, fragmentIndex);
                 // Impulse applied at the nearest point on the shard to the hit.
                 glm::vec2 application = hit;
                 float nearest = std::numeric_limits<float>::max();
@@ -475,6 +521,97 @@ namespace Engine {
 
     }
 
+    bool GlassDestructionSystem::edgeExposed(const GlassDestructionComponent &glass,
+        unsigned fragmentIndex, unsigned edgeIndex) {
+        const auto &fragment=glass.fragments[fragmentIndex];
+        if (!fragment.attached) return true;
+        const auto a=fragment.polygon[edgeIndex], b=fragment.polygon[(edgeIndex+1)%fragment.polygon.size()];
+        const float tolerance=std::max(glass.size.x,glass.size.y)*Epsilon*2;
+        for (const auto &bond:glass.bonds) {
+            if (bond.first!=fragmentIndex && bond.second!=fragmentIndex) continue;
+            if ((glm::distance(a,bond.edgeStart)<tolerance && glm::distance(b,bond.edgeEnd)<tolerance) ||
+                (glm::distance(b,bond.edgeStart)<tolerance && glm::distance(a,bond.edgeEnd)<tolerance)) {
+                const auto neighbor=bond.first==fragmentIndex ? bond.second : bond.first;
+                return bond.broken || !glass.fragments[neighbor].attached;
+            }
+        }
+        const auto half=glass.size*0.5F;
+        return (std::abs(a.x-half.x)<tolerance && std::abs(b.x-half.x)<tolerance) ||
+            (std::abs(a.x+half.x)<tolerance && std::abs(b.x+half.x)<tolerance) ||
+            (std::abs(a.y-half.y)<tolerance && std::abs(b.y-half.y)<tolerance) ||
+            (std::abs(a.y+half.y)<tolerance && std::abs(b.y+half.y)<tolerance);
+    }
+
+    std::vector<GlassCrackSegment> GlassDestructionSystem::crackSegments(
+        const GlassDestructionComponent &glass, const GlassCrack &crack) {
+        std::vector<GlassCrackSegment> segments;
+        // Clip graph edges to the impact's energy footprint. Broken bonds are
+        // always visible, even if the solver released a long edge outside it.
+        for (const auto &bond:glass.bonds) {
+            auto a=bond.edgeStart, b=bond.edgeEnd;
+            if (!bond.broken) {
+                const auto d=b-a, offset=a-crack.position;
+                const float aa=glm::dot(d,d), bb=glm::dot(offset,d);
+                const float discriminant=bb*bb-aa*(glm::dot(offset,offset)-crack.radius*crack.radius);
+                if (aa<Epsilon*Epsilon || discriminant<0) continue;
+                const float root=std::sqrt(discriminant);
+                const float low=std::max(0.0F,(-bb-root)/aa), high=std::min(1.0F,(-bb+root)/aa);
+                if (high<=low) continue;
+                b=a+d*high; a+=d*low;
+            }
+            segments.push_back({a,b,bond.broken ? 1.0F : crack.intensity});
+        }
+        // Surface-only tips can die before closing a physical cell. Correlated
+        // curvature avoids per-point zigzags; intersections terminate propagation.
+        struct Tip { glm::vec2 position, direction; float energy, curvature; unsigned generation; };
+        std::mt19937 random(crack.seed);
+        std::uniform_real_distribution<float> unit(0,1);
+        std::vector<Tip> tips;
+        for (unsigned i=0; i<7; ++i) {
+            const float angle=unit(random)*glm::two_pi<float>();
+            tips.push_back({crack.position,{std::cos(angle),std::sin(angle)},
+                crack.radius*(0.08F+unit(random)*0.32F),0,0});
+        }
+        const auto half=glass.size*0.5F;
+        auto cross=[](glm::vec2 a,glm::vec2 b){return a.x*b.y-a.y*b.x;};
+        for (std::size_t i=0; i<tips.size() && i<24; ++i) {
+            auto tip=tips[i];
+            for (unsigned step=0; tip.energy>0.001F && step<24; ++step) {
+                tip.curvature=tip.curvature*0.85F+(unit(random)-0.5F)*0.15F;
+                const float angle=tip.curvature*0.35F;
+                tip.direction={tip.direction.x*std::cos(angle)-tip.direction.y*std::sin(angle),
+                    tip.direction.x*std::sin(angle)+tip.direction.y*std::cos(angle)};
+                const float length=std::min(tip.energy,crack.radius*(0.009F+unit(random)*0.012F));
+                const auto delta=tip.direction*length;
+                float stop=1;
+                for (unsigned axis=0; axis<2; ++axis)
+                    if (std::abs(delta[axis])>Epsilon) stop=std::min(stop,
+                        ((delta[axis]>0 ? half[axis] : -half[axis])-tip.position[axis])/delta[axis]);
+                for (const auto &segment:segments) {
+                    const auto edge=segment.end-segment.start, offset=segment.start-tip.position;
+                    const float determinant=cross(delta,edge);
+                    if (std::abs(determinant)<Epsilon*Epsilon) continue;
+                    const float t=cross(offset,edge)/determinant, u=cross(offset,delta)/determinant;
+                    if (t>0.001F && t<stop && u>=0 && u<=1) stop=t;
+                }
+                stop=std::clamp(stop,0.0F,1.0F);
+                const auto next=tip.position+delta*stop;
+                if (glm::distance(next,tip.position)>Epsilon)
+                    segments.push_back({tip.position,next,crack.intensity*0.55F});
+                tip.position=next; tip.energy=(tip.energy-length)*0.97F;
+                if (stop<1) break;
+                if (step>2 && tip.generation<2 && tips.size()<24 && unit(random)<0.07F) {
+                    const float turn=(unit(random)<0.5F ? -1.0F : 1.0F)*(0.45F+unit(random)*0.55F);
+                    const glm::vec2 direction{tip.direction.x*std::cos(turn)-tip.direction.y*std::sin(turn),
+                        tip.direction.x*std::sin(turn)+tip.direction.y*std::cos(turn)};
+                    tips.push_back({next,direction,tip.energy*0.45F,tip.curvature,tip.generation+1});
+                    tip.energy*=0.8F;
+                }
+            }
+        }
+        return segments;
+    }
+
     std::shared_ptr<Mesh> GlassDestructionSystem::collisionMesh(const GlassDestructionComponent &glass) {
         return attachedMesh(glass);
     }
@@ -492,6 +629,11 @@ namespace Engine {
             const auto first = mesh->indexCount();
             const auto firstVertex = mesh->vertices.size();
             appendPrism(*mesh, fragment, glass.thickness);
+            const auto fragmentIndex = static_cast<unsigned>(&fragment-glass.fragments.data());
+            for (std::size_t edge=0; edge<fragment.polygon.size(); ++edge)
+                for (unsigned corner=0; corner<4; ++corner)
+                    mesh->vertices[firstVertex+fragment.polygon.size()*2+edge*4+corner].texCoord1 =
+                        Vec2{float(edge+1),float(fragmentIndex+1)};
             glm::vec3 low{std::numeric_limits<float>::max()}, high{std::numeric_limits<float>::lowest()};
             for (auto i = firstVertex; i < mesh->vertices.size(); ++i) {
                 low = glm::min(low, mesh->vertices[i].position.native());
@@ -554,7 +696,7 @@ namespace Engine {
     void GlassDestructionSystem::restoreGeometryCache(GlassDestructionComponent &glass) {
         if (glass.fragments.empty()) return;
         auto prepared = glass;
-        prepare(prepared, {});
+        prepare(prepared, glass.cracks.empty() ? glm::vec2{} : glass.cracks.front().position);
         if (prepared.fragments.size() != glass.fragments.size()) return;
         for (std::size_t i=0; i<glass.fragments.size(); ++i)
             if (glass.fragments[i].polygon != prepared.fragments[i].polygon) return;
@@ -599,7 +741,12 @@ namespace Engine {
         if (std::abs(local.x) > glass.size.x * 0.5F + Epsilon ||
             std::abs(local.y) > glass.size.y * 0.5F + Epsilon ||
             std::abs(local.z) > glass.thickness * 0.5F + 0.001F) return false;
-        const glm::vec2 hit{local};
+        glm::vec2 hit{local};
+        // Inverse transforms can move a mathematically central hit by a few ulps.
+        // Canonicalize that case so it reuses the centered preview template.
+        for (unsigned axis=0; axis<2; ++axis)
+            if (std::abs(hit[axis])<glass.size[axis]*Epsilon) hit[axis]=0;
+
         auto contains = [&](const GlassFragment &fragment) {
             for (std::size_t i = 0; i < fragment.polygon.size(); ++i) {
                 const auto a = fragment.polygon[i], edge = fragment.polygon[(i + 1) % fragment.polygon.size()] - a;
@@ -610,6 +757,13 @@ namespace Engine {
         };
         if (glass.fractured && std::ranges::none_of(glass.fragments,
             [&](const auto &fragment) { return fragment.attached && contains(fragment); })) return false;
+        if (glass.impactCount == 0 && !glass.fractured) {
+            prepare(glass, hit);
+            registry.modify<MeshRendererComponent>(entity, [&](auto &renderer) {
+                renderer.mesh = scene.glassGeometryHandle(renderMesh(glass));
+            });
+            registry.markChanged<ColliderComponent>(entity);
+        }
         ++glass.impactCount;
         if (glass.cracks.size() == 128) glass.cracks.erase(glass.cracks.begin());
         const float scale = std::max(Epsilon, std::min(world.scale.x(), world.scale.y()));
@@ -639,8 +793,8 @@ namespace Engine {
         // Laminated fragments remain retained by the interlayer until it ruptures.
         if (glass.type == GlassType::Laminated && glass.accumulatedEnergy < effectiveThreshold * 8.0F) return true;
         if (!glass.fractured) {
-            // Physical template is prepared outside gameplay; new impacts add their
-            // own visual crack patterns without changing existing shard topology.
+            // The first accepted hit fixes the crack graph. Later impacts damage
+            // that graph without moving existing fragment boundaries.
             if (glass.fragments.empty()) prepare(glass, hit);
             glass.fractured = true;
         }
@@ -725,6 +879,7 @@ namespace Engine {
 
     void GlassDestructionSystem::update(Scene &scene, float deltaTime, const PhysicsSystem *physics) {
         if (!std::isfinite(deltaTime) || deltaTime <= 0.0F) return;
+        scene.beginGlassSimulationStep();
         // Observe physical supports before creating actors (ECS storage may move).
         // A declared bottom mount is used until a real support has been observed.
         // Once observed, removing/moving it releases the whole remaining pane.

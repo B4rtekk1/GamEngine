@@ -30,6 +30,11 @@ namespace Engine {
         static void restoreGeometryCache(GlassDestructionComponent &glass);
         static void onActorDestroyed(Scene &scene, Entity entity);
         static void update(Scene &scene, float deltaTime, const PhysicsSystem *physics = nullptr);
+        /** Bond boundaries plus short, energy-limited surface microcracks. */
+        [[nodiscard]] static std::vector<GlassCrackSegment> crackSegments(
+            const GlassDestructionComponent &glass, const GlassCrack &crack);
+        [[nodiscard]] static bool edgeExposed(const GlassDestructionComponent &glass,
+            unsigned fragmentIndex, unsigned edgeIndex);
         /** Stable packed fragment sections, used by GPU indirect rendering and scene loading. */
         [[nodiscard]] static std::shared_ptr<Mesh> renderMesh(const GlassDestructionComponent &glass);
         [[nodiscard]] static std::shared_ptr<Mesh> collisionMesh(const GlassDestructionComponent &glass);

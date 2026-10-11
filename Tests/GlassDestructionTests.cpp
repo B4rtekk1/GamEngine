@@ -36,7 +36,9 @@ namespace {
         EXPECT_FALSE(editor.read<Engine::GlassDestructionComponent>(entity).fractured);
         ASSERT_TRUE(loaded.physics().shootRay({0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, -1.0F}));
         ASSERT_TRUE(editor.has<Engine::GlassDestructionComponent>(entity));
-        EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), loadedMesh.resource());
+        EXPECT_GT(loadedMesh.resource()->metadata.sections.size(), 1U);
+        EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource()->metadata.sections.size(),
+            editor.read<Engine::GlassDestructionComponent>(entity).fragments.size()+1);
         const auto &glass = editor.read<Engine::GlassDestructionComponent>(entity);
         EXPECT_TRUE(glass.fractured);
         EXPECT_EQ(glass.size, glm::vec2(1.0F));
@@ -349,7 +351,7 @@ namespace {
         settings.maxFragments = 1000000;
         EXPECT_THROW((void)Engine::GlassDestructionSystem::createPane(scene, "Invalid", settings), std::invalid_argument);
     }
-    TEST(GlassDestruction, WeakImpactsAddIndependentCracksWithoutChangingGeometryOrCollision) {
+    TEST(GlassDestruction, FirstWeakImpactFixesGraphAndLaterImpactsKeepGeometry) {
         Engine::Scene scene;
         const auto pane = Engine::GlassDestructionSystem::createPane(scene, "Pane");
         const auto entity = scene.findEntity(pane.id());
@@ -358,6 +360,10 @@ namespace {
         const auto topology = editor.renderTopologyRevision();
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
             {.worldPosition = {-0.5F, 0, 0}, .energy = 2}));
+        const auto hitMesh = editor.read<Engine::MeshRendererComponent>(entity).mesh;
+        const auto hitTopology = editor.renderTopologyRevision();
+        EXPECT_NE(hitMesh.resource(), mesh.resource());
+        EXPECT_GT(hitTopology, topology);
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
             {.worldPosition = {0.5F, 0, 0}, .energy = 2}));
         const auto &glass = editor.read<Engine::GlassDestructionComponent>(entity);
@@ -365,8 +371,8 @@ namespace {
         EXPECT_EQ(glass.renderState, Engine::GlassRenderState::Cracked);
         ASSERT_EQ(glass.cracks.size(), 2);
         EXPECT_NE(glass.cracks[0].position, glass.cracks[1].position);
-        EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), mesh.resource());
-        EXPECT_EQ(editor.renderTopologyRevision(), topology);
+        EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), hitMesh.resource());
+        EXPECT_EQ(editor.renderTopologyRevision(), hitTopology);
         EXPECT_TRUE(std::holds_alternative<Engine::BoxCollider>(editor.read<Engine::ColliderComponent>(entity).shape));
         EXPECT_TRUE(scene.physics().raycast({-0.5F, 0, 2}, {0, 0, -1}));
         std::ostringstream output;
@@ -385,7 +391,7 @@ namespace {
             loaded.read<Engine::GlassDestructionComponent>(restoredEntity).fragments.size() + 1);
     }
 
-    TEST(GlassDestruction, RadialTemplateConservesAreaAndHasGeometricBondStrength) {
+    TEST(GlassDestruction, BranchingTemplateConservesAreaAndHasGeometricBondStrength) {
         Engine::Scene scene;
         Engine::GlassDestructionComponent settings;
         settings.size = {3.0F, 1.5F}; settings.maxFragments = 128;
@@ -508,6 +514,32 @@ namespace {
         EXPECT_TRUE(editor.read<Engine::GlassDestructionComponent>(entity).fullyDestroyed);
     }
 
+    TEST(GlassDestruction, BurstBudgetLimitsNewBodiesAndResetsAtTheNextSimulationStep) {
+        Engine::Scene scene;
+        scene.glassSimulationSettings().maxNewDynamicFragmentsPerStep = 2;
+        scene.glassSimulationSettings().adaptivePhysicsBudget = false;
+        Engine::GlassDestructionComponent settings; settings.maxDynamicFragments = 8;
+        const auto first = Engine::GlassDestructionSystem::createPane(scene, "First", settings);
+        const auto second = Engine::GlassDestructionSystem::createPane(scene, "Second", settings);
+        const auto third = Engine::GlassDestructionSystem::createPane(scene, "Third", settings);
+        second.setPosition({4,0,0}); third.setPosition({8,0,0});
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, scene.findEntity(first.id()), {}));
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, scene.findEntity(second.id()), {.worldPosition={4,0,0}}));
+        Engine::SceneEditor editor(scene);
+        const auto countBodies = [&] {
+            unsigned count = 0;
+            editor.view<Engine::GlassDebrisComponent>([&](auto, const auto &) { ++count; });
+            return count;
+        };
+        EXPECT_EQ(countBodies(), 2);
+        EXPECT_FALSE(scene.glassParticleBursts().empty());
+        EXPECT_FALSE(scene.physics().raycast({4,0,2}, {0,0,-1}));
+        Engine::GlassDestructionSystem::update(scene, 1.0F/60);
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, scene.findEntity(third.id()), {.worldPosition={8,0,0}}));
+        EXPECT_EQ(countBodies(), 4);
+        EXPECT_FALSE(scene.physics().raycast({8,0,2}, {0,0,-1}));
+    }
+
     TEST(GlassDestruction, CrackHistoryStaysBoundedAndRetainsNewImpacts) {
         Engine::Scene scene;
         Engine::GlassDestructionComponent settings; settings.type = Engine::GlassType::Armored; settings.layers = 16;
@@ -550,6 +582,84 @@ namespace {
         EXPECT_TRUE(editor.read<Engine::GlassDestructionComponent>(b).cracks.empty());
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene,b,{.worldPosition={4,0,0}}));
         EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(a).mesh.resource(),editor.read<Engine::MeshRendererComponent>(b).mesh.resource());
+    }
+
+    TEST(GlassDestruction, SharedGraphEdgesControlCrackMaskAndSideExposure) {
+        Engine::Scene scene;
+        const auto pane=Engine::GlassDestructionSystem::createPane(scene,"Graph");
+        Engine::SceneEditor editor(scene);
+        auto glass=editor.read<Engine::GlassDestructionComponent>(scene.findEntity(pane.id()));
+        ASSERT_FALSE(glass.bonds.empty());
+        const auto bond=glass.bonds.front();
+        auto edgeIndex=[&](unsigned index) {
+            const auto &polygon=glass.fragments[index].polygon;
+            for (unsigned edge=0; edge<polygon.size(); ++edge) {
+                const auto a=polygon[edge], b=polygon[(edge+1)%polygon.size()];
+                if ((glm::distance(a,bond.edgeStart)<0.0001F && glm::distance(b,bond.edgeEnd)<0.0001F) ||
+                    (glm::distance(b,bond.edgeStart)<0.0001F && glm::distance(a,bond.edgeEnd)<0.0001F)) return edge;
+            }
+            return ~0U;
+        };
+        const auto first=edgeIndex(bond.first), second=edgeIndex(bond.second);
+        ASSERT_NE(first,~0U); ASSERT_NE(second,~0U);
+        EXPECT_FALSE(Engine::GlassDestructionSystem::edgeExposed(glass,bond.first,first));
+        EXPECT_FALSE(Engine::GlassDestructionSystem::edgeExposed(glass,bond.second,second));
+        glass.bonds.front().broken=true;
+        EXPECT_TRUE(Engine::GlassDestructionSystem::edgeExposed(glass,bond.first,first));
+        EXPECT_TRUE(Engine::GlassDestructionSystem::edgeExposed(glass,bond.second,second));
+        glass.bonds.front().broken=false;
+        glass.fragments[bond.second].attached=false;
+        EXPECT_TRUE(Engine::GlassDestructionSystem::edgeExposed(glass,bond.first,first));
+        glass.bonds.front().broken=true;
+        // Broken edges must appear even outside the impact footprint.
+        const auto segments=Engine::GlassDestructionSystem::crackSegments(glass,{{0.8F,0.8F},0.1F,0.4F,7});
+        EXPECT_TRUE(std::ranges::any_of(segments,[&](const auto &segment) {
+            return segment.start==bond.edgeStart && segment.end==bond.edgeEnd && segment.intensity==1.0F;
+        }));
+    }
+
+    TEST(GlassDestruction, OffCenterGraphAndSurfaceTipsSurviveSerialization) {
+        Engine::Scene scene;
+        const auto pane=Engine::GlassDestructionSystem::createPane(scene,"Offset");
+        const auto entity=scene.findEntity(pane.id());
+        Engine::PhysicsSystem physics; physics.update(scene,1.0F/60);
+        const auto initialCookCount=physics.diagnostics().convexCookCount;
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene,entity,
+            {.worldPosition={0.65F,-0.45F,0},.energy=2}));
+        physics.update(scene,1.0F/60);
+        EXPECT_GT(physics.diagnostics().convexCookCount,initialCookCount);
+        const auto hitCookCount=physics.diagnostics().convexCookCount;
+        physics.update(scene,1.0F/60);
+        EXPECT_EQ(physics.diagnostics().convexCookCount,hitCookCount);
+        Engine::SceneEditor editor(scene);
+        const auto glass=editor.read<Engine::GlassDestructionComponent>(entity);
+        const auto segments=Engine::GlassDestructionSystem::crackSegments(glass,glass.cracks.front());
+        ASSERT_FALSE(segments.empty());
+        bool curved=false;
+        for (const auto &segment:segments) {
+            EXPECT_LE(glm::abs(segment.start).x,glass.size.x*0.5F+0.0001F);
+            EXPECT_LE(glm::abs(segment.start).y,glass.size.y*0.5F+0.0001F);
+            EXPECT_LE(glm::abs(segment.end).x,glass.size.x*0.5F+0.0001F);
+            EXPECT_LE(glm::abs(segment.end).y,glass.size.y*0.5F+0.0001F);
+            for (const auto &next:segments) if (segment.end==next.start) {
+                const auto a=segment.end-segment.start, b=next.end-next.start;
+                curved |= std::abs(a.x*b.y-a.y*b.x)>1.0e-8F;
+            }
+        }
+        EXPECT_TRUE(curved);
+        std::ostringstream output; Engine::SceneSerializer::save(scene,output);
+        Engine::Scene restored; std::istringstream input(output.str());
+        Engine::SceneSerializer::load(restored,input);
+        Engine::SceneEditor loaded(restored);
+        const auto &saved=loaded.read<Engine::GlassDestructionComponent>(restored.findEntity(restored.findActor("Offset").id()));
+        ASSERT_EQ(saved.fragments.size(),glass.fragments.size());
+        for (unsigned i=0; i<glass.fragments.size(); ++i) EXPECT_EQ(saved.fragments[i].polygon,glass.fragments[i].polygon);
+        const auto replay=Engine::GlassDestructionSystem::crackSegments(saved,saved.cracks.front());
+        ASSERT_EQ(replay.size(),segments.size());
+        for (unsigned i=0; i<segments.size(); ++i) {
+            EXPECT_EQ(replay[i].start,segments[i].start); EXPECT_EQ(replay[i].end,segments[i].end);
+            EXPECT_EQ(replay[i].intensity,segments[i].intensity);
+        }
     }
 
 }

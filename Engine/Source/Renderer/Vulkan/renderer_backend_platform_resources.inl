@@ -606,7 +606,7 @@
                              {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                              {(msaa.enabled() ? hiZDepthBuffer : depthBuffer).sampler(),
                               (msaa.enabled() ? hiZDepthBuffer : depthBuffer).imageView(),
-                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}, glassAtlasPaneCount);
         }
 
         void createSceneViewportForwardPass() {

@@ -4,6 +4,8 @@
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Scene/SceneEditor.h"
+#include "Engine/Scene/SceneSerializer.h"
+#include <sstream>
 #include <cstdlib>
 #include <algorithm>
 #include <chrono>
@@ -48,13 +50,16 @@ namespace {
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
             {.worldPosition={-0.5F,0,0}, .energy=2}));
         renderer.renderFrame();
-        EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), originalHandle.resource());
-        EXPECT_EQ(editor.renderTopologyRevision(), topology);
+        EXPECT_NE(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), originalHandle.resource());
+        EXPECT_GT(editor.renderTopologyRevision(), topology);
+        const auto graphHandle=editor.read<Engine::MeshRendererComponent>(entity).mesh;
+        EXPECT_TRUE(graphHandle.uploaded());
+        topology=editor.renderTopologyRevision();
         ASSERT_EQ(editor.read<Engine::GlassDestructionComponent>(entity).cracks.size(), 1);
         const auto impactStart = std::chrono::steady_clock::now();
         ASSERT_TRUE(scene.physics().shootRay({0.0F, 0.0F, 2.0F}, {0.0F, 0.0F, -1.0F}));
         const auto fracturedHandle = editor.read<Engine::MeshRendererComponent>(entity).mesh;
-        ASSERT_EQ(fracturedHandle.resource(), originalHandle.resource());
+        ASSERT_EQ(fracturedHandle.resource(), graphHandle.resource());
         EXPECT_EQ(editor.renderTopologyRevision(), topology);
         topology = editor.renderTopologyRevision();
         std::size_t debrisCount = 0;
@@ -91,6 +96,76 @@ namespace {
         EXPECT_EQ(editor.renderTopologyRevision(), topology);
         renderer.shutdown();
     }
+    TEST(GlassRendering, LoadedPaneReplacementRetiresBatchesBeforeDrawing) {
+        if (!std::getenv("GE_RUN_RENDERER_TESTS")) GTEST_SKIP() << "Requires a Vulkan display";
+        ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_VIDEO)) << SDL_GetError();
+        struct Window final {
+            SDL_Window *handle=SDL_CreateWindow("Loaded glass regression",320,180,SDL_WINDOW_VULKAN|SDL_WINDOW_HIDDEN);
+            ~Window() { if (handle) SDL_DestroyWindow(handle); SDL_QuitSubSystem(SDL_INIT_VIDEO); }
+        } window;
+        ASSERT_NE(window.handle,nullptr) << SDL_GetError();
+        Engine::Scene authored;
+        const auto camera=authored.createCamera("Camera");
+        camera.setPosition({0,0,2}); camera.setRotation({0,-90,0});
+        Engine::GlassDestructionComponent settings; settings.maxDynamicFragments=0;
+        (void)Engine::GlassDestructionSystem::createPane(authored,"Loaded glass",settings);
+        std::ostringstream output; Engine::SceneSerializer::save(authored,output);
+        Engine::Scene scene; std::istringstream input(output.str()); Engine::SceneSerializer::load(scene,input);
+        Engine::SceneEditor editor(scene);
+        const auto entity=scene.findEntity(scene.findActor("Loaded glass").id());
+        Engine::Renderer renderer(Engine::RenderConfig{
+            .shadowQuality=Engine::ShadowQuality::Low,
+            .gtaoQuality=Engine::GtaoQuality::Low,
+            .iblQuality=Engine::IblQuality::Low});
+        const auto root=std::filesystem::temp_directory_path()/"gamengine-loaded-glass-test";
+        std::filesystem::create_directories(root/"Assets/BRDF");
+        std::filesystem::copy_file(std::filesystem::path{SDL_GetBasePath()}/"Assets/BRDF/brdf_lut.bin",
+            root/"Assets/BRDF/brdf_lut.bin",std::filesystem::copy_options::overwrite_existing);
+        renderer.setProjectRoot(root); renderer.initialize(scene,window.handle); renderer.renderFrame();
+        const std::weak_ptr oldResource=editor.read<Engine::MeshRendererComponent>(entity).mesh.resource();
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene,entity,
+            {.worldPosition={0.45F,0.2F,0},.energy=40}));
+        ASSERT_TRUE(oldResource.expired()) << "Reproduction requires the old CPU mesh identity to be released";
+        renderer.renderFrame();
+        renderer.renderFrame();
+        EXPECT_TRUE(editor.read<Engine::MeshRendererComponent>(entity).mesh.uploaded());
+        const auto checkAtlasLayers=[&](unsigned layers) {
+            unsigned atlases=0;
+            constexpr std::uint64_t bytesPerLayer=256ULL*256*4;
+            for (const auto &allocation:renderer.gpuSceneMemory()) {
+                if (allocation.table=="Glass crack atlas") {
+                    ++atlases;
+                    EXPECT_GE(allocation.bytes,layers*bytesPerLayer);
+                    EXPECT_LT(allocation.bytes,(layers+1)*bytesPerLayer);
+                } else if (allocation.table=="Glass crack metadata") {
+                    EXPECT_LT(allocation.bytes,(layers+1)*129ULL*sizeof(glm::vec4)+4096);
+                }
+            }
+            EXPECT_GT(atlases,0U);
+        };
+        checkAtlasLayers(1);
+        const auto second=Engine::GlassDestructionSystem::createPane(scene,"Second",settings);
+        second.setPosition({3,0,0});
+        const auto third=Engine::GlassDestructionSystem::createPane(scene,"Third",settings);
+        third.setPosition({-3,0,0});
+        renderer.renderFrame(); renderer.renderFrame();
+        checkAtlasLayers(3);
+        const auto thirdEntity=scene.findEntity(third.id());
+        EXPECT_EQ(editor.read<Engine::GlassDestructionComponent>(thirdEntity).crackAtlasIndex,2U);
+        scene.destroy(scene.findEntity(second.id()));
+        renderer.renderFrame(); renderer.renderFrame();
+        checkAtlasLayers(2);
+        EXPECT_EQ(editor.read<Engine::GlassDestructionComponent>(thirdEntity).crackAtlasIndex,1U);
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene,thirdEntity,
+            {.worldPosition={-2.6F,0.2F,0},.energy=2}));
+        renderer.renderFrame();
+        scene.destroy(thirdEntity);
+        renderer.renderFrame(); checkAtlasLayers(1);
+        scene.destroy(entity);
+        renderer.renderFrame(); checkAtlasLayers(1); // Vulkan descriptors retain one empty layer.
+        renderer.shutdown();
+    }
+
     TEST(GlassRendering, ScalingBenchmark) {
         if (!std::getenv("GE_RUN_GLASS_BENCHMARKS"))
             GTEST_SKIP() << "Set GE_RUN_GLASS_BENCHMARKS=1 on a Vulkan display";

@@ -1114,7 +1114,7 @@
                     }
                     ++batch.instanceCount;
                     renderables.push_back({.entity = entity, .geometryLocalBounds = rangeBounds,
-                                           .localBounds = displacedRangeBounds, .batchIndex = batchIndex,
+                                           .localBounds = displacedRangeBounds, .worldBounds = rangeWorldBounds, .batchIndex = batchIndex,
                                            .spatialCell = spatialCell,
                                            .firstVertex = firstVertex, .vertexCount = mesh->vertexCount(),
                                            .sectionIndex = sectionIndex, .materialIndex = materialIndex,
@@ -2193,14 +2193,7 @@
 
         void updateRenderableBuffers() {
             GE_PROFILE_SCOPE("RenderableUpdateCPU");
-            const auto modelFromInstance = [](const RendererInstanceData& instance) {
-                const glm::quat rotation{instance.rotation.w, instance.rotation.x,
-                                         instance.rotation.y, instance.rotation.z,};
-                glm::mat4 model = glm::translate(glm::mat4{1.0F},
-                                                 glm::vec3{instance.positionMaterial});
-                model *= glm::mat4_cast(rotation);
-                return glm::scale(model, glm::vec3{instance.scaleBase});
-            };
+            synchronizeGlassAtlasSlots();
             dirtyShadowObjects.clear();
             const bool shadowCacheCanContainGeometry =
                 lastTransformRevision != std::numeric_limits<std::uint64_t>::max() &&
@@ -2289,6 +2282,8 @@
                 return;
             }
 
+            auto& changedBatches = changedRenderableBatches;
+            changedBatches.clear();
             auto& changedIndices = changedRenderableIndices;
             changedIndices.clear();
             constexpr std::uint8_t transformChange = 1U;
@@ -2328,8 +2323,46 @@
                                 if (renderables[index].sectionIndex == binding.fragmentIndex) addIndex(index, kind);
                     }
                     const auto it = sceneGpu.renderableIndices.find(entity);
-                    if (it != sceneGpu.renderableIndices.end())
-                        for (const std::size_t index : it->second) addIndex(index, kind);
+                    if (it == sceneGpu.renderableIndices.end()) return;
+                    if (registry.has<GlassDestructionComponent>(entity) && registry.has<Transform>(entity) &&
+                        registry.has<MeshRenderer>(entity) && !it->second.empty()) {
+                        const auto &glass = registry.get<GlassDestructionComponent>(entity);
+                        const auto &panePose = registry.get<Transform>(entity).worldMatrix().native();
+                        const auto intactIndex = std::ranges::find_if(it->second, [&](auto index) {
+                            return renderables[index].sectionIndex == glass.fragments.size();
+                        });
+                        const auto &intact = renderables[intactIndex != it->second.end() ? *intactIndex : it->second.back()];
+                        const bool prepared = registry.get<MeshRenderer>(entity).mesh.resource()->metadata.sections.size() == glass.fragments.size()+1;
+                        const bool samePanePose = prepared && intact.renderProxy.instance != InvalidGPUSceneInstanceId &&
+                            std::equal(sceneGpu.database.instances()[intact.renderProxy.instance].worldMatrix.begin(),
+                                       sceneGpu.database.instances()[intact.renderProxy.instance].worldMatrix.end(), &panePose[0][0]);
+                        // An ECS structural revision is not a pose change. Dynamic
+                        // shards are independently routed through their bindings above.
+                        if (kind == transformChange && samePanePose) return;
+                        if (kind == glassChange && prepared && samePanePose) {
+                            for (const auto index : it->second) {
+                                auto &record = renderables[index];
+                                const bool cell = record.sectionIndex < glass.fragments.size();
+                                const auto source = cell && glass.fractured && !glass.fragments[record.sectionIndex].attached &&
+                                    registry.valid(glass.fragments[record.sectionIndex].debrisEntity)
+                                        ? glass.fragments[record.sectionIndex].debrisEntity : entity;
+                                const bool visible = cell ? glass.fractured &&
+                                    (glass.fragments[record.sectionIndex].attached || source != entity) : !glass.fractured;
+                                if (record.visible != visible) {
+                                    record.visible = visible;
+                                    const auto &batch = instanceBatches[record.batchIndex];
+                                    sceneGpu.database.updateInstanceFlags(record.renderProxy.instance,
+                                        (visible ? 1U : 0U) | (batch.foliagePipeline ? 2U : 0U) | (batch.twoSided ? 8U : 0U));
+                                    markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
+                                    changedBatches.push_back(record.batchIndex);
+                                    rtTlasInputDirty = true;
+                                }
+                                if (source != record.lastTransformEntity) addIndex(index, kind);
+                            }
+                            return;
+                        }
+                    }
+                    for (const std::size_t index : it->second) addIndex(index, kind);
                 };
                 for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
                     addChangedEntity(entity, transformChange);
@@ -2344,8 +2377,6 @@
             const auto worldModel = [&](const Entity entity) {
                 return readRegistry.get<Transform>(entity).worldMatrix().native();
             };
-            auto& changedBatches = changedRenderableBatches;
-            changedBatches.clear();
             bool displacementChanged = false;
             {
             GE_PROFILE_SCOPE("RenderableRecordsCPU");
@@ -2411,11 +2442,36 @@
                 const auto shadowBounds = [&](const glm::mat4& instanceModel) {
                     return record.localBounds.transformed(instanceModel);
                 };
-                const bool transformChanged = (hasTransformChange ||
+                bool transformChanged = (hasTransformChange ||
                     ((hasRendererChange || hasGlassChange) && readRegistry.has<GlassDestructionComponent>(entity))) &&
                     (hasRendererChange || !optimizationFeatures.transformCaching ||
                      record.lastTransformEntity != glassSectionEntity(record) ||
                      record.lastWorldRevision != transform.worldRevision());
+                // Hierarchy updates can advance world revisions without changing
+                // a pane's actual pose. Do not reupload every reserved section.
+                if (transformChanged && !hasRendererChange && optimizationFeatures.transformCaching &&
+                    record.renderProxy.instance != InvalidGPUSceneInstanceId) {
+                    const auto &previous = sceneGpu.database.instances()[record.renderProxy.instance].worldMatrix;
+                    if (std::equal(previous.begin(), previous.end(), &model[0][0])) transformChanged = false;
+                }
+                if (!transformChanged) {
+                    record.lastWorldRevision = transform.worldRevision();
+                    record.lastTransformEntity = glassSectionEntity(record);
+                }
+                if (hasGlassChange && !hasRendererChange && !transformChanged &&
+                    record.renderProxy.instance != InvalidGPUSceneInstanceId) {
+                    const bool visible = glassSectionVisible(record);
+                    if (record.visible != visible) {
+                        record.visible = visible;
+                        const auto &batch = instanceBatches[record.batchIndex];
+                        sceneGpu.database.updateInstanceFlags(record.renderProxy.instance,
+                            (visible ? 1U : 0U) | (batch.foliagePipeline ? 2U : 0U) | (batch.twoSided ? 8U : 0U));
+                        markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
+                        changedBatches.push_back(record.batchIndex);
+                        rtTlasInputDirty = true;
+                    }
+                    continue;
+                }
                 if (transformChanged) {
                     rtTlasInputDirty = true;
                     // Preserve history only for an instance whose pose is
@@ -2432,7 +2488,7 @@
                     const bool hadWorldTransform = record.lastWorldRevision !=
                         std::numeric_limits<std::uint64_t>::max();
                     const AABB previousShadowBounds = hadWorldTransform
-                        ? shadowBounds(modelFromInstance(instanceModels[index])) : AABB{};
+                        ? record.worldBounds : AABB{};
                     glm::vec3 decomposedScale{};
                     glm::quat decomposedRotation{};
                     glm::vec3 decomposedTranslation{};
@@ -2451,6 +2507,7 @@
                     rendererInstance.scaleBase = glm::vec4{decomposedScale, glassCrackSlot(entity)};
                     record.lastWorldRevision = transform.worldRevision();
                     record.lastTransformEntity = glassSectionEntity(record);
+                    record.worldBounds = record.localBounds.transformed(model);
                     sceneGpu.moveRenderableToCell(index,
                         SceneGpuResources::cellFor(record.localBounds.transformed(model)));
                     if (record.batchIndex < instanceBatches.size() &&
@@ -2540,6 +2597,7 @@
                         const Vec3 padding{newPadding, newPadding, newPadding};
                         record.localBounds.min -= padding;
                         record.localBounds.max += padding;
+                        record.worldBounds = record.localBounds.transformed(model);
                         sceneGpu.moveRenderableToCell(index,
                             SceneGpuResources::cellFor(record.localBounds.transformed(model)));
                         if (record.batchIndex < instanceBatches.size() &&
@@ -2590,7 +2648,8 @@
                         }
                         return matrix;
                     }();
-                    const std::uint32_t instanceFlags = (glassSectionVisible(record) ? 1U : 0U) | (batch.foliagePipeline ? 2U : 0U) |
+                    record.visible = glassSectionVisible(record);
+                    const std::uint32_t instanceFlags = (record.visible ? 1U : 0U) | (batch.foliagePipeline ? 2U : 0U) |
                         (batch.twoSided ? 8U : 0U);
                     const bool proxyUninitialized = record.renderProxy.instance == InvalidGPUSceneInstanceId;
                     if (proxyUninitialized) {
@@ -2646,10 +2705,9 @@
                     gpuObjects[batchIndex].indexCount = instanceBatches[batchIndex].indexCount;
                     for (std::size_t index : sceneGpu.batchRenderableIndices[batchIndex]) {
                         const RenderableRecord& record = renderables[index];
-                        if (!readRegistry.has<Transform>(record.entity) || !glassSectionVisible(record)) continue;
+                        if (!record.visible || !readRegistry.has<Transform>(record.entity)) continue;
                         displacedGeometry |= record.displacementBoundsPadding > 1.0e-6F;
-                        const glm::mat4 instanceModel = modelFromInstance(instanceModels[index]);
-                        const AABB worldBounds = record.localBounds.transformed(instanceModel);
+                        const AABB &worldBounds = record.worldBounds;
                         if (!initialized) {
                             bounds = worldBounds;
                             initialized = true;

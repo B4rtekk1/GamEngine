@@ -11,9 +11,10 @@ namespace Engine {
     enum class GlassType : std::uint8_t { Annealed, Tempered, Laminated, Armored };
     enum class GlassSupportMode : std::uint8_t { Bottom, Frame, Custom };
     enum class GlassRenderState : std::uint8_t { Intact, Cracked, Fractured };
+    struct GlassCrackSegment final { glm::vec2 start{}, end{}; float intensity{}; };
     struct GlassCrack final {
         glm::vec2 position{};
-        float radius{}; // Local radius, independent of physical fragmentation.
+        float radius{}; // Local energy footprint within the shared fracture graph.
         float intensity{};
         std::uint32_t seed{};
     };
@@ -24,6 +25,7 @@ namespace Engine {
     };
     struct GlassSimulationSettings final {
         std::uint32_t maxDynamicFragmentsGlobal{256};
+        std::uint32_t maxNewDynamicFragmentsPerStep{32}; // Burst cap; excess uses GPU debris.
         float minDynamicFragmentArea{0.0004F};
         float kineticEnergyFraction{0.08F};
         float maxLinearSpeed{15.0F};

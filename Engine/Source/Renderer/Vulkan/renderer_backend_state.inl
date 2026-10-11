@@ -827,5 +827,9 @@
             record.*dirtyFrames |= allFrameBits;
         }
 
-        struct GlassAtlasOwner { Entity entity{NullEntity}; std::uint64_t uuid{}; };
+        struct GlassAtlasOwner {
+            Entity entity{NullEntity}; std::uint64_t uuid{};
+            bool operator==(const GlassAtlasOwner &) const = default;
+        };
         std::array<GlassAtlasOwner, 512> glassAtlasOwners{};
+        unsigned glassAtlasPaneCount{};

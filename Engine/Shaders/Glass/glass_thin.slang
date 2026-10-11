@@ -318,11 +318,21 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     if (input.crackSlot != 0)
     {
         uint slot = input.crackSlot - 1;
-        float2 size = max(glassCrackMetadata[slot].xy, float2(0.001));
+        // Packed side vertices carry edge/fragment indices. Detached shards have
+        // all bits set; attached cells expose only outer or broken boundaries.
+        if (input.texCoord1.y > 0.5 && input.texCoord1.x > 0.5) {
+            uint fragment = uint(input.texCoord1.y + 0.5) - 1;
+            uint edge = uint(input.texCoord1.x + 0.5) - 1;
+            uint4 exposed = asuint(glassCrackMetadata[slot * 129 + 1 + fragment]);
+            if (edge < 128 && (exposed[edge / 32] & (1u << (edge % 32))) == 0) discard;
+        }
+        float2 size = max(glassCrackMetadata[slot * 129].xy, float2(0.001));
         float2 uv = input.crackPosition / size + 0.5;
-        float active = glassCrackMetadata[slot].w;
+        float active = glassCrackMetadata[slot * 129].w;
         float crack = glassCrackAtlas.SampleLevel(float3(uv, slot), 0.0).r * active;
-        float2 step = float2(1.0 / 128.0);
+        uint atlasWidth, atlasHeight, atlasLayers;
+        glassCrackAtlas.GetDimensions(atlasWidth, atlasHeight, atlasLayers);
+        float2 step = 1.0 / float2(atlasWidth, atlasHeight);
         float2 gradient = float2(
             glassCrackAtlas.SampleLevel(float3(uv + float2(step.x, 0), slot), 0.0).r -
             glassCrackAtlas.SampleLevel(float3(uv - float2(step.x, 0), slot), 0.0).r,

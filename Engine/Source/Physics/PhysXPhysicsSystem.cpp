@@ -400,6 +400,7 @@ namespace Engine {
             Vec3 lastAngularVelocity;
             std::vector<physx::PxShape *> glassShapes;
             physx::PxShape *intactGlassShape{};
+            std::shared_ptr<const Mesh> glassGeometry;
         };
 
         struct CookedMeshKey final {
@@ -806,7 +807,7 @@ namespace Engine {
                     success = false;
                     break;
                 }
-                const bool active = glass.fractured && fragment.attached;
+                const bool active = fragment.attached;
                 shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, active && !collider.isTrigger);
                 shape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, active);
                 shape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, active && collider.isTrigger);
@@ -842,10 +843,8 @@ namespace Engine {
                 bool attached = true;
                 if (compoundGlass) {
                     const auto &glass = owner.get<GlassDestructionComponent>(entity);
-                    if (!glass.fractured) {
-                        attached = attachCollider(*actor, collider, transform, false);
-                        actor->getShapes(&intactGlassShape, 1);
-                    }
+                    // Prepare the actual continuous union at load time. A hit
+                    // removes shapes; it never inserts the whole pane into broadphase.
                     attached = attached && attachGlass(*actor, glass, collider, transform, glassShapes);
                 } else attached = attachCollider(*actor, collider, transform, dynamic);
                 if (!attached) {
@@ -863,6 +862,8 @@ namespace Engine {
             };
             record.glassShapes = std::move(glassShapes);
             record.intactGlassShape = intactGlassShape;
+            if (owner.has<GlassDestructionComponent>(entity))
+                record.glassGeometry = owner.get<GlassDestructionComponent>(entity).fractureRenderGeometry;
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
                 configureRigidBody(rigid, *body);
@@ -919,17 +920,21 @@ namespace Engine {
                 auto &record = existing->second;
                 const auto &glass = owner.get<GlassDestructionComponent>(entity);
                 const auto &collider = owner.get<ColliderComponent>(entity);
-                if (record.glassShapes.size() == glass.fragments.size()) {
+                if (record.glassShapes.size() == glass.fragments.size() &&
+                    record.glassGeometry == glass.fractureRenderGeometry) {
                     ++diagnostics.glassShapeUpdates;
-                    if (record.intactGlassShape) {
-                        record.intactGlassShape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, !glass.fractured && !collider.isTrigger);
-                        record.intactGlassShape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, !glass.fractured);
-                    }
                     for (std::size_t i = 0; i < record.glassShapes.size(); ++i) {
-                        const bool active = glass.fractured && glass.fragments[i].attached;
+                        const bool active = glass.fragments[i].attached;
                         auto *shape = record.glassShapes[i];
-                        shape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, active && !collider.isTrigger);
-                        shape->setFlag(physx::PxShapeFlag::eSCENE_QUERY_SHAPE, active);
+                        auto flags = shape->getFlags();
+                        flags.clear(physx::PxShapeFlag::eSIMULATION_SHAPE);
+                        flags.clear(physx::PxShapeFlag::eSCENE_QUERY_SHAPE);
+                        flags.clear(physx::PxShapeFlag::eTRIGGER_SHAPE);
+                        if (active) {
+                            flags |= physx::PxShapeFlag::eSCENE_QUERY_SHAPE;
+                            flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE : physx::PxShapeFlag::eSIMULATION_SHAPE;
+                        }
+                        if (flags != shape->getFlags()) shape->setFlags(flags);
                     }
                     return;
                 }

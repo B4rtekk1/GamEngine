@@ -108,5 +108,10 @@ namespace Engine {
         EXPECT_EQ(database.dirty().materials, std::vector{material});
         EXPECT_EQ(database.dirty().instances, std::vector{instance});
         EXPECT_EQ(database.instances()[instance].flags, 7U);
+        database.clearDirty();
+        database.updateInstanceFlags(instance, 7);
+        EXPECT_TRUE(database.dirty().instances.empty());
+        database.updateInstanceFlags(instance, 0);
+        EXPECT_EQ(database.dirty().instances, std::vector{instance});
     }
 } // namespace Engine

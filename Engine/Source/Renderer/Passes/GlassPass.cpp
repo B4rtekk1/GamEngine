@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include "Engine/Scene/SceneView.h"
+#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Renderer/shader_loader.h"
 #include "Engine/Renderer/Vulkan/PipelineCache.h"
 
@@ -16,7 +17,7 @@ namespace Engine {
                            const VkSampleCountFlagBits samples, const VkFormat depthResolveFormat,
                            const VkResolveModeFlagBits depthResolveMode, const VkDescriptorSetLayout sceneLayout,
                            Assets::AssetManager &assets, const bool velocity,
-                           const VkDescriptorImageInfo &opaqueColor, const VkDescriptorImageInfo &opaqueDepth) {
+                           const VkDescriptorImageInfo &opaqueColor, const VkDescriptorImageInfo &opaqueDepth, unsigned paneCount) {
         if (opaqueColor.imageView == VK_NULL_HANDLE || opaqueDepth.imageView == VK_NULL_HANDLE) {
             throw std::invalid_argument("GlassPass requires valid opaque scene color/depth views");
         }
@@ -77,7 +78,7 @@ namespace Engine {
         pipeline_.create(device, options);
         samples_ = samples;
         depthResolveMode_ = depthResolveMode;
-        createCrackResources(assets);
+        createCrackResources(assets, paneCount);
         createSceneDescriptors(opaqueColor, opaqueDepth);
     }
 
@@ -127,38 +128,92 @@ namespace Engine {
         }
     }
 
-    void GlassPass::createCrackResources(Assets::AssetManager &assets) {
-        VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        image.imageType = VK_IMAGE_TYPE_2D; image.format = VK_FORMAT_R32_SFLOAT;
-        image.extent = {AtlasResolution, AtlasResolution, 1};
-        image.mipLevels = 1; image.arrayLayers = AtlasSlots; image.samples = VK_SAMPLE_COUNT_1_BIT;
-        image.tiling = VK_IMAGE_TILING_OPTIMAL;
-        image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VmaAllocationCreateInfo allocation{}; allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        if (vmaCreateImage(allocator_, &image, &allocation, &crackAtlas_, &crackAtlasMemory_, nullptr) != VK_SUCCESS)
-            throw std::runtime_error("Could not allocate glass crack atlas");
-        VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        view.image = crackAtlas_; view.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY; view.format = image.format;
-        view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, AtlasSlots};
-        if (vkCreateImageView(device_, &view, nullptr, &crackAtlasView_) != VK_SUCCESS)
-            throw std::runtime_error("Could not create glass crack atlas view");
-        VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        sampler.magFilter = sampler.minFilter = VK_FILTER_LINEAR;
-        sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        if (vkCreateSampler(device_, &sampler, nullptr, &crackSampler_) != VK_SUCCESS)
-            throw std::runtime_error("Could not create glass crack sampler");
-        for (unsigned i = 0; i < FramesInFlight; ++i) {
-            VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            buffer.size = AtlasSlots * sizeof(glm::vec4); buffer.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-            VmaAllocationCreateInfo host{}; host.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-            host.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            VmaAllocationInfo details{};
-            if (vmaCreateBuffer(allocator_, &buffer, &host, &crackMetadata_[i], &crackMetadataMemory_[i], &details) != VK_SUCCESS)
-                throw std::runtime_error("Could not allocate glass crack metadata");
-            crackMetadataMapped_[i] = details.pMappedData;
-            std::memset(details.pMappedData, 0, static_cast<std::size_t>(buffer.size));
+    void GlassPass::destroyCrackStorage() noexcept {
+        if (device_ && crackAtlasView_) vkDestroyImageView(device_, crackAtlasView_, nullptr);
+        if (allocator_ && crackAtlas_) vmaDestroyImage(allocator_, crackAtlas_, crackAtlasMemory_);
+        for (unsigned i=0; i<FramesInFlight; ++i)
+            if (allocator_ && crackMetadata_[i]) vmaDestroyBuffer(allocator_, crackMetadata_[i], crackMetadataMemory_[i]);
+        crackAtlasView_=VK_NULL_HANDLE; crackAtlas_=VK_NULL_HANDLE; crackAtlasMemory_=nullptr;
+        crackMetadata_.fill(VK_NULL_HANDLE); crackMetadataMemory_.fill(nullptr); crackMetadataMapped_.fill(nullptr);
+        atlasLayers_=0; crackAtlasInitialized_=false;
+    }
+
+    void GlassPass::createCrackStorage(unsigned layers) {
+        VkImage atlas{}; VmaAllocation atlasMemory{}; VkImageView atlasView{};
+        std::array<VkBuffer,FramesInFlight> buffers{};
+        std::array<VmaAllocation,FramesInFlight> bufferMemory{};
+        std::array<void *,FramesInFlight> mapped{};
+        try {
+            VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            image.imageType=VK_IMAGE_TYPE_2D; image.format=VK_FORMAT_R32_SFLOAT;
+            image.extent={AtlasResolution,AtlasResolution,1};
+            image.mipLevels=1; image.arrayLayers=layers; image.samples=VK_SAMPLE_COUNT_1_BIT;
+            image.tiling=VK_IMAGE_TILING_OPTIMAL;
+            image.usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            VmaAllocationCreateInfo allocation{}; allocation.usage=VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator_,&image,&allocation,&atlas,&atlasMemory,nullptr)!=VK_SUCCESS)
+                throw std::runtime_error("Could not allocate glass crack atlas");
+            VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            view.image=atlas; view.viewType=VK_IMAGE_VIEW_TYPE_2D_ARRAY; view.format=image.format;
+            view.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,layers};
+            if (vkCreateImageView(device_,&view,nullptr,&atlasView)!=VK_SUCCESS)
+                throw std::runtime_error("Could not create glass crack atlas view");
+            for (unsigned i=0; i<FramesInFlight; ++i) {
+                VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                // Interleaved pane header + 128 fragment exposure masks.
+                buffer.size=layers*129*sizeof(glm::vec4); buffer.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                VmaAllocationCreateInfo host{}; host.usage=VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+                host.flags=VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT|VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                VmaAllocationInfo details{};
+                if (vmaCreateBuffer(allocator_,&buffer,&host,&buffers[i],&bufferMemory[i],&details)!=VK_SUCCESS)
+                    throw std::runtime_error("Could not allocate glass crack metadata");
+                mapped[i]=details.pMappedData;
+                std::memset(mapped[i],0,static_cast<std::size_t>(buffer.size));
+            }
+        } catch (...) {
+            for (unsigned i=0; i<FramesInFlight; ++i)
+                if (buffers[i]) vmaDestroyBuffer(allocator_,buffers[i],bufferMemory[i]);
+            if (atlasView) vkDestroyImageView(device_,atlasView,nullptr);
+            if (atlas) vmaDestroyImage(allocator_,atlas,atlasMemory);
+            throw;
         }
+        destroyCrackStorage();
+        crackAtlas_=atlas; crackAtlasMemory_=atlasMemory; crackAtlasView_=atlasView;
+        crackMetadata_=buffers; crackMetadataMemory_=bufferMemory; crackMetadataMapped_=mapped;
+        atlasLayers_=layers; crackSlots_={};
+    }
+
+    bool GlassPass::needsCrackAtlasResize(unsigned paneCount) const noexcept {
+        return device_ && atlasLayers_!=std::clamp(paneCount,1U,AtlasSlots);
+    }
+
+    void GlassPass::resizeCrackAtlas(unsigned paneCount) {
+        if (!needsCrackAtlasResize(paneCount)) return;
+        createCrackStorage(std::clamp(paneCount,1U,AtlasSlots));
+        for (unsigned i=0; i<FramesInFlight; ++i) {
+            const VkDescriptorImageInfo atlas{crackSampler_,crackAtlasView_,VK_IMAGE_LAYOUT_GENERAL};
+            const VkDescriptorImageInfo storage{VK_NULL_HANDLE,crackAtlasView_,VK_IMAGE_LAYOUT_GENERAL};
+            const VkDescriptorBufferInfo metadata{crackMetadata_[i],0,VK_WHOLE_SIZE};
+            const VkWriteDescriptorSet writes[] = {
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,sceneTextureSets_[i],2,0,1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&atlas,nullptr,nullptr},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,sceneTextureSets_[i],3,0,1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,&storage,nullptr,nullptr},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,sceneTextureSets_[i],4,0,1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,nullptr,&metadata,nullptr},
+            };
+            vkUpdateDescriptorSets(device_,std::size(writes),writes,0,nullptr);
+        }
+    }
+
+    void GlassPass::createCrackResources(Assets::AssetManager &assets, unsigned paneCount) {
+        createCrackStorage(std::clamp(paneCount,1U,AtlasSlots));
+        VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sampler.magFilter=sampler.minFilter=VK_FILTER_LINEAR;
+        sampler.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sampler.addressModeU=sampler.addressModeV=sampler.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(device_,&sampler,nullptr,&crackSampler_)!=VK_SUCCESS)
+            throw std::runtime_error("Could not create glass crack sampler");
         // Empty set zero preserves the same set-one binding numbers as GlassThin.
         VkDescriptorSetLayout empty{};
         VkDescriptorSetLayoutCreateInfo emptyInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -192,7 +247,7 @@ namespace Engine {
         barrier.oldLayout = crackAtlasInitialized_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
         barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = crackAtlas_; barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, AtlasSlots};
+        barrier.image = crackAtlas_; barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, atlasLayers_};
         VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         dependency.imageMemoryBarrierCount = 1; dependency.pImageMemoryBarriers = &barrier;
         vkCmdPipelineBarrier2(commandBuffer, &dependency);
@@ -211,18 +266,34 @@ namespace Engine {
             1, &sceneTextureSets_[frame], 0, nullptr);
         struct alignas(16) Stamp { glm::vec4 positionRadius, sizeWidth; glm::uvec4 tile, region; };
         static_assert(sizeof(Stamp) == 64);
-        unsigned budget = 32;
+        unsigned budget = 256;
         scene.view().view<GlassDestructionComponent, UUIDComponent>([&](Entity, const auto &glass, const auto &uuid) {
             const unsigned slot = glass.crackAtlasIndex;
-            if (slot >= AtlasSlots) return;
-            metadata[slot] = {glass.size, glass.crackWidth, 0};
+            if (slot >= atlasLayers_) return;
+            auto *paneMetadata=metadata+slot*129;
+            paneMetadata[0] = {glass.size, glass.crackWidth, 0};
             auto &state = crackSlots_[slot];
             const auto historyStart = glass.impactCount - static_cast<unsigned>(glass.cracks.size());
             const bool changedOwner = state.uuid != uuid.value || state.submitted > glass.cracks.size() || state.historyStart != historyStart;
-            if (changedOwner && state.uuid == 0 && glass.cracks.empty()) { state = {uuid.value, 0}; metadata[slot].w = 1; return; }
-            if (changedOwner && budget == 0) { metadata[slot].w = 0; return; }
-            if (changedOwner) state = {uuid.value, 0, historyStart, historyStart != 0};
-            metadata[slot].w = 1;
+            if (changedOwner && budget == 0) { paneMetadata[0].w = 0; return; }
+            if (changedOwner) state = {uuid.value, 0, 0, historyStart, historyStart != 0};
+            std::vector<std::uint8_t> exposureState;
+            exposureState.reserve(glass.fragments.size()+glass.bonds.size());
+            for (const auto &fragment:glass.fragments) exposureState.push_back(fragment.attached);
+            for (const auto &bond:glass.bonds) exposureState.push_back(bond.broken);
+            if (state.geometry!=glass.fractureRenderGeometry.get() || state.exposureState!=exposureState) {
+                state.geometry=glass.fractureRenderGeometry.get();
+                state.exposureState=std::move(exposureState);
+                state.exposureMasks={};
+                for (unsigned fragment=0; fragment<glass.fragments.size(); ++fragment) {
+                    auto &exposed=state.exposureMasks[fragment];
+                    const auto count=std::min<std::size_t>(glass.fragments[fragment].polygon.size(),128);
+                    for (unsigned edge=0; edge<count; ++edge)
+                        if (GlassDestructionSystem::edgeExposed(glass,fragment,edge)) exposed[edge/32]|=1U<<(edge%32);
+                }
+            }
+            std::memcpy(&paneMetadata[1],state.exposureMasks.data(),sizeof(state.exposureMasks));
+            paneMetadata[0].w = 1;
             bool reset = changedOwner;
             // Clear recycled slots even when the new pane has no cracks.
             do {
@@ -231,11 +302,22 @@ namespace Engine {
                 const bool hasCrack = state.submitted < glass.cracks.size();
                 const auto index = state.reverse ? glass.cracks.size()-1-state.submitted : state.submitted;
                 const GlassCrack crack = hasCrack ? glass.cracks[index] : GlassCrack{};
-                Stamp stamp{{crack.position, crack.radius, crack.intensity}, {glass.size, glass.crackWidth, 0},
-                    {slot, crack.seed, reset ? 1U : 0U, AtlasResolution}, {0, 0, AtlasResolution, AtlasResolution}};
+                if (hasCrack && !reset && state.segments.empty())
+                    state.segments=GlassDestructionSystem::crackSegments(glass,crack);
+                const auto &segments=state.segments;
+                if (!reset && state.segmentOffset>=segments.size()) {
+                    if (hasCrack) ++state.submitted;
+                    state.segmentOffset=0; state.segments.clear();
+                    continue;
+                }
+                const auto segment=!reset && state.segmentOffset<segments.size() ?
+                    segments[state.segmentOffset] : GlassCrackSegment{};
+                Stamp stamp{{segment.start, segment.end}, {glass.size, glass.crackWidth, segment.intensity},
+                    {slot, 0, reset ? 1U : 0U, AtlasResolution}, {0, 0, AtlasResolution, AtlasResolution}};
                 if (!reset) {
-                    const auto low = glm::clamp((crack.position - glm::vec2{crack.radius} + glass.size * 0.5F) / glass.size, glm::vec2{0}, glm::vec2{1});
-                    const auto high = glm::clamp((crack.position + glm::vec2{crack.radius} + glass.size * 0.5F) / glass.size, glm::vec2{0}, glm::vec2{1});
+                    const float padding=glass.crackWidth+std::max(glass.size.x,glass.size.y)/float(AtlasResolution);
+                    const auto low = glm::clamp((glm::min(segment.start,segment.end)-glm::vec2{padding}+glass.size*0.5F)/glass.size, glm::vec2{0}, glm::vec2{1});
+                    const auto high = glm::clamp((glm::max(segment.start,segment.end)+glm::vec2{padding}+glass.size*0.5F)/glass.size, glm::vec2{0}, glm::vec2{1});
                     const auto start = glm::uvec2{glm::floor(low * float(AtlasResolution))};
                     const auto end = glm::uvec2{glm::ceil(high * float(AtlasResolution))};
                     stamp.region = {start, end-start};
@@ -246,7 +328,10 @@ namespace Engine {
                 barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
-                if (hasCrack) ++state.submitted;
+                if (!reset && hasCrack) {
+                    ++state.segmentOffset;
+                    if (state.segmentOffset>=segments.size()) {++state.submitted; state.segmentOffset=0; state.segments.clear();}
+                }
                 --budget; reset = false;
             } while (state.submitted < glass.cracks.size());
         });
@@ -281,10 +366,7 @@ namespace Engine {
         if (device_ && crackPipeline_) vkDestroyPipeline(device_, crackPipeline_, nullptr);
         if (device_ && crackPipelineLayout_) vkDestroyPipelineLayout(device_, crackPipelineLayout_, nullptr);
         if (device_ && crackSampler_) vkDestroySampler(device_, crackSampler_, nullptr);
-        if (device_ && crackAtlasView_) vkDestroyImageView(device_, crackAtlasView_, nullptr);
-        if (allocator_ && crackAtlas_) vmaDestroyImage(allocator_, crackAtlas_, crackAtlasMemory_);
-        for (unsigned i = 0; i < FramesInFlight; ++i)
-            if (allocator_ && crackMetadata_[i]) vmaDestroyBuffer(allocator_, crackMetadata_[i], crackMetadataMemory_[i]);
+        destroyCrackStorage();
         crackPipeline_ = VK_NULL_HANDLE; crackPipelineLayout_ = VK_NULL_HANDLE;
         crackSampler_ = VK_NULL_HANDLE; crackAtlasView_ = VK_NULL_HANDLE; crackAtlas_ = VK_NULL_HANDLE;
         crackAtlasMemory_ = nullptr; crackMetadata_.fill(VK_NULL_HANDLE);

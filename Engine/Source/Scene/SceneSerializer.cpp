@@ -1196,6 +1196,9 @@ namespace Engine {
             }
             if (registry.has<GlassDestructionComponent>(entity)) {
                 const auto &glass = registry.get<GlassDestructionComponent>(entity);
+                // Exact graph coordinates are needed to replay crack intersections
+                // and match immutable fracture templates after a save/load cycle.
+                const auto previousPrecision=serialized.precision(std::numeric_limits<float>::max_digits10);
                 serialized << "GLASS_DESTRUCTION " << glass.size.x << ' ' << glass.size.y << ' '
                     << glass.thickness << ' ' << glass.fractureThreshold << ' ' << glass.density << ' '
                     << glass.maxFragments << ' ' << glass.maxDynamicFragments << ' ' << glass.seed << ' '
@@ -1221,6 +1224,7 @@ namespace Engine {
                 for (const auto &crack : glass.cracks)
                     serialized << crack.position.x << ' ' << crack.position.y << ' ' << crack.radius << ' '
                         << crack.intensity << ' ' << crack.seed << '\n';
+                serialized.precision(previousPrecision);
             }
             if (registry.has<GlassFragmentBindingComponent>(entity)) {
                 const auto &binding = registry.get<GlassFragmentBindingComponent>(entity);

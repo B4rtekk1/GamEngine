@@ -539,13 +539,19 @@ namespace Engine {
             // collecting cached camera/light frame data for this frame.
             TransformSystem::update(registry);
             updateFpsCounter();
-            drawFrame();
-            // Gameplay can replace meshes and create/destroy renderables after
-            // the editor's UI change check. Synchronize at the frame boundary
-            // after submitting draws that still reference the old scene tables
-            // and viewport descriptors. The revision check makes unchanged
-            // frames cheap, and the next frame sees the new geometry.
+            // Gameplay can replace meshes after the editor's UI change check.
+            // Retire and rebuild stale batches before drawFrame dereferences
+            // their MeshGpuResource identities (loaded panes may release them).
             synchronizeSceneResources(scene);
+            synchronizeGlassAtlasSlots();
+            if (glassPass.needsCrackAtlasResize(glassAtlasPaneCount) ||
+                sceneGlassPass.needsCrackAtlasResize(glassAtlasPaneCount)) {
+                waitForGlobalResourceRebuild();
+                glassPass.resizeCrackAtlas(glassAtlasPaneCount);
+                sceneGlassPass.resizeCrackAtlas(glassAtlasPaneCount);
+                sceneViewportNeedsRender=true;
+            }
+            drawFrame();
         }
 
         void waitIdle() const {
