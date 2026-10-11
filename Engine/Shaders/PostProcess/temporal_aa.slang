@@ -105,7 +105,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const bool waterPixel = (waterQuality & 0x80000000u) != 0;
     const float currentDepth = waterPixel ? waterSurfaceFrame.SampleLevel(currentUv, 0.0).z
                                           : currentDepthFrame.SampleLevel(currentUv, 0.0).r;
-    const float reactive = (waterQuality & 0x40000000u) != 0 ? 1.0 : 0.0;
+    const float glassReactive = saturate(-currentFrame.SampleLevel(currentUv, 0.0).a);
+    const float reactive = max(glassReactive, (waterQuality & 0x40000000u) != 0 ? 1.0 : 0.0);
     // At a silhouette, bilinear velocity may contain the background's motion
     // even though the current pixel belongs to the foreground.  Vulkan's
     // depth convention is near=0, so select the velocity at the nearest depth
@@ -148,7 +149,7 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     if (!historyInBounds || !depthMatches || settings.historyWeight <= 0.0) {
         resolvedFrame[dispatchId.xy] = float4(reinhardInverse(currentTm), 1.0);
         resolvedDepthFrame[dispatchId.xy] = currentViewDepth;
-        resolvedHistoryFrame[dispatchId.xy] = float4(currentTm, 1.0);
+        resolvedHistoryFrame[dispatchId.xy] = float4(currentTm, glassReactive > 0.0 ? -1.0 : 1.0);
         return;
     }
 
@@ -181,10 +182,11 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     float3 history = sampleHistoryCatmullRom(historyUv, resolution);
     history = clipAabb(mean - deviation, mean + deviation, mean, history);
 
-    const float historyWeight = settings.historyWeight * lerp(1.0, 0.12, reactive);
+    const float previousGlassReactive = saturate(-historyFrame.SampleLevel(historyUv, 0.0).a);
+    const float historyWeight = settings.historyWeight * lerp(1.0, 0.12, max(reactive, previousGlassReactive));
     const float3 resolvedTm = lerp(currentTm, history,
         (historyInBounds && depthMatches) ? historyWeight : 0.0);
     resolvedFrame[dispatchId.xy] = float4(reinhardInverse(resolvedTm), 1.0);
     resolvedDepthFrame[dispatchId.xy] = currentViewDepth;
-    resolvedHistoryFrame[dispatchId.xy] = float4(resolvedTm, 1.0);
+    resolvedHistoryFrame[dispatchId.xy] = float4(resolvedTm, glassReactive > 0.0 ? -1.0 : 1.0);
 }

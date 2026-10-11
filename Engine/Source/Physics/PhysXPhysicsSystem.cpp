@@ -1043,7 +1043,8 @@ namespace Engine {
     }
 
     std::optional<RaycastHit> PhysicsSystem::raycast(
-        Scene &scene, const Vec3 origin, Vec3 direction, const float maxDistance) const {
+        Scene &scene, const Vec3 origin, Vec3 direction, const float maxDistance,
+        const ObjectId ignoredActor) const {
         const float directionLength = direction.length();
         if (directionLength <= 0.0F || maxDistance <= 0.0F) {
             return std::nullopt;
@@ -1062,8 +1063,23 @@ namespace Engine {
         physx::PxRaycastBuffer hit;
         const physx::PxHitFlags hitFlags =
                 physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
+        struct IgnoreActorFilter final : physx::PxQueryFilterCallback {
+            const physx::PxRigidActor* ignored{};
+            physx::PxQueryHitType::Enum preFilter(const physx::PxFilterData&, const physx::PxShape*,
+                const physx::PxRigidActor* candidate, physx::PxHitFlags&) override {
+                return candidate == ignored ? physx::PxQueryHitType::eNONE : physx::PxQueryHitType::eBLOCK;
+            }
+            physx::PxQueryHitType::Enum postFilter(const physx::PxFilterData&, const physx::PxQueryHit&,
+                const physx::PxShape*, const physx::PxRigidActor*) override {
+                return physx::PxQueryHitType::eBLOCK;
+            }
+        } filter;
+        if (const auto record = runtime.actors.find(scene.findEntity(ignoredActor)); record != runtime.actors.end())
+            filter.ignored = record->second.actor;
+        physx::PxQueryFilterData queryFilter;
+        if (filter.ignored) queryFilter.flags |= physx::PxQueryFlag::ePREFILTER;
         if (!runtime.physicsScene->raycast(
-                toPhysX(origin), toPhysX(direction), maxDistance, hit, hitFlags) ||
+                toPhysX(origin), toPhysX(direction), maxDistance, hit, hitFlags, queryFilter, &filter) ||
             !hit.hasBlock || hit.block.actor == nullptr) {
             return std::nullopt;
         }
@@ -1089,5 +1105,16 @@ namespace Engine {
     std::optional<RaycastHit> Physics::raycast(
         const Vec3 origin, const Vec3 direction, const float maxDistance) const {
         return system_.raycast(*scene_, origin, direction, maxDistance);
+    }
+
+    std::optional<RaycastHit> Physics::shootRay(
+        const Vec3 origin, const Vec3 direction, const float maxDistance, const ObjectId ignoredActor) {
+        auto hit = system_.raycast(*scene_, origin, direction, maxDistance, ignoredActor);
+        if (hit) {
+            constexpr std::size_t MaxBulletImpacts = 128;
+            if (bulletImpacts_.size() == MaxBulletImpacts) bulletImpacts_.erase(bulletImpacts_.begin());
+            bulletImpacts_.push_back({origin, hit->point, hit->normal, hit->actor.id()});
+        }
+        return hit;
     }
 } // namespace Engine

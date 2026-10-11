@@ -21,7 +21,7 @@
 namespace Engine::Assets {
     namespace {
         constexpr std::array<char, 8> magic{'G', 'M', 'E', 'S', 'H', '\0', '\0', '\0'};
-        constexpr std::uint32_t version = 6;
+        constexpr std::uint32_t version = 7;
         constexpr std::uint32_t FbxImporterVersion = 11;
         constexpr std::uint32_t maxElements = 100'000'000;
 
@@ -93,6 +93,19 @@ namespace Engine::Assets {
             return static_cast<bool>(file);
         }
 
+        bool read_materials(std::ifstream& file, std::vector<PBRMaterial>& materials, std::uint32_t fileVersion) {
+            if (fileVersion >= 7) return read_vector(file, materials);
+            static_assert(std::is_standard_layout_v<PBRMaterial>);
+            // This engine's historical gmesh format stores native trivial structs.
+            // transmission starts immediately after the old, padded material record.
+            constexpr auto legacyStride = offsetof(PBRMaterial, transmission);
+            for (auto& material : materials) {
+                file.read(reinterpret_cast<char*>(&material), static_cast<std::streamsize>(legacyStride));
+                if (!file) return false;
+            }
+            return true;
+        }
+
         std::filesystem::path texture_path(const std::filesystem::path &mesh, const std::size_t index) {
             return mesh.parent_path() / (mesh.stem().string() + ".image" + std::to_string(index) + ".gtex");
         }
@@ -107,7 +120,8 @@ namespace Engine::Assets {
                 scalar |= material.aoTexture == index || material.opacityTexture == index ||
                           material.displacementTexture == index;
                 other |= material.metallicRoughnessTexture == index || material.translucencyTexture == index ||
-                         material.specularTexture == index;
+                         material.specularTexture == index || material.transmissionTexture == index ||
+                         material.thicknessTexture == index || material.dirtTexture == index;
             }
             if (color) return TextureFormat::BC7_SRGB;
             if (other) return TextureFormat::BC7_UNORM;
@@ -168,7 +182,8 @@ namespace Engine::Assets {
                                      material.opacityTexture == index ||
                                      material.displacementTexture == index ||
                                      material.translucencyTexture == index ||
-                                     material.specularTexture == index;
+                                     material.specularTexture == index || material.transmissionTexture == index ||
+                         material.thicknessTexture == index || material.dirtTexture == index;
                 }
                 if (!usedAsNormal || !usedElsewhere) continue;
                 const auto normalIndex = static_cast<std::int32_t>(mesh.images.size());
@@ -363,7 +378,7 @@ namespace Engine::Assets {
             return {};
         file.seekg(0);
         Mesh mesh;
-        if (prefix.version == version || prefix.version == 5) {
+        if (prefix.version >= 5) {
             Header header{};
             if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements || header.meshlets
                 > maxElements || header.meshletVertices > maxElements || header.meshletTriangles > maxElements || header
@@ -383,7 +398,7 @@ namespace Engine::Assets {
             mesh.localBounds = header.localBounds;
             if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !
                 read_vector(file, mesh.meshlets) || !read_vector(file, mesh.meshletVertices) || !
-                read_vector(file, mesh.meshletTriangles) || !read_vector(file, mesh.materials) ||
+                read_vector(file, mesh.meshletTriangles) || !read_materials(file, mesh.materials, prefix.version) ||
                 !read_vector(file, mesh.renderSections) || !read_vector(file, mesh.meshletClusters))
                 return {};
         } else if (prefix.version == 4) {
@@ -404,7 +419,7 @@ namespace Engine::Assets {
             mesh.meshletClusterRoot = header.meshletClusterRoot;
             if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) ||
                 !read_vector(file, mesh.meshlets) || !read_vector(file, mesh.meshletVertices) ||
-                !read_vector(file, mesh.meshletTriangles) || !read_vector(file, mesh.materials) ||
+                !read_vector(file, mesh.meshletTriangles) || !read_materials(file, mesh.materials, prefix.version) ||
                 !read_vector(file, mesh.renderSections) || !read_vector(file, mesh.meshletClusters)) return {};
         } else if (prefix.version == 3) {
             struct HeaderV3 final { std::array<char, 8> magic; std::uint32_t version, vertices, indices, meshlets,
@@ -418,7 +433,7 @@ namespace Engine::Assets {
             std::vector<RenderSectionV3> sections(header.renderSections);
             if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !read_vector(file, mesh.meshlets) ||
                 !read_vector(file, mesh.meshletVertices) || !read_vector(file, mesh.meshletTriangles) ||
-                !read_vector(file, mesh.materials) || !read_vector(file, sections)) return {};
+                !read_materials(file, mesh.materials, prefix.version) || !read_vector(file, sections)) return {};
             mesh.renderSections.reserve(sections.size());
             for (const RenderSectionV3& section : sections)
                 mesh.renderSections.push_back({section.firstIndex, section.indexCount, section.firstMeshlet,
@@ -444,7 +459,7 @@ namespace Engine::Assets {
             if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !read_vector(
                     file, mesh.meshlets) ||
                 !read_vector(file, mesh.meshletVertices) || !read_vector(file, mesh.meshletTriangles) ||
-                !read_vector(file, mesh.materials))
+                !read_materials(file, mesh.materials, prefix.version))
                 return {};
         } else {
             HeaderV1 header{};
@@ -509,7 +524,7 @@ namespace Engine::Assets {
         if (!file || !read(file, prefix) || prefix.magic != magic) return {};
         // Older versions do not have the same independently skippable payload
         // layout. Keep them loadable while current cooked assets use streaming.
-        if (prefix.version != version && prefix.version != 5) {
+        if (prefix.version < 5 || prefix.version > version) {
             const auto complete = load_gmesh(path);
             return complete ? std::make_shared<Mesh>(*complete) : nullptr;
         }
@@ -540,7 +555,7 @@ namespace Engine::Assets {
             file.seekg(static_cast<std::streamoff>(bytes), std::ios::cur);
             return static_cast<bool>(file);
         };
-        if (!skipRecords(header.materials, sizeof(PBRMaterial)) ||
+        if (!skipRecords(header.materials, prefix.version >= 7 ? sizeof(PBRMaterial) : offsetof(PBRMaterial, transmission)) ||
             !skipRecords(header.renderSections, sizeof(Mesh::RenderSection)) ||
             !read_vector(file, mesh.meshletClusters) || mesh.empty() || !valid_meshlets(mesh) ||
             !valid_cluster_hierarchy(mesh)) return {};

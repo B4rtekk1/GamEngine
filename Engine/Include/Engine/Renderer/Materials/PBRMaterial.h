@@ -70,5 +70,17 @@ namespace Engine {
         // Terrain uses four albedo layers blended by the vertex splat weights.
         std::array<std::int32_t, 4> terrainLayerTextures{-1, -1, -1, -1};
         bool terrainLayered{false};
+        // GlassThin: thickness is the normal distance between parallel faces,
+        // in world metres. Zero attenuation distance means no volume absorption.
+        float transmission{0.0F};
+        float thickness{0.0F};
+        Math::Color attenuationColor = Math::Color::white();
+        float attenuationDistance{0.0F};
+        float dirtIntensity{0.0F};
+        std::int32_t transmissionTexture{-1};
+        std::int32_t thicknessTexture{-1};
+        std::int32_t dirtTexture{-1};
+        // transmission (R), thickness (G), dirt (R); independently transformed UVs.
+        std::array<TextureCoordinateTransform, 3> glassTextureTransforms{};
     };
 } // namespace Engine

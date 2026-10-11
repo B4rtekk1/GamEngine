@@ -322,6 +322,25 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         renderer.material.pbr.displacementOffset = std::clamp(renderer.material.pbr.displacementOffset,
                                                                -10.0F, 10.0F);
         ImGui::Separator();
+        ImGui::TextDisabled("GlassThin");
+        auto& glass = renderer.material.pbr;
+        changed |= Editor::Controls::sliderFloat("Transmission##mesh-material", &glass.transmission, 0.0F, 1.0F, "%.3f");
+        if (glass.transmission > 0.0F) {
+            changed |= ImGui::DragFloat("IOR##mesh-material", &glass.ior, 0.01F, 1.0F, 3.0F, "%.3f");
+            changed |= ImGui::DragFloat("Thickness##mesh-material", &glass.thickness, 0.0001F, 0.0F, 1.0F, "%.4f m");
+            float attenuation[3] = {glass.attenuationColor.r(), glass.attenuationColor.g(), glass.attenuationColor.b()};
+            if (ImGui::ColorEdit3("Attenuation Color##mesh-material", attenuation, ImGuiColorEditFlags_Float)) {
+                glass.attenuationColor = Engine::Color{attenuation[0], attenuation[1], attenuation[2]}.clamped();
+                changed = true;
+            }
+            changed |= ImGui::DragFloat("Attenuation Distance##mesh-material", &glass.attenuationDistance, 0.01F, 0.0F, 1000.0F, "%.3f m");
+            ImGui::TextDisabled("Distance 0 disables volume absorption. Base Color tints transmission.");
+            changed |= Editor::Controls::sliderFloat("Dirt Intensity##mesh-material", &glass.dirtIntensity, 0.0F, 1.0F, "%.2f");
+            glass.ior = std::clamp(glass.ior, 1.0F, 3.0F);
+            glass.thickness = std::max(glass.thickness, 0.0F);
+            glass.attenuationDistance = std::max(glass.attenuationDistance, 0.0F);
+        }
+        ImGui::Separator();
         ImGui::TextDisabled("Emission");
         float emissive[3] = {renderer.material.pbr.emissiveColor.r(), renderer.material.pbr.emissiveColor.g(),
                              renderer.material.pbr.emissiveColor.b()};

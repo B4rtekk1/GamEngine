@@ -23,6 +23,7 @@
                 virtualWaterRenderer.destroy();
                 lightingForwardPass.destroy();
                 waterPass.destroy();
+            glassPass.destroy();
                 gtaoPass.destroy();
                 rtContactShadowPass.destroy();
                 directionalVisibilityPass.destroy();

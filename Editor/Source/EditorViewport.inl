@@ -1584,6 +1584,63 @@ const char* sceneViewModeName(const SceneViewMode mode) {
     return "Lit";
 }
 
+void drawBulletImpactDiagnostics(Engine::ScenePreset& scene, const Engine::Renderer& renderer,
+                                const bool gameView, const ImVec2 min, const ImVec2 max) {
+    auto* drawList = ImGui::GetWindowDrawList();
+    bool shooterEnabled = false;
+    scene.view().view<Engine::ScriptComponent>([&](const Engine::Entity, const Engine::ScriptComponent& script) {
+        shooterEnabled |= script.enabled && script.className == "PlayerShooter";
+    });
+    std::string status = "Bullet impacts: " + std::to_string(scene.physics().bulletImpacts().size()) + " / 128";
+    if (!shooterEnabled) status += " | Attach PlayerShooter to a GameObject to fire";
+    else status += " | LMB: fire | yellow: latest | cyan: surface normal";
+    drawList->PushClipRect(min, max, true);
+    drawList->AddRectFilled({min.x + 6.0F, min.y + 6.0F},
+        {min.x + 22.0F + ImGui::CalcTextSize(status.c_str()).x, min.y + 30.0F}, IM_COL32(0, 0, 0, 180));
+    drawList->AddText({min.x + 12.0F, min.y + 12.0F}, IM_COL32_WHITE, status.c_str());
+    drawList->PopClipRect();
+    Engine::Camera camera = sceneViewCamera(renderer, min, max);
+    if (gameView) {
+        const auto primary = scene.primaryViewCamera(16.0F / 9.0F);
+        if (!primary) {
+            drawList->AddText({min.x + 12.0F, min.y + 34.0F}, IM_COL32(255, 180, 60, 255),
+                              "No primary camera: add a camera to fire.");
+            return;
+        }
+        // The embedded Game View uses 16:9 regardless of the authored camera aspect.
+        camera = *primary;
+    }
+    const glm::mat4 viewProjection = camera.projectionMatrix().native() * camera.viewMatrix().native();
+    const auto project = [&](const Engine::Vec3 point, ImVec2& screen) {
+        const glm::vec4 clip = viewProjection * glm::vec4{point.native(), 1.0F};
+        if (clip.w <= 0.0F || clip.z < 0.0F || clip.z > clip.w) return false;
+        screen = {min.x + (clip.x / clip.w + 1.0F) * (max.x - min.x) * 0.5F,
+                  min.y + (clip.y / clip.w + 1.0F) * (max.y - min.y) * 0.5F};
+        return true;
+    };
+    drawList->PushClipRect(min, max, true);
+    const auto impacts = scene.physics().bulletImpacts();
+    for (std::size_t index = 0; index < impacts.size(); ++index) {
+        const auto& impact = impacts[index];
+        ImVec2 point;
+        if (!project(impact.point, point)) continue;
+        const ImU32 color = index + 1 == impacts.size() ? IM_COL32(255, 220, 55, 255)
+                                                       : IM_COL32(255, 80, 65, 230);
+        drawList->AddCircle(point, 7.0F, IM_COL32(0, 0, 0, 220), 16, 4.0F);
+        drawList->AddCircle(point, 7.0F, color, 16, 2.0F);
+        drawList->AddCircleFilled(point, 2.5F, color);
+        ImVec2 normalEnd;
+        if (project(impact.point + impact.normal * 0.25F, normalEnd))
+            drawList->AddLine(point, normalEnd, IM_COL32(65, 220, 255, 255), 2.0F);
+    }
+    if (gameView) {
+        const ImVec2 center{(min.x + max.x) * 0.5F, (min.y + max.y) * 0.5F};
+        drawList->AddLine({center.x - 5.0F, center.y}, {center.x + 5.0F, center.y}, IM_COL32_WHITE);
+        drawList->AddLine({center.x, center.y - 5.0F}, {center.x, center.y + 5.0F}, IM_COL32_WHITE);
+    }
+    drawList->PopClipRect();
+}
+
 void drawColliderDiagnostics(const Engine::ScenePreset& scene, const Engine::Renderer& renderer,
                              const ImVec2 min, const ImVec2 max) {
     const Engine::Camera camera = sceneViewCamera(renderer, min, max);
@@ -1660,6 +1717,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                                  const bool playing, bool& isOpen) {
     static std::string assetDropError;
     static SceneViewSettings settings;
+    static bool showBulletImpacts = true;
     if (playing) {
         showGameView = true;
     }
@@ -1688,6 +1746,16 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         if (EditorButton(" Restart ").draw()) interaction.playModeAction = PlayModeAction::Restart;
         ImGui::PopStyleColor(3);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Restart Play Mode from the editor scene");
+    }
+    ImGui::SameLine(0.0F, 10.0F);
+    ImGui::Checkbox("Bullet impacts", &showBulletImpacts);
+    ImGui::SameLine(0.0F, 10.0F);
+    if (ImGui::Button("Debug View")) ImGui::OpenPopup("Viewport debug view");
+    if (ImGui::BeginPopup("Viewport debug view")) {
+        ImGui::Checkbox("Bullet impacts", &showBulletImpacts);
+        if (ImGui::Button("Clear impacts")) scene.physics().clearBulletImpacts();
+        ImGui::TextDisabled("LMB: fire with PlayerShooter; Escape: release mouse");
+        ImGui::EndPopup();
     }
     ImGui::SameLine(0.0F, 10.0F);
     if (!playing) {
@@ -1779,6 +1847,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         }
         const ImVec2 imageMin = ImGui::GetItemRectMin();
         const ImVec2 imageMax = ImGui::GetItemRectMax();
+        if (showBulletImpacts) drawBulletImpactDiagnostics(scene, renderer, showGameView, imageMin, imageMax);
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* payload =
                     ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::environmentPayload)) {

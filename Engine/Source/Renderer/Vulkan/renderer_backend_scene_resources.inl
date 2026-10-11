@@ -204,8 +204,15 @@
 
         [[nodiscard]] GPUMaterialData packMaterial(const PBRMaterial& source,
                                                    const Mesh& mesh,
-                                                   const WaterMaterial* water = nullptr) const {
+                                                   const WaterMaterial* water = nullptr,
+                                                   const MeshGpuResource* retainedResource = nullptr) const {
             const auto textureIndex = [&](const std::int32_t localIndex) {
+                if (retainedResource != nullptr) {
+                    if (localIndex < 0) return -1;
+                    const TextureId id{retainedResource->textureIdentity, static_cast<std::uint32_t>(localIndex)};
+                    const auto found = textureGpuResources.find(id);
+                    return found == textureGpuResources.end() ? -1 : static_cast<std::int32_t>(found->second.descriptorIndex);
+                }
                 const auto slots = meshTextureSlots.find(&mesh);
                 if (localIndex < 0 || slots == meshTextureSlots.end() ||
                     static_cast<std::size_t>(localIndex) >= slots->second.size()) return -1;
@@ -278,6 +285,20 @@
                  transform(MaterialTextureSlot::Specular), transform(MaterialTextureSlot::SpecularColor)},
                 transformRows1,
             };
+            packed.glassParams = {std::clamp(source.transmission, 0.0F, 1.0F),
+                                  std::max(source.ior, 1.0F), std::max(source.thickness, 0.0F),
+                                  std::clamp(source.dirtIntensity, 0.0F, 1.0F)};
+            packed.glassAttenuation = {source.attenuationColor.r(), source.attenuationColor.g(),
+                                      source.attenuationColor.b(), std::max(source.attenuationDistance, 0.0F)};
+            packed.glassTextureIndices = {textureIndex(source.transmissionTexture),
+                                          textureIndex(source.thicknessTexture), textureIndex(source.dirtTexture), -1};
+            for (std::size_t i = 0; i < source.glassTextureTransforms.size(); ++i) {
+                const auto& uv = source.glassTextureTransforms[i];
+                const float c = std::cos(uv.rotation), s = std::sin(uv.rotation);
+                packed.glassTextureCoordinateSets[i] = uv.texCoord;
+                packed.glassTextureTransforms[i] = {c * uv.scaleX, -s * uv.scaleY, uv.offsetX, uv.offsetY};
+                packed.glassTextureRows1[i] = {s * uv.scaleX, c * uv.scaleY, 0.0F, 0.0F};
+            }
             if (water != nullptr) {
                 const std::int32_t normalMap = textureIndex(water->normalMap);
                 const std::int32_t foamTexture = textureIndex(water->foamTexture);
@@ -990,6 +1011,8 @@
                     const auto pbrShaderSlot = [&](const PBRMaterial& material) -> std::uint32_t {
                         if (shaderSlot != materialShaderIndex(MaterialShader::StandardPBR))
                             return shaderSlot;
+                        if (usesGlassThin(material))
+                            return static_cast<std::uint32_t>(GlassThinProgramSlot);
                         if (material.terrainLayered)
                             return static_cast<std::uint32_t>(PbrTerrainProgramSlot);
                         if (material.shadingModel == MaterialShadingModel::Foliage)
@@ -1063,7 +1086,7 @@
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,
                             .shaderSlot = rangeShaderSlot,
-                            .castShadow = castShadow,
+                            .castShadow = castShadow && rangeShaderSlot != GlassThinProgramSlot,
                             .shadowCacheMode = renderer.shadowCacheMode,
                             // The foliage stream is drawn after opaque geometry. Route
                             // blend here until transparent draws have a sorted stream.
@@ -2444,8 +2467,22 @@
                         }
                     } else if (record.materialFromRenderer ||
                                (renderer->materialOverride && record.materialIndex == 0)) {
-                        // Imported mesh source data is released after upload. Scale and
-                        // offset can still be edited using the retained GPU material.
+                        // Imported geometry can be released; texture identity and material
+                        // authoring data remain available for live glass edits.
+                        const auto resource = renderer->mesh.resource();
+                        if (resource && usesGlassThin(renderer->material.pbr)) {
+                            Mesh retainedMesh;
+                            retainedMesh.sourcePath = resource->sourcePath;
+                            const auto updated = packMaterial(renderer->material.pbr, retainedMesh, nullptr, resource.get());
+                            const std::uint32_t glassSlot = record.materialFromRenderer ? record.materialIndex : 0;
+                            auto& destination = materials[record.materialTableOffset + glassSlot];
+                            if (!sameMaterial(destination, updated)) {
+                                displacementChanged |= destination.displacementParams != updated.displacementParams;
+                                destination = updated;
+                                materialChanged = true;
+                            }
+                        }
+                        // Displacement remains editable on non-transmissive materials too.
                         const std::uint32_t slot = record.materialFromRenderer ? record.materialIndex : 0;
                         GPUMaterialData& destination = materials[record.materialTableOffset + slot];
                         const float scale = renderer->material.pbr.displacementScale;

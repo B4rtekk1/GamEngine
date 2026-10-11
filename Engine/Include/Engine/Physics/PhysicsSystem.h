@@ -6,6 +6,8 @@
 
 #include <optional>
 #include <memory>
+#include <span>
+#include <vector>
 
 namespace Engine {
     class Scene;
@@ -15,6 +17,14 @@ namespace Engine {
         Vec3 point;
         Vec3 normal;
         float distance{};
+    };
+
+    /** Runtime-only shot diagnostics; positions remain valid after a target is destroyed. */
+    struct BulletImpact final {
+        Vec3 origin;
+        Vec3 point;
+        Vec3 normal;
+        ObjectId target{NullObjectId};
     };
 
     /**
@@ -36,7 +46,8 @@ namespace Engine {
         void setGravity(Vec3 gravity) noexcept { gravity_ = gravity; }
 
         [[nodiscard]] std::optional<RaycastHit> raycast(
-            Scene &scene, Vec3 origin, Vec3 direction, float maxDistance = 1000.0F) const; //NOLINT
+            Scene &scene, Vec3 origin, Vec3 direction, float maxDistance = 1000.0F,
+            ObjectId ignoredActor = NullObjectId) const; //NOLINT
 
     private:
         struct BroadPhaseCache;
@@ -62,14 +73,23 @@ namespace Engine {
         [[nodiscard]] std::optional<RaycastHit> raycast(
             Vec3 origin, Vec3 direction, float maxDistance = 1000.0F) const; //NOLINT
 
+        /** Fires a hitscan shot and retains the most recent 128 surface impacts. */
+        [[nodiscard]] std::optional<RaycastHit> shootRay(
+            Vec3 origin, Vec3 direction, float maxDistance = 1000.0F,
+            ObjectId ignoredActor = NullObjectId); //NOLINT
+
+        [[nodiscard]] std::span<const BulletImpact> bulletImpacts() const noexcept { return bulletImpacts_; }
+        void clearBulletImpacts() noexcept { bulletImpacts_.clear(); }
+
     private:
         friend class Application;
         friend class Scene;
 
         void update(float deltaTime) const;
-        void reset() const noexcept { system_.reset(); }
+        void reset() noexcept { system_.reset(); clearBulletImpacts(); }
 
         Scene *scene_;
         PhysicsSystem system_{};
+        std::vector<BulletImpact> bulletImpacts_;
     };
 } // namespace Engine

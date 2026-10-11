@@ -3,6 +3,7 @@
 
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Assets/Content.h"
+#include "Engine/Core/SceneCamera.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 
 #include <cctype>
@@ -56,6 +57,12 @@ namespace Engine {
 
     Scene::Scene() : physics_(*this) {
         buildDefaultFont(fontAtlas_);
+    }
+
+    std::optional<Camera> Scene::primaryViewCamera(const float aspectOverride) {
+        const auto primary = primaryCamera();
+        if (!primary.valid()) return std::nullopt;
+        return makeSceneCamera(registry_, findEntity(primary.id()), aspectOverride);
     }
 
     Actor Scene::primaryCamera() noexcept {

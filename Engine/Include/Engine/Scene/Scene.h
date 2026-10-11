@@ -19,6 +19,7 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Physics/PhysicsSystem.h"
+#include "Engine/Core/Camera.h"
 
 #include <memory>
 #include <algorithm>
@@ -224,6 +225,8 @@ namespace Engine {
 
         /** Returns the primary camera actor, or an invalid Actor when none is marked primary. */
         [[nodiscard]] Actor primaryCamera() noexcept;
+        /** World-space camera shared by shooting and viewport diagnostics. */
+        [[nodiscard]] std::optional<Camera> primaryViewCamera(float aspectOverride = 0.0F);
 
         /** Returns the enabled directional Main Light actor, or an invalid Actor when none is active. */
         [[nodiscard]] Actor activeDirectionalLight() noexcept;

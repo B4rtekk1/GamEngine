@@ -19,6 +19,8 @@ namespace Engine {
 
         [[nodiscard]] Entity createCube();
 
+        [[nodiscard]] Entity createGlass();
+
         [[nodiscard]] Entity createPlane();
 
         [[nodiscard]] Entity createSphere();

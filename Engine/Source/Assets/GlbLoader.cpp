@@ -112,9 +112,7 @@ namespace Engine::Assets {
             return contains_any(label, {"foliage", "grass", "leaf", "plant", "thatch", "vegetation"});
         }
 
-        void import_texture_transform(PBRMaterial &material, const MaterialTextureSlot slot,
-                                      const cgltf_texture_view &view) {
-            auto &target = material.textureTransforms[static_cast<std::size_t>(slot)];
+        void import_texture_transform(TextureCoordinateTransform& target, const cgltf_texture_view& view) {
             target.texCoord = static_cast<std::uint8_t>(std::clamp(view.texcoord, 0, 1));
             if (!view.has_transform) return;
             target.offsetX = view.transform.offset[0];
@@ -124,6 +122,11 @@ namespace Engine::Assets {
             target.rotation = view.transform.rotation;
             if (view.transform.has_texcoord)
                 target.texCoord = static_cast<std::uint8_t>(std::clamp(view.transform.texcoord, 0, 1));
+        }
+
+        void import_texture_transform(PBRMaterial& material, const MaterialTextureSlot slot,
+                                      const cgltf_texture_view& view) {
+            import_texture_transform(material.textureTransforms[static_cast<std::size_t>(slot)], view);
         }
 
         [[nodiscard]] std::vector<std::uint8_t> decode_base64(std::string_view source) {
@@ -348,6 +351,22 @@ namespace Engine::Assets {
                 material.emissiveIntensity = source.has_emissive_strength
                                                  ? source.emissive_strength.emissive_strength
                                                  : 1.0F;
+                if (source.has_ior) material.ior = source.ior.ior;
+                if (source.has_transmission) {
+                    material.transmission = source.transmission.transmission_factor;
+                    material.transmissionTexture = image_index(data, source.transmission.transmission_texture);
+                    import_texture_transform(material.glassTextureTransforms[0], source.transmission.transmission_texture);
+                }
+                if (source.has_volume) {
+                    material.thickness = source.volume.thickness_factor;
+                    material.thicknessTexture = image_index(data, source.volume.thickness_texture);
+                    import_texture_transform(material.glassTextureTransforms[1], source.volume.thickness_texture);
+                    material.attenuationColor = {source.volume.attenuation_color[0], source.volume.attenuation_color[1],
+                                                 source.volume.attenuation_color[2], 1.0F};
+                    // cgltf represents the omitted (infinite) distance as FLT_MAX.
+                    material.attenuationDistance = source.volume.attenuation_distance == std::numeric_limits<float>::max()
+                        ? 0.0F : source.volume.attenuation_distance;
+                }
                 if (source.has_specular) {
                     material.specularTexture = image_index(data, source.specular.specular_texture);
                     import_texture_transform(material, MaterialTextureSlot::Specular, source.specular.specular_texture);
@@ -394,10 +413,9 @@ namespace Engine::Assets {
                 material.doubleSided = source.double_sided != 0;
                 // An explicit opacity texture is a cutout mask even when the exporter
                 // omitted glTF's alphaMode.  This is the normal Quixel vegetation path.
-                const bool foliage = is_foliage_label(source) || material.opacityTexture >= 0 ||
-                                     (material.doubleSided && (
-                                          material.alphaMode == AlphaMode::Mask || material.alphaMode ==
-                                          AlphaMode::Blend));
+                const bool foliage = material.transmission <= 0.0F &&
+                    (is_foliage_label(source) || material.opacityTexture >= 0 ||
+                     (material.doubleSided && (material.alphaMode == AlphaMode::Mask || material.alphaMode == AlphaMode::Blend)));
                 if (foliage) {
                     material.shadingModel = MaterialShadingModel::Foliage;
                     material.vertexColorUsage = VertexColorUsage::FoliageData;

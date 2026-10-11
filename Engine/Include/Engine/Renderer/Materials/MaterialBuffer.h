@@ -47,5 +47,12 @@ namespace Engine {
         std::array<glm::vec4, 8> waterWaves{};
         std::array<glm::vec4, 8> waterWaveMotion{};
         glm::uvec4 waterWaveCount{};
+        // transmission, IOR, thickness, dirt intensity.
+        glm::vec4 glassParams{};
+        glm::vec4 glassAttenuation{}; // RGB attenuation colour, distance.
+        glm::ivec4 glassTextureIndices{-1};
+        glm::ivec4 glassTextureCoordinateSets{};
+        std::array<glm::vec4, 3> glassTextureTransforms{};
+        std::array<glm::vec4, 3> glassTextureRows1{};
     };
 } // namespace Engine

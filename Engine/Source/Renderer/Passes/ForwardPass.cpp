@@ -96,7 +96,7 @@ namespace Engine {
             // immutable opaque scene.  Building a forward-compatible pipeline
             // here produces a validation warning (velocity target mismatch) and
             // can never be selected by a draw loop.
-            if (index == materialShaderIndex(MaterialShader::Water)) {
+            if (index == materialShaderIndex(MaterialShader::Water) || index == GlassThinProgramSlot) {
                 continue;
             }
             GraphicsPipelineOptions materialOptions = options;

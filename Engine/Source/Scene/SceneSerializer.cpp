@@ -70,6 +70,7 @@ namespace Engine {
         constexpr std::uint32_t WaterExecutionTierFormatVersion = 25;
         constexpr std::uint32_t DisplacementFormatVersion = 27;
         constexpr std::uint32_t MaterialDisplacementFormatVersion = 28;
+        constexpr std::uint32_t GlassMaterialFormatVersion = 29;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -324,6 +325,21 @@ namespace Engine {
             writeFloat(output, material.displacementScale);
             output << ' ';
             writeFloat(output, material.displacementOffset);
+            output << ' '; writeFloat(output, material.transmission);
+            output << ' '; writeFloat(output, material.ior);
+            output << ' '; writeFloat(output, material.thickness);
+            output << ' '; writeColorRgba(output, material.attenuationColor);
+            output << ' '; writeFloat(output, material.attenuationDistance);
+            output << ' '; writeFloat(output, material.dirtIntensity);
+            output << ' ' << material.transmissionTexture << ' ' << material.thicknessTexture << ' ' << material.dirtTexture;
+            for (const auto& uv : material.glassTextureTransforms) {
+                output << ' ' << static_cast<unsigned>(uv.texCoord);
+                output << ' '; writeFloat(output, uv.offsetX);
+                output << ' '; writeFloat(output, uv.offsetY);
+                output << ' '; writeFloat(output, uv.scaleX);
+                output << ' '; writeFloat(output, uv.scaleY);
+                output << ' '; writeFloat(output, uv.rotation);
+            }
         }
 
         PBRMaterial readMaterial(std::istream &input, const std::uint32_t version) {
@@ -354,6 +370,34 @@ namespace Engine {
             if (version >= DisplacementFormatVersion) {
                 material.displacementScale = readFloat(input, "material displacement scale");
                 material.displacementOffset = readFloat(input, "material displacement offset");
+            }
+            if (version >= GlassMaterialFormatVersion) {
+                material.transmission = readFloat(input, "glass transmission");
+                material.ior = readFloat(input, "glass IOR");
+                material.thickness = readFloat(input, "glass thickness");
+                material.attenuationColor = readColorRgba(input, "glass attenuation color");
+                material.attenuationDistance = readFloat(input, "glass attenuation distance");
+                material.dirtIntensity = readFloat(input, "glass dirt intensity");
+                material.transmissionTexture = read<std::int32_t>(input, "glass transmission texture");
+                material.thicknessTexture = read<std::int32_t>(input, "glass thickness texture");
+                material.dirtTexture = read<std::int32_t>(input, "glass dirt texture");
+                for (auto& uv : material.glassTextureTransforms) {
+                    const unsigned set = read<unsigned>(input, "glass UV set");
+                    if (set > 1) invalidScene("invalid glass UV set");
+                    uv.texCoord = static_cast<std::uint8_t>(set);
+                    uv.offsetX = readFloat(input, "glass UV offset X");
+                    uv.offsetY = readFloat(input, "glass UV offset Y");
+                    uv.scaleX = readFloat(input, "glass UV scale X");
+                    uv.scaleY = readFloat(input, "glass UV scale Y");
+                    uv.rotation = readFloat(input, "glass UV rotation");
+                }
+                if (material.transmission < 0.0F || material.transmission > 1.0F || material.ior < 1.0F ||
+                    material.thickness < 0.0F || material.attenuationDistance < 0.0F ||
+                    material.dirtIntensity < 0.0F || material.dirtIntensity > 1.0F ||
+                    material.attenuationColor.r() < 0.0F || material.attenuationColor.r() > 1.0F ||
+                    material.attenuationColor.g() < 0.0F || material.attenuationColor.g() > 1.0F ||
+                    material.attenuationColor.b() < 0.0F || material.attenuationColor.b() > 1.0F)
+                    invalidScene("invalid glass material");
             }
             return material;
         }
@@ -1426,7 +1470,7 @@ namespace Engine {
             version != TerrainMaterialLayersFormatVersion &&
             version != WaterBodyFormatVersion &&
             version != WaterExecutionPolicyFormatVersion &&
-            version != WaterExecutionTierFormatVersion && version != FormatVersion - 2 &&
+            version != WaterExecutionTierFormatVersion && version != 26 && version != FormatVersion - 2 &&
             version != FormatVersion - 1 &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));

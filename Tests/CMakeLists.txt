@@ -40,7 +40,7 @@ target_include_directories(RenderGraphTests PRIVATE "${PROJECT_SOURCE_DIR}/Engin
 gameengine_enable_warnings(RenderGraphTests)
 gameengine_enable_sanitizers(RenderGraphTests)
 
-add_executable(PhysicsMeshTests PhysicsMeshTests.cpp PhysXPhysicsTests.cpp ScriptSystemTests.cpp)
+add_executable(PhysicsMeshTests PhysicsMeshTests.cpp PhysXPhysicsTests.cpp ScriptSystemTests.cpp GlassMaterialTests.cpp CameraControllerTests.cpp)
 target_link_libraries(PhysicsMeshTests PRIVATE Engine GTest::gtest_main)
 gameengine_enable_warnings(PhysicsMeshTests)
 gameengine_enable_sanitizers(PhysicsMeshTests)

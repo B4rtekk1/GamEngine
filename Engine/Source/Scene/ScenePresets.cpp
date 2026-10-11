@@ -216,6 +216,28 @@ namespace Engine {
         return entity;
     }
 
+    Entity ScenePreset::createGlass() {
+        constexpr float GlassThickness = 0.01F;
+        // A slight tint and surface haze keep the sample pane readable even
+        // when viewed head-on against a uniform background.
+        auto &object = createMeshObject("Glass", cubeMesh_,
+                                       PBRMaterial{
+                                           .baseColor = {0.92F, 0.98F, 0.95F},
+                                           .metallic = 0.0F,
+                                           .roughness = 0.12F,
+                                           .ior = 1.5F,
+                                           .transmission = 0.96F,
+                                           .thickness = GlassThickness,
+                                           .attenuationColor = {0.80F, 0.95F, 0.88F},
+                                           .attenuationDistance = 0.10F,
+                                           .dirtIntensity = 0.05F,
+                                       });
+        object.setPosition({0.0F, 1.0F, 0.0F});
+        object.setScale({1.0F, 2.0F, GlassThickness});
+        object.add<ColliderComponent>();
+        return object.entity();
+    }
+
     Entity ScenePreset::createPlane() {
         auto &object = createMeshObject("Plane", planeMesh_);
         object.setScale({EditorPlaneScale, 1, EditorPlaneScale});

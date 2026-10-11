@@ -136,21 +136,10 @@
                         sceneFrameDataCache.hasWind = true;
                     });
                 if (data.primaryCamera != NullEntity) {
-                    const Transform& cameraTransform = readRegistry.get<Transform>(data.primaryCamera);
-                    sceneFrameDataCache.primaryCameraPosition = Vec3{glm::vec3{cameraTransform.worldMatrix().native()[3]}};
-                    sceneFrameDataCache.primaryCameraYaw = cameraTransform.rotation.y();
-                    sceneFrameDataCache.primaryCameraPitch = cameraTransform.rotation.x();
-                    Entity current = data.primaryCamera;
-                    while (readRegistry.has<ParentComponent>(current)) {
-                        const UUID parentUuid = readRegistry.get<ParentComponent>(current).parentUuid;
-                        const auto parent = sceneFrameDataCache.entitiesByUuid.find(parentUuid);
-                        if (parent == sceneFrameDataCache.entitiesByUuid.end() ||
-                            !readRegistry.has<Transform>(parent->second)) break;
-                        current = parent->second;
-                        const Transform& parentTransform = readRegistry.get<Transform>(current);
-                        sceneFrameDataCache.primaryCameraYaw += parentTransform.rotation.y();
-                        sceneFrameDataCache.primaryCameraPitch += parentTransform.rotation.x();
-                    }
+                    const auto pose = sceneCameraPose(readRegistry, data.primaryCamera);
+                    sceneFrameDataCache.primaryCameraPosition = pose.position;
+                    sceneFrameDataCache.primaryCameraYaw = pose.yaw;
+                    sceneFrameDataCache.primaryCameraPitch = pose.pitch;
                 }
                 sceneFrameDataCache.data = std::move(data);
                 sceneFrameDataCache.lightRevision = lightRevision;
@@ -849,7 +838,7 @@
                 meshletCullSets[currentFrame] != VK_NULL_HANDLE;
             if (meshletForwardReady) {
                 for (const InstanceBatch& batch : instanceBatches) {
-                    if (batch.shaderSlot == materialShaderIndex(MaterialShader::Water)) continue;
+                    if (batch.shaderSlot == materialShaderIndex(MaterialShader::Water) || batch.shaderSlot == GlassThinProgramSlot) continue;
                     // Meshlet commands currently mix both face modes in one
                     // shader bin. Two-sided materials need the indexed lists.
                     if (batch.meshletCount == 0 || batch.shaderSlot >= MaterialShaderCount ||
@@ -1682,7 +1671,7 @@
                 if (meshletForwardReady)
                     vkCmdBindIndexBuffer(buffer, meshletIndexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
                 for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
-                    if (!activeShaderSlots.test(shader) || shader == materialShaderIndex(MaterialShader::Water)) continue;
+                    if (!activeShaderSlots.test(shader) || (shader == materialShaderIndex(MaterialShader::Water) || shader == GlassThinProgramSlot)) continue;
                     const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
                     if (meshletForwardReady) {
                         const auto commandOffset = static_cast<VkDeviceSize>(shader) * meshletVisibleCapacity *
@@ -2016,7 +2005,7 @@
                 vkCmdBindIndexBuffer(commandBuffer, meshletIndexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 if (!activeShaderSlots.test(shader)) continue;
-                if (shader == materialShaderIndex(MaterialShader::Water)) continue;
+                if ((shader == materialShaderIndex(MaterialShader::Water) || shader == GlassThinProgramSlot)) continue;
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
                 if (meshletForwardReady) {
                     const auto commandOffset = static_cast<VkDeviceSize>(shader) * meshletVisibleCapacity *
@@ -2047,7 +2036,8 @@
             // source would let the later water pass incorrectly cover it.
             const bool hasLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
             const bool hasVirtualWater = virtualWaterRenderer.active();
-            const bool needsWaterComposite = hasLegacyWater || hasVirtualWater;
+            const bool hasGlass = activeShaderSlots.test(GlassThinProgramSlot);
+            const bool needsWaterComposite = hasLegacyWater || hasVirtualWater || hasGlass;
             if (!needsWaterComposite) {
                 if (particleSystem && cameraController.camera()) {
                     const Particles::ParticleFrameData particleFrame{
@@ -2189,8 +2179,32 @@
                     waterPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
                                    commandOffset, countOffset);
                 }
+                if (hasGlass) {
+                    WaterPass::end(commandBuffer);
+                    // Water belongs behind the glass snapshot; refresh only when needed.
+                    if (hasLegacyWater || hasVirtualWater)
+                        copyGlassBackground(commandBuffer, hdrBuffer.image(), opaqueSceneColor.image(),
+                            swapchain.extent(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    // The previous dynamic rendering scope wrote HDR/velocity.
+                    vkCmdPipelineBarrier2(commandBuffer, &waterDependency);
+                    glassPass.begin(commandBuffer,
+                        msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(), depthBuffer.imageView(),
+                        velocityBuffer.imageView(), msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
+                        msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE, swapchain.extent(),
+                        shadowPass.descriptorSet(currentFrame), currentFrame, vertexBuffer.handle(), indexBuffer.handle());
+                    const auto glassCommandOffset = static_cast<VkDeviceSize>(GlassThinProgramSlot) *
+                        gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                    const auto glassCountOffset = static_cast<VkDeviceSize>(GlassThinProgramSlot) * sizeof(std::uint32_t);
+                    static const ProfileNameId glassProfileName = Profiler::registerName("GlassThin");
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, glassProfileName);
+                    glassPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
+                                   glassCommandOffset, glassCountOffset);
+                    glassPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), foliageIndirectDraws[currentFrame],
+                                   glassCommandOffset, glassCountOffset);
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                }
                 // Particles use a compatible pipeline and can be composited
-                // after water. The outline pipeline belongs to the lighting
+                // after water and glass. The outline pipeline belongs to the lighting
                 // render pass and was recorded before ending that pass.
                 if (particleSystem && cameraController.camera()) {
                     const Particles::ParticleFrameData particleFrame{
@@ -2272,7 +2286,7 @@
                     // Scene View will receive the same dedicated post-opaque
                     // WaterPass when its viewport render graph is split. Do
                     // not accidentally run water through its opaque pass.
-                    if (shader == materialShaderIndex(MaterialShader::Water)) continue;
+                    if ((shader == materialShaderIndex(MaterialShader::Water) || shader == GlassThinProgramSlot)) continue;
                     const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
                         sizeof(VkDrawIndexedIndirectCommand);
                     const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
@@ -2348,7 +2362,8 @@
 
                 const bool hasSceneLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
                 const bool hasSceneVirtualWater = sceneVirtualWaterRenderer.active();
-                if (hasSceneLegacyWater || hasSceneVirtualWater) {
+                const bool hasSceneGlass = activeShaderSlots.test(GlassThinProgramSlot);
+                if (hasSceneLegacyWater || hasSceneVirtualWater || hasSceneGlass) {
                     const VkImageMemoryBarrier2 beforeCopy[] = {
                         {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -2397,6 +2412,7 @@
                         gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
                     const auto countOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
                         sizeof(std::uint32_t);
+                    if (hasSceneLegacyWater || hasSceneVirtualWater) {
                     static const ProfileNameId sceneWaterPrepassProfileName =
                         Profiler::registerName("Scene Virtual Water Prepass");
                     static const ProfileNameId sceneWaterShadeProfileName =
@@ -2412,6 +2428,45 @@
                     sceneVirtualWaterRenderer.recordComposite(commandBuffer, currentFrame,
                         sceneDescriptorPass.descriptorSet(currentFrame));
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                    }
+                    if (hasSceneGlass) {
+                        if (hasSceneVirtualWater)
+                            copyGlassBackground(commandBuffer, sceneViewportTarget.color().image(), sceneOpaqueColor.image(),
+                                sceneViewportTarget.extent(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                        VkImageMemoryBarrier2 toGlass{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        toGlass.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                        toGlass.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                        toGlass.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                        toGlass.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                        toGlass.oldLayout = hasSceneVirtualWater ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        toGlass.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        toGlass.srcQueueFamilyIndex = toGlass.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        toGlass.image = sceneViewportTarget.color().image();
+                        toGlass.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo glassDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        glassDependency.imageMemoryBarrierCount = 1;
+                        glassDependency.pImageMemoryBarriers = &toGlass;
+                        vkCmdPipelineBarrier2(commandBuffer, &glassDependency);
+                        sceneGlassPass.begin(commandBuffer, sceneViewportTarget.color().imageView(),
+                            sceneViewportDepthBuffer.imageView(), VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE,
+                            sceneViewportTarget.extent(), sceneDescriptorPass.descriptorSet(currentFrame), currentFrame,
+                            vertexBuffer.handle(), indexBuffer.handle());
+                        const auto glassCommandOffset = static_cast<VkDeviceSize>(GlassThinProgramSlot) *
+                            gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                        const auto glassCountOffset = static_cast<VkDeviceSize>(GlassThinProgramSlot) * sizeof(std::uint32_t);
+                        sceneGlassPass.draw(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                            sceneIndirectDraws[currentFrame], glassCommandOffset, glassCountOffset);
+                        sceneGlassPass.draw(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                            sceneFoliageIndirectDraws[currentFrame], glassCommandOffset, glassCountOffset);
+                        GlassPass::end(commandBuffer);
+                        toGlass.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                        toGlass.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                        toGlass.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                        toGlass.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                        toGlass.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        toGlass.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        vkCmdPipelineBarrier2(commandBuffer, &glassDependency);
+                    }
                 }
             }
 
@@ -2768,6 +2823,7 @@
             forwardPass.destroy();
             lightingForwardPass.destroy();
             waterPass.destroy();
+            glassPass.destroy();
             directionalVisibilityPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();

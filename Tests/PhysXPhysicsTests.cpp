@@ -10,6 +10,7 @@
 #include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Core/SceneCamera.h"
 
 #include <stdexcept>
 #include <filesystem>
@@ -17,6 +18,95 @@
 #include <sstream>
 
 namespace {
+
+TEST(PhysXPhysics, HitscanRecordsOnlySurfaceHitsAndKeepsTheLatest128) {
+    Engine::Scene scene;
+    auto target = scene.createActor("Target");
+    target.setPosition({5.0F, 0.0F, 0.0F});
+    target.addBoxCollider({0.5F, 0.5F, 0.5F});
+
+    ASSERT_TRUE(scene.physics().raycast({}, {1.0F, 0.0F, 0.0F}, 10.0F));
+    EXPECT_TRUE(scene.physics().bulletImpacts().empty());
+    EXPECT_FALSE(scene.physics().shootRay({}, {-1.0F, 0.0F, 0.0F}, 10.0F));
+    EXPECT_FALSE(scene.physics().shootRay({}, {1.0F, 0.0F, 0.0F}, 4.0F));
+    EXPECT_TRUE(scene.physics().bulletImpacts().empty());
+
+    const auto hit = scene.physics().shootRay({}, {1.0F, 0.0F, 0.0F}, 10.0F);
+    ASSERT_TRUE(hit);
+    ASSERT_EQ(scene.physics().bulletImpacts().size(), 1);
+    const auto& impact = scene.physics().bulletImpacts().front();
+    EXPECT_EQ(impact.target, target.id());
+    EXPECT_NEAR(impact.point.x(), 4.5F, 0.001F);
+    EXPECT_NEAR(impact.normal.x(), -1.0F, 0.001F);
+
+    for (int index = 0; index < 130; ++index) {
+        ASSERT_TRUE(scene.physics().shootRay({0.0F, 0.001F * index, 0.0F}, {1.0F, 0.0F, 0.0F}, 10.0F));
+    }
+    const auto impacts = scene.physics().bulletImpacts();
+    ASSERT_EQ(impacts.size(), 128);
+    EXPECT_NEAR(impacts.front().point.y(), 0.002F, 0.001F);
+    EXPECT_NEAR(impacts.back().point.y(), 0.129F, 0.001F);
+    target.destroy();
+    EXPECT_NEAR(scene.physics().bulletImpacts().back().point.x(), 4.5F, 0.001F);
+    scene.physics().clearBulletImpacts();
+    EXPECT_TRUE(scene.physics().bulletImpacts().empty());
+}
+
+TEST(PhysXPhysics, RestoringSceneClearsRuntimeBulletImpacts) {
+    Engine::Scene scene;
+    const auto target = scene.createActor("Target");
+    target.setPosition({5.0F, 0.0F, 0.0F});
+    target.addBoxCollider({0.5F, 0.5F, 0.5F});
+    std::ostringstream snapshot;
+    Engine::SceneSerializer::save(scene, snapshot);
+    ASSERT_TRUE(scene.physics().shootRay({}, {1.0F, 0.0F, 0.0F}, 10.0F));
+    std::istringstream input{snapshot.str()};
+    Engine::SceneSerializer::load(scene, input);
+    EXPECT_TRUE(scene.physics().bulletImpacts().empty());
+}
+
+TEST(PhysXPhysics, ParentedCameraShotsUseWorldPositionAndExcludeThePlayerCollider) {
+    Engine::Scene scene;
+    const auto player = scene.createActor("Player");
+    player.setPosition({10.0F, 3.0F, 4.0F});
+    player.setRotation({0.0F, 45.0F, 0.0F});
+    player.addSphereCollider(2.0F);
+    const auto camera = scene.createCamera("Camera");
+    camera.setParent(player, Engine::ParentMode::KeepLocal);
+    camera.setPosition({0.0F, 0.5F, 0.0F});
+    camera.setRotation({-10.0F, -90.0F, 0.0F});
+    const auto view = scene.primaryViewCamera(16.0F / 9.0F);
+    ASSERT_TRUE(view);
+    EXPECT_NEAR(view->position().x(), 10.0F, 0.001F);
+    EXPECT_NEAR(view->position().y(), 3.5F, 0.001F);
+    EXPECT_NEAR(view->position().z(), 4.0F, 0.001F);
+    EXPECT_GT(view->forward().x(), 0.5F);
+    EXPECT_LT(view->forward().z(), -0.5F);
+    const auto target = scene.createActor("Target");
+    target.setPosition(view->position() + view->forward() * 10.0F);
+    target.addSphereCollider(0.5F);
+    const auto hit = scene.physics().shootRay(view->position(), view->forward(), 100.0F, player.id());
+    ASSERT_TRUE(hit);
+    EXPECT_EQ(hit->actor.id(), target.id());
+    EXPECT_NEAR(hit->distance, 9.5F, 0.01F);
+    const auto clip = view->projectionMatrix().native() * view->viewMatrix().native() *
+        glm::vec4{hit->point.native(), 1.0F};
+    EXPECT_NEAR(clip.x / clip.w, 0.0F, 0.001F);
+    EXPECT_NEAR(clip.y / clip.w, 0.0F, 0.001F);
+}
+
+TEST(PhysXPhysics, ExcludingAShooterSkipsItsColliderRatherThanStoppingTheRay) {
+    Engine::Scene scene;
+    const auto player = scene.createActor("Player");
+    player.setPosition({2.0F, 0.0F, 0.0F});
+    player.addBoxCollider({0.5F, 0.5F, 0.5F});
+    const auto target = scene.createActor("Target");
+    target.setPosition({5.0F, 0.0F, 0.0F});
+    target.addBoxCollider({0.5F, 0.5F, 0.5F});
+    const auto hit = scene.physics().shootRay({}, {1.0F, 0.0F, 0.0F}, 10.0F, player.id());
+    ASSERT_TRUE(hit);
+    EXPECT_EQ(hit->actor.id(), target.id());
+}
 
 TEST(Scene, GameObjectsDoNotReceiveMeshRenderersUntilTheyBecomeMeshObjects) {
     Engine::Scene scene;

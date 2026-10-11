@@ -2,6 +2,7 @@
 
 #include "Engine/Core/Time.h"
 #include "Engine/Core/Transform.h"
+#include "Engine/Core/SceneCamera.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Input/Input.h"
@@ -34,11 +35,13 @@ namespace Engine {
         }
         CameraComponent *activeCamera = nullptr;
         Transform *activeTransform = nullptr;
+        Entity activeCameraEntity = NullEntity;
         registry.view<CameraComponent, Transform>(
-            [&](const Entity, CameraComponent &component, Transform &transform) {
+            [&](const Entity entity, CameraComponent &component, Transform &transform) {
                 if (!activeCamera && component.primary) {
                     activeCamera = &component;
                     activeTransform = &transform;
+                    activeCameraEntity = entity;
                 }
             });
 
@@ -47,12 +50,10 @@ namespace Engine {
             return;
         }
 
-        const CameraComponent &component = *activeCamera;
-        Transform &transform = *activeTransform;
-        camera_.emplace(Degrees{component.fieldOfView}, component.aspectRatio,
-                        component.nearClip, component.farClip);
-        camera_->setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()},
-                             Degrees{transform.rotation.z()});
+        // Commit through Registry so transform and scene-frame caches observe
+        // camera motion instead of retaining the previous view indefinitely.
+        Transform transform = *activeTransform;
+        camera_ = makeSceneCamera(registry, activeCameraEntity);
 
         const bool flyMode = Input::cursorMode() == CursorMode::Locked;
         const bool moveFast = Input::keyDown(KeyCode::LeftShift) ||
@@ -81,14 +82,25 @@ namespace Engine {
         if (flyMode && Input::keyDown(KeyCode::Q)) {
             movement -= camera_->up();
         }
+        Vec3 worldTranslation{};
         if (movement.length() > Zero) {
-            transform.position += movement.normalized() *
+            worldTranslation += movement.normalized() *
             (MovementSpeed * (moveFast ? EditorFastMovementMultiplier : 1.0F) *
              static_cast<float>(Time::deltaTime()));
         }
         if (flyMode) {
-            transform.position += camera_->forward() * (Input::mouseWheel() * MouseWheelSpeed);
+            worldTranslation += camera_->forward() * (Input::mouseWheel() * MouseWheelSpeed);
         }
+        Vec3 localTranslation = worldTranslation;
+        if (registry.has<ParentComponent>(activeCameraEntity)) {
+            const auto parent = registry.get<ParentComponent>(activeCameraEntity).runtimeParent;
+            if (registry.valid(parent) && registry.has<Transform>(parent)) {
+                const auto& parentMatrix = registry.get<Transform>(parent).worldMatrix().native();
+                if (std::abs(glm::determinant(parentMatrix)) > 1.0e-6F)
+                    localTranslation = Vec3{glm::inverse(parentMatrix) * glm::vec4{worldTranslation.native(), 0.0F}};
+            }
+        }
+        transform.position += localTranslation;
 
         if (flyMode) {
             const Vec2 delta = Input::mouseDelta();
@@ -96,6 +108,14 @@ namespace Engine {
             transform.rotation.setX(std::clamp(transform.rotation.x() - (delta.y() * MouseSensitivity),
                                                -MaxPitchDegrees, MaxPitchDegrees));
         }
+        if (transform.position.native() != activeTransform->position.native() ||
+            transform.rotation.native() != activeTransform->rotation.native()) {
+            registry.modify<Transform>(activeCameraEntity, [&](Transform& destination) {
+                destination.position = transform.position;
+                destination.rotation = transform.rotation;
+            });
+        }
+        camera_ = makeSceneCamera(registry, activeCameraEntity);
     }
 
     void CameraController::updateEditor() {

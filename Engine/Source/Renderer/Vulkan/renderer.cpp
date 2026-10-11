@@ -61,8 +61,10 @@
 #include "Engine/Math/Frustum.h"
 #include "Engine/Math/Math.h"
 #include "Engine/Core/Time.h"
+#include "Engine/Core/SceneCamera.h"
 #include "Engine/Renderer/Passes/ForwardPass.h"
 #include "Engine/Renderer/Passes/WaterPass.h"
+#include "Engine/Renderer/Passes/GlassPass.h"
 #include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Renderer/Water/VirtualWaterRenderer.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
@@ -523,7 +525,6 @@ namespace Engine {
                 drawCoreFrame();
                 return;
             }
-            TransformSystem::update(registry);
             Time::update();
             // Scene View navigation is updated before the editor UI so its
             // rendered image and gizmo overlay use the same camera state.
@@ -531,6 +532,9 @@ namespace Engine {
             if (!cameraController.editorInputEnabled()) {
                 updateCameraInput();
             }
+            // Camera input modifies local transforms; resolve them before
+            // collecting cached camera/light frame data for this frame.
+            TransformSystem::update(registry);
             updateFpsCounter();
             drawFrame();
         }

@@ -609,6 +609,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Create Cube")) {
             createdEntity = scene.createCube();
         }
+        if (ImGui::MenuItem("Create Glass")) {
+            createdEntity = scene.createGlass();
+        }
         if (ImGui::MenuItem("Create Plane")) {
             createdEntity = scene.createPlane();
         }

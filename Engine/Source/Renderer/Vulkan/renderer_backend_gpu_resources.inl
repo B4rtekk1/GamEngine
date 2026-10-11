@@ -1486,6 +1486,7 @@
 
         void createSceneVirtualWaterResources() {
             sceneVirtualWaterRenderer.destroy();
+            sceneGlassPass.destroy();
             sceneOpaqueColor.destroy();
             sceneOpaqueColor.create(vulkanDevice.physical(), device, sceneViewportTarget.extent(),
                                     vulkanDevice.allocator());
@@ -1502,6 +1503,11 @@
                 sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
             std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> noHiZInfos{};
             noHiZInfos.fill(depthInfo);
+            sceneGlassPass.create(device, HdrBuffer::Format, sampledDepth.format(),
+                VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE,
+                sceneDescriptorPass.descriptorSetLayout(), assetManager, false,
+                {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                depthInfo);
             // Bind depth to keep the descriptor valid, but deliberately turn
             // Hi-Z off: the Scene View owns no independent pyramid yet.
             sceneVirtualWaterRenderer.create(
@@ -1545,6 +1551,7 @@
 
         void destroySceneViewportResources() noexcept {
             sceneVirtualWaterRenderer.destroy();
+            sceneGlassPass.destroy();
             sceneOpaqueColor.destroy();
             sceneOpaqueColorInitialized = false;
             sceneViewportDepthBuffer.destroy();

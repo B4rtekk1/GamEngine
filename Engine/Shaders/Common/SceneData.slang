@@ -91,6 +91,12 @@ struct MaterialData
     float4 waterWaves[8];
     float4 waterWaveMotion[8];
     uint4 waterWaveCount;
+    float4 glassParams;
+    float4 glassAttenuation;
+    int4 glassTextureIndices;
+    int4 glassTextureCoordinateSets;
+    float4 glassTextureTransforms[3];
+    float4 glassTextureRows1[3];
 };
 
 float2 materialTextureUv(MaterialData material, uint slot, float2 uv0, float2 uv1)

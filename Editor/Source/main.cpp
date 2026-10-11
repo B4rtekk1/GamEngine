@@ -16,6 +16,7 @@
 #include "Engine/Core/Diagnostics.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
+#include "Engine/Core/SceneCamera.h"
 #include "Engine/Input/Input.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/ECS/Components/ScriptComponent.h"

@@ -302,3 +302,25 @@ TEST(Registry, DenseChangeRevisionsFollowSwapAndPopAfterDeltaLogExpires) {
 }
 
 } // namespace
+
+TEST(Registry, RebuildsGlassBinsOnlyWhenTransmissionCrossesTheOpaqueBoundary) {
+    Engine::Registry registry;
+    const auto entity = registry.create();
+    registry.add<Engine::Transform>(entity);
+    registry.add<Engine::MeshRendererComponent>(entity);
+    const auto opaqueRevision = registry.renderTopologyRevision();
+    registry.modify<Engine::MeshRendererComponent>(entity, [](auto& renderer) {
+        renderer.material.pbr.transmission = 1.0F;
+    });
+    EXPECT_GT(registry.renderTopologyRevision(), opaqueRevision);
+    const auto glassRevision = registry.renderTopologyRevision();
+    registry.modify<Engine::MeshRendererComponent>(entity, [](auto& renderer) {
+        renderer.material.pbr.ior = 1.52F;
+        renderer.material.pbr.transmission = 0.8F;
+    });
+    EXPECT_EQ(registry.renderTopologyRevision(), glassRevision);
+    registry.modify<Engine::MeshRendererComponent>(entity, [](auto& renderer) {
+        renderer.material.pbr.transmission = 0.0F;
+    });
+    EXPECT_GT(registry.renderTopologyRevision(), glassRevision);
+}

@@ -172,6 +172,20 @@ function(gameengine_add_engine_shaders)
             DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" ${shader_modules}
             COMMENT "Compiling forward ${variant_name} material shader" COMMAND_EXPAND_LISTS VERBATIM)
     endforeach()
+    foreach(glass_velocity IN ITEMS 1 0)
+        if(glass_velocity)
+            set(glass_suffix "")
+        else()
+            set(glass_suffix "_no_velocity")
+        endif()
+        set(glass_output "${SHADER_OUT_DIR}/forward_glass${glass_suffix}.spv")
+        list(APPEND shader_outputs "${glass_output}")
+        add_custom_command(OUTPUT "${glass_output}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+            COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Glass/glass_thin.slang" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" ${shader_debug_options} -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D FORWARD_OUTPUT_VELOCITY=${glass_velocity} -o "${glass_output}"
+            DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Glass/glass_thin.slang" ${shader_modules}
+            COMMENT "Compiling GlassThin surface shader" COMMAND_EXPAND_LISTS VERBATIM)
+    endforeach()
     set(water_shader_source "${ENGINE_SHADER_SOURCE_DIR}/Water/water_surface.slang")
     set(water_shader_output "${SHADER_OUT_DIR}/forward_water.spv")
     list(APPEND shader_outputs "${water_shader_output}")
