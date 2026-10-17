@@ -14,7 +14,8 @@ struct VsmPageMarkingUniforms
     uint depthWidth;
     uint depthHeight;
     uint shadowQuality;
-    uint padding[2];
+    uint feedbackStride;
+    uint padding;
 };
 
 [[vk::binding(0, 0)]] Texture2D<float> receiverDepth;
@@ -69,16 +70,29 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupTh
     for (uint word = localIndex; word < REQUEST_WORD_COUNT; word += 64u)
         groupPageBits[word] = 0u;
     GroupMemoryBarrierWithGroupSync();
-    const bool inBounds = threadId.x < uniforms.depthWidth && threadId.y < uniforms.depthHeight;
-    const float depth = inBounds ? receiverDepth.Load(int3(threadId.xy, 0)) : 1.0;
+    const uint stride = max(uniforms.feedbackStride, 1u);
+    const bool inBounds = threadId.x * stride < uniforms.depthWidth &&
+                          threadId.y * stride < uniforms.depthHeight;
+    const uint2 lastPixel = uint2(uniforms.depthWidth, uniforms.depthHeight) - 1u;
+    const uint2 blockOrigin = min(threadId.xy * stride, lastPixel);
+    const uint2 samplePixel = min(blockOrigin + stride / 2u, lastPixel);
+    const uint2 blockRight = min(blockOrigin + uint2(stride - 1u, 0u), lastPixel);
+    const uint2 blockDown = min(blockOrigin + uint2(0u, stride - 1u), lastPixel);
+    const uint2 blockCorner = min(blockOrigin + uint2(stride - 1u, stride - 1u), lastPixel);
+    const float depth0 = inBounds ? receiverDepth.Load(int3(blockOrigin, 0)) : 1.0;
+    const float depth1 = inBounds ? receiverDepth.Load(int3(blockRight, 0)) : 1.0;
+    const float depth2 = inBounds ? receiverDepth.Load(int3(blockDown, 0)) : 1.0;
+    const float depth3 = inBounds ? receiverDepth.Load(int3(blockCorner, 0)) : 1.0;
+    const float depth = min(min(depth0, depth1), min(depth2, depth3));
     if (inBounds && depth < 0.999999)
     {
-        const float4 world = reconstructWorld(threadId.xy, depth);
-        // Match the resolve's 2x2 quad derivatives, including sky and odd
-        // viewport edges. Four unrelated neighbours used to request a coarser
-        // level than the resolve actually sampled at depth discontinuities.
-        const uint2 rightPixel = uint2(min(threadId.x ^ 1u, uniforms.depthWidth - 1u), threadId.y);
-        const uint2 downPixel = uint2(threadId.x, min(threadId.y ^ 1u, uniforms.depthHeight - 1u));
+        const uint2 receiverPixel = depth == depth0 ? blockOrigin :
+            (depth == depth1 ? blockRight : (depth == depth2 ? blockDown : blockCorner));
+        const float4 world = reconstructWorld(receiverPixel, depth);
+        // Use derivatives over the reduced-resolution sample footprint. The
+        // page-neighbour dilation keeps this conservative at sample boundaries.
+        const uint2 rightPixel = uint2(min(receiverPixel.x + stride, uniforms.depthWidth - 1u), receiverPixel.y);
+        const uint2 downPixel = uint2(receiverPixel.x, min(receiverPixel.y + stride, uniforms.depthHeight - 1u));
         const float rightDepth = receiverDepth.Load(int3(rightPixel, 0));
         const float downDepth = receiverDepth.Load(int3(downPixel, 0));
         const float4 rightWorld = reconstructWorld(rightPixel, rightDepth < 0.999999 ? rightDepth : depth);

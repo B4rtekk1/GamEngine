@@ -387,6 +387,7 @@
                 marking.depthWidth = swapchain.extent().width;
                 marking.depthHeight = swapchain.extent().height;
                 marking.shadowQuality = static_cast<std::uint32_t>(shadowQuality);
+                marking.feedbackStride = 2;
                 if (renderGameViewport) {
                     vsmPageMarkingUniformBuffers[currentFrame].update(&marking, sizeof(marking));
                     const auto& source = hiZBuffers[previousHiZFrame];
@@ -548,7 +549,7 @@
             sceneVsmFeedbackKey.deformationRevision = grassDeformationVersion;
             sceneVsmFeedbackKey.windRevision = sceneFrameDataCache.windRevision;
             sceneVsmFeedbackKey.animationFrame = sceneFrameDataCache.hasWind && !sceneGpu.grassInstances.empty()
-                ? submittedFrameValue : 0;
+                ? submittedFrameValue / 2U : 0;
             sceneVsmFeedbackKey.width = sceneViewportTarget.extent().width;
             sceneVsmFeedbackKey.height = sceneViewportTarget.extent().height;
             sceneVsmFeedbackKey.quality = static_cast<std::uint32_t>(shadowQuality);
@@ -565,6 +566,7 @@
                 marking.depthWidth = sceneVsmFeedbackKey.width;
                 marking.depthHeight = sceneVsmFeedbackKey.height;
                 marking.shadowQuality = sceneVsmFeedbackKey.quality;
+                marking.feedbackStride = 2;
                 vsmPageMarkingUniformBuffers[currentFrame].update(&marking, sizeof(marking));
                 const VkDescriptorImageInfo depthInfo{sceneViewportDepthBuffer.sampler(),
                     sceneViewportDepthBuffer.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
@@ -1235,8 +1237,13 @@
                     vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                             vsmPageMarkingPipelineLayout, 0, 1,
                                             &markingSet, 0, nullptr);
-                    vkCmdDispatch(buffer, (feedbackKey.width + 7U) / 8U,
-                                  (feedbackKey.height + 7U) / 8U, 1);
+                    constexpr std::uint32_t feedbackStride = 2;
+                    const std::uint32_t feedbackWidth =
+                        (feedbackKey.width + feedbackStride - 1U) / feedbackStride;
+                    const std::uint32_t feedbackHeight =
+                        (feedbackKey.height + feedbackStride - 1U) / feedbackStride;
+                    vkCmdDispatch(buffer, (feedbackWidth + 7U) / 8U,
+                                  (feedbackHeight + 7U) / 8U, 1);
                     const VkBufferMemoryBarrier2 markingBarrier{
                         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                         .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1989,7 +1996,7 @@
                 depthKey.deformationRevision = grassDeformationVersion;
                 depthKey.windRevision = sceneFrameDataCache.windRevision;
                 depthKey.animationFrame = sceneFrameDataCache.hasWind && !sceneGpu.grassInstances.empty()
-                    ? submittedFrameValue : 0;
+                    ? submittedFrameValue / 2U : 0;
                 depthKey.width = swapchain.extent().width;
                 depthKey.height = swapchain.extent().height;
                 hiZFeedbackKeys[currentFrame] = depthKey;

@@ -64,7 +64,11 @@ namespace Engine {
         // Kept in step with the fragment sampler so receiver requests target
         // the same quality-dependent virtual-shadow LOD.
         std::uint32_t shadowQuality{};
-        std::uint32_t padding[2]{};
+        // Marking is intentionally run on a reduced-resolution depth grid.
+        // The page-neighbour dilation keeps the result conservative at the
+        // boundaries between samples.
+        std::uint32_t feedbackStride{2};
+        std::uint32_t padding{};
     };
 
     struct alignas(16) ShadowClipConstantsGPU {
