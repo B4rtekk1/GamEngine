@@ -2,7 +2,7 @@
 Renderer::~Renderer() { shutdown(); }
 
 Renderer::Renderer(RenderConfig config)
-    : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing),
+    : optimizationFeatures_(config.features), renderPath_(config.renderPath), antialiasingLevel_(config.antialiasing),
       shadowQuality_(config.shadowQuality),
       rtContactShadowSettings_(config.rtContactShadows),
       gtaoQuality_(config.gtaoQuality), gtaoDebugView_(config.gtaoDebugView), pbrDebugView_(config.pbrDebugView),
@@ -25,6 +25,16 @@ void Renderer::setOptimizationFeatures(RenderOptimizationFeatures features) noex
 
 const RenderOptimizationFeatures& Renderer::optimizationFeatures() const noexcept {
     return optimizationFeatures_;
+}
+
+void Renderer::setRenderPath(const RenderPath path) noexcept {
+    if (renderPath_ == path) return;
+    renderPath_ = path;
+    if (backend_) backend_->markRenderSettingsChanged();
+}
+
+RenderPath Renderer::renderPath() const noexcept {
+    return renderPath_;
 }
 
 void Renderer::setAntialiasingLevel(AntialiasingLevel level) noexcept {
@@ -148,7 +158,7 @@ void Renderer::setEditorUiBackend(EditorUiBackend *backend) noexcept {
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_, gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
+    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, renderPath_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_, gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
                                          state_->assetManager, state_->forwardPass, state_->skyPass,
                                          state_->tonemapPass, state_->temporalAaPass, state_->bloomPass, state_->gtaoPass,
                                          state_->particlePipeline,

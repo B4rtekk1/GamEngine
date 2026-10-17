@@ -20,7 +20,9 @@ struct Settings { float2 projectionScale; float radiusView, falloff; uint frameI
 groupshared float depthTile[16][16];
 static const float BackgroundDepth=65500.0;
 static const float Pi=3.14159265359;
-float3 positionFromDepth(int2 pixel,float depth,uint2 size){float2 uv=(float2(pixel)+.5)/size;return float3((uv*2-1)/settings.projectionScale,-1)*depth;}
+float3 positionFromDepth(int2 pixel,float depth,float2 positionScale,float2 positionBias){
+ return float3((float2(pixel)+.5)*positionScale+positionBias,-1)*depth;
+}
 float3 safeNormalize(float3 value){return value*rsqrt(max(dot(value,value),1e-12));}
 float2 lowDiscrepancyNoise(uint2 pixel,uint frame){
  const float2 r2=float2(0.754877666,0.569840296);
@@ -35,13 +37,13 @@ half4 depthEdges(float center,float left,float right,float top,float bottom){
  edges=min(abs(edges),abs(adjusted));
  return saturate(half(1.25)-edges/max(half(center)*half(.011),half(1e-4)));
 }
-float3 reconstructNormal(int2 pixel,float center,float left,float right,float top,float bottom,uint2 size){
+float3 reconstructNormal(int2 pixel,float center,float left,float right,float top,float bottom,uint2 size,float2 positionScale,float2 positionBias){
  int2 minPixel=int2(0,0),maxPixel=int2(size)-1;
- float3 c=positionFromDepth(pixel,center,size);
- float3 l=safeNormalize(positionFromDepth(clamp(pixel+int2(-1,0),minPixel,maxPixel),left,size)-c);
- float3 r=safeNormalize(positionFromDepth(clamp(pixel+int2( 1,0),minPixel,maxPixel),right,size)-c);
- float3 t=safeNormalize(positionFromDepth(clamp(pixel+int2(0,-1),minPixel,maxPixel),top,size)-c);
- float3 b=safeNormalize(positionFromDepth(clamp(pixel+int2(0, 1),minPixel,maxPixel),bottom,size)-c);
+ float3 c=positionFromDepth(pixel,center,positionScale,positionBias);
+ float3 l=safeNormalize(positionFromDepth(clamp(pixel+int2(-1,0),minPixel,maxPixel),left,positionScale,positionBias)-c);
+ float3 r=safeNormalize(positionFromDepth(clamp(pixel+int2( 1,0),minPixel,maxPixel),right,positionScale,positionBias)-c);
+ float3 t=safeNormalize(positionFromDepth(clamp(pixel+int2(0,-1),minPixel,maxPixel),top,positionScale,positionBias)-c);
+ float3 b=safeNormalize(positionFromDepth(clamp(pixel+int2(0, 1),minPixel,maxPixel),bottom,positionScale,positionBias)-c);
  half4 edge=depthEdges(center,left,right,top,bottom);
  half4 weight=saturate(half4(edge.x*edge.z,edge.z*edge.y,edge.y*edge.w,edge.w*edge.x)+half(.01));
  float3 normal=weight.x*cross(l,t)+weight.y*cross(t,r)+weight.z*cross(r,b)+weight.w*cross(b,l);
@@ -74,7 +76,7 @@ float integrateHorizon(float horizon,float normalAngle,float normalCos){return(n
 void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_DispatchThreadID){
  uint w,h;rawAo.GetDimensions(w,h);int2 size=int2(w,h), base=int2(groupId.xy)*8-int2(4,4);
 
- for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1);float2 uv=(float2(q)+.5)/float2(size);depthTile[y][x]=horizonDepth.SampleLevel(uv,float(GTAO_HALF_RES)).r;}
+ for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1);depthTile[y][x]=horizonDepth.Load(int3(q,GTAO_HALF_RES)).r;}
  GroupMemoryBarrierWithGroupSync(); if(any(id.xy>=uint2(w,h)))return;
  int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];
 #if GTAO_HALF_RES
@@ -82,7 +84,8 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
 #endif
  if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=1;return;}
 
- float centerDepth=depth*.99999;float3 center=positionFromDepth(p,centerDepth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=settings.padding>0.5?loadViewNormal(p,uint2(w,h)):reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
+ float2 positionScale=2.0/(settings.projectionScale*float2(w,h)),positionBias=-1.0/settings.projectionScale;
+ float centerDepth=depth*.99999;float3 center=positionFromDepth(p,centerDepth,positionScale,positionBias);float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=settings.padding>0.5?loadViewNormal(p,uint2(w,h)):reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h),positionScale,positionBias);
  half2 localNoise=half2(lowDiscrepancyNoise(uint2(p),settings.frameIndex));
  half visibility=0;
 
@@ -116,26 +119,25 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
    float x=(float(step)+stepNoise)/float(steps);
    float t=x*x+minSampleDistance;
    float2 floatOffset=ray*radiusPixels*t;
-   float offsetLength2=dot(floatOffset,floatOffset);
-   uint relativeMip=uint(offsetLength2>=194.012)+uint(offsetLength2>=776.047)
-                   +uint(offsetLength2>=3104.19)+uint(offsetLength2>=12416.75);
-   relativeMip=min(relativeMip,settings.maxSampleMip);
+   float offsetLength=max(length(floatOffset),1.0);
+   float relativeMipFloat=clamp(log2(offsetLength)-3.0,0.0,float(settings.maxSampleMip));
+   uint relativeMip=uint(relativeMipFloat);
    uint selectedMip=uint(GTAO_HALF_RES)+relativeMip;
    int2 offset=int2(round(floatOffset));if(!any(offset))continue;
    int2 pixel0=clamp(p+offset,int2(0,0),size-1),pixel1=clamp(p-offset,int2(0,0),size-1);
    int2 tilePixel0=local+offset,tilePixel1=local-offset;
-   bool shared0=relativeMip==0u&&all(tilePixel0>=int2(0,0))&&all(tilePixel0<int2(16,16));
-   bool shared1=relativeMip==0u&&all(tilePixel1>=int2(0,0))&&all(tilePixel1<int2(16,16));
-   float depth0=shared0?depthTile[tilePixel0.y][tilePixel0.x]:horizonDepth.SampleLevel((float2(pixel0)+.5)/float2(size),float(selectedMip)).r;
-   float depth1=shared1?depthTile[tilePixel1.y][tilePixel1.x]:horizonDepth.SampleLevel((float2(pixel1)+.5)/float2(size),float(selectedMip)).r;
+   bool shared0=relativeMipFloat<1.0&&all(tilePixel0>=int2(0,0))&&all(tilePixel0<int2(16,16));
+   bool shared1=relativeMipFloat<1.0&&all(tilePixel1>=int2(0,0))&&all(tilePixel1<int2(16,16));
+   float depth0=shared0?depthTile[tilePixel0.y][tilePixel0.x]:relativeMipFloat<1.0?horizonDepth.Load(int3(pixel0,GTAO_HALF_RES)).r:horizonDepth.SampleLevel((float2(pixel0)+.5)/float2(size),float(GTAO_HALF_RES)+relativeMipFloat).r;
+   float depth1=shared1?depthTile[tilePixel1.y][tilePixel1.x]:relativeMipFloat<1.0?horizonDepth.Load(int3(pixel1,GTAO_HALF_RES)).r:horizonDepth.SampleLevel((float2(pixel1)+.5)/float2(size),float(GTAO_HALF_RES)+relativeMipFloat).r;
    if(depth0<BackgroundDepth){
-    float3 v=positionFromDepth(pixel0,depth0,uint2(w,h))-center;float dist2=dot(v,v);
+    float3 v=positionFromDepth(pixel0,depth0,positionScale,positionBias)-center;float dist2=dot(v,v);
     if(dist2>=1e-6){float invDistance=rsqrt(dist2);float sampleDistance=dist2*invDistance;
      half sampleHorizonCos=half(dot(v,viewDir)*invDistance);half weight=half(saturate(sampleDistance*falloffMul+falloffAdd));
      sampleHorizonCos=lerp(lowHorizon[0],sampleHorizonCos,weight);horizonCos[0]=max(horizonCos[0],sampleHorizonCos);}
    }
    if(depth1<BackgroundDepth){
-    float3 v=positionFromDepth(pixel1,depth1,uint2(w,h))-center;float dist2=dot(v,v);
+    float3 v=positionFromDepth(pixel1,depth1,positionScale,positionBias)-center;float dist2=dot(v,v);
     if(dist2>=1e-6){float invDistance=rsqrt(dist2);float sampleDistance=dist2*invDistance;
      half sampleHorizonCos=half(dot(v,viewDir)*invDistance);half weight=half(saturate(sampleDistance*falloffMul+falloffAdd));
      sampleHorizonCos=lerp(lowHorizon[1],sampleHorizonCos,weight);horizonCos[1]=max(horizonCos[1],sampleHorizonCos);}

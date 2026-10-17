@@ -204,6 +204,7 @@ namespace Engine {
     public:
         explicit Backend(Scene &scene, SDL_Window *window,
                          const RenderOptimizationFeatures &optimizationFeatures,
+                         const RenderPath &renderPath,
                          const AntialiasingLevel antialiasingLevel,
                          const ShadowQuality &shadowQuality,
                          const RtContactShadowSettings &rtContactShadowSettings,
@@ -236,6 +237,7 @@ namespace Engine {
               scene(scene),
               registry(scene.registry()),
               optimizationFeatures(optimizationFeatures),
+              renderPath(renderPath),
               antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality), rtContactShadowSettings(rtContactShadowSettings), gtaoQuality(gtaoQuality),
               gtaoDebugView(gtaoDebugView), pbrDebugView(pbrDebugView), iblQuality(iblQuality),
               shadowDebugView(shadowDebugView),

@@ -621,12 +621,14 @@
             const auto& batches = graph.queueBatches();
             auto& allocated = storage[frame];
             const auto poolFor = [this](const RenderGraph::Queue queue) {
+                const bool useAsyncTransfer = renderPath == RenderPath::AsyncCompute &&
+                    vulkanDevice.hasAsyncTransferQueue();
                 switch (queue) {
                 case RenderGraph::Queue::Graphics: return commandPool;
                 case RenderGraph::Queue::AsyncCompute:
                     return vulkanDevice.hasAsyncComputeQueue() ? asyncComputeCommandPool : commandPool;
                 case RenderGraph::Queue::Transfer:
-                    return vulkanDevice.hasAsyncTransferQueue() ? transferCommandPool : commandPool;
+                    return useAsyncTransfer ? transferCommandPool : commandPool;
                 }
                 throw std::invalid_argument("Unknown RenderGraph queue");
             };
@@ -715,6 +717,11 @@
             frameGraph.enablePassCulling();
             frameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
             frameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
+            frameGraph.setQueueFamily(RenderGraph::Queue::Transfer,
+                                      renderPath == RenderPath::AsyncCompute &&
+                                      vulkanDevice.hasAsyncTransferQueue()
+                                          ? vulkanDevice.transferQueueFamily()
+                                          : vulkanDevice.graphicsQueueFamily());
             std::vector<RenderGraph::BufferHandle> frameUploadBuffers;
             const auto importFrameUploadBuffer = [&](const char* name, const Buffer& buffer) {
                 if (buffer.handle() == VK_NULL_HANDLE || buffer.size() == 0) return;
@@ -1524,10 +1531,11 @@
                 vulkanDevice.hasAsyncComputeQueue()
                     ? vulkanDevice.computeQueueFamily() : vulkanDevice.graphicsQueueFamily());
             viewportFrameGraph.setQueueFamily(RenderGraph::Queue::Transfer,
-                vulkanDevice.hasAsyncTransferQueue()
+                renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncTransferQueue()
                     ? vulkanDevice.transferQueueFamily() : vulkanDevice.graphicsQueueFamily());
             const VkExtent2D graphExtent = swapchain.extent();
-            const bool sharedDepthReads = vulkanDevice.hasAsyncComputeQueue() &&
+            const bool sharedDepthReads = renderPath == RenderPath::AsyncCompute &&
+                vulkanDevice.hasAsyncComputeQueue() &&
                 vulkanDevice.computeQueueFamily() != vulkanDevice.graphicsQueueFamily();
             const RenderGraph::TextureDesc graphDepthDesc{
                 .extent = {graphExtent.width, graphExtent.height, 1},
@@ -1698,7 +1706,7 @@
                 ForwardPass::end(buffer);
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             });
-            const auto gtaoQueue = vulkanDevice.hasAsyncComputeQueue()
+            const auto gtaoQueue = renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncComputeQueue()
                 ? RenderGraph::Queue::AsyncCompute : RenderGraph::Queue::Graphics;
             const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
             const Mat4 inverseProjection{glm::inverse(cameraController.camera()->projectionMatrix().native())};
@@ -1835,10 +1843,10 @@
             context.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Graphics)] =
                 vulkanDevice.graphicsQueue();
             context.queues[static_cast<std::uint32_t>(RenderGraph::Queue::AsyncCompute)] =
-                vulkanDevice.hasAsyncComputeQueue()
+                renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncComputeQueue()
                     ? vulkanDevice.computeQueue() : vulkanDevice.graphicsQueue();
             context.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Transfer)] =
-                vulkanDevice.hasAsyncTransferQueue()
+                renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncTransferQueue()
                     ? vulkanDevice.transferQueue() : vulkanDevice.graphicsQueue();
             context.commandBuffers = graphCommands;
             context.queueTimelines[0] = renderGraphTimeline;
@@ -1944,7 +1952,10 @@
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
                 throw std::runtime_error("Could not end graphics commands before viewport RenderGraph");
-            const std::uint64_t earlyUploadValue = legacyUploadValue();
+            const auto pendingUploadValue = [this](const std::uint64_t value) {
+                return value != 0 && uploadContext.completedValue() < value ? value : 0;
+            };
+            const std::uint64_t earlyUploadValue = pendingUploadValue(legacyUploadValue());
             const VkSemaphoreSubmitInfo earlyUploadWait{
                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                 .semaphore = uploadContext.timeline(), .value = earlyUploadValue,
@@ -2674,10 +2685,10 @@
             presentationContext.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Graphics)] =
                 vulkanDevice.graphicsQueue();
             presentationContext.queues[static_cast<std::uint32_t>(RenderGraph::Queue::AsyncCompute)] =
-                vulkanDevice.hasAsyncComputeQueue()
+                renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncComputeQueue()
                     ? vulkanDevice.computeQueue() : vulkanDevice.graphicsQueue();
             presentationContext.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Transfer)] =
-                vulkanDevice.hasAsyncTransferQueue()
+                renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncTransferQueue()
                     ? vulkanDevice.transferQueue() : vulkanDevice.graphicsQueue();
             presentationContext.commandBuffers = prepareGraphCommandBuffers(
                 frameGraph, currentFrame, presentationGraphCommandBuffers);
@@ -2698,7 +2709,11 @@
             presentationContext.completionFence = inFlightFences[currentFrame];
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
                 throw std::runtime_error("Could not end graphics commands before presentation RenderGraph");
-            const std::uint64_t prePresentationUploadValue = legacyUploadValue();
+            const std::uint64_t prePresentationUploadCandidate = legacyUploadValue();
+            const std::uint64_t prePresentationUploadValue =
+                prePresentationUploadCandidate != 0 &&
+                uploadContext.completedValue() < prePresentationUploadCandidate
+                    ? prePresentationUploadCandidate : 0;
             const VkSemaphoreSubmitInfo prePresentationUploadWait{
                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                 .semaphore = uploadContext.timeline(), .value = prePresentationUploadValue,
@@ -3102,6 +3117,8 @@
                 uploadValue = std::max(uploadValue, wait.timelineValue);
                 uploadStage |= wait.stage;
             }
+            uploadValue = uploadValue != 0 && uploadContext.completedValue() < uploadValue
+                ? uploadValue : 0;
             const bool waitForUploads = uploadValue != 0;
             if (uploadStage == VK_PIPELINE_STAGE_2_NONE) uploadStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             VkSubmitInfo submitInfo{};

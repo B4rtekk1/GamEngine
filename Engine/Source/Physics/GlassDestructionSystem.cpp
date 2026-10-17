@@ -79,7 +79,8 @@ namespace Engine {
             glm::vec2 previous = polygon.back();
             float previousDistance = glm::dot(previous, normal) - offset;
             for (glm::vec2 point : polygon) {
-                const float distance = glm::dot(point, normal) - offset;
+                const float distance = glm::dot(point, normal) -
+                    offset;
                 if ((distance <= 0.0F) != (previousDistance <= 0.0F))
                     result.push_back(previous + (point - previous) * (previousDistance / (previousDistance - distance)));
                 if (distance <= 0.0F) result.push_back(point);
@@ -120,6 +121,7 @@ namespace Engine {
                     bool occupied=false;
                     for (auto index:remaining) {
                         if (index==a || index==b || index==c) continue;
+                        
                         const auto q=polygon[index];
                         const float tolerance=determinant*1.0e-6F;
                         if (cross2(ab,q-polygon[a])>=-tolerance &&

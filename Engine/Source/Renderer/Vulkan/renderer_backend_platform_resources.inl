@@ -21,9 +21,15 @@
             waitForDrawableExtent();
             createSwapChain();
             createCommandPool();
-            uploadContext.create(device, vulkanDevice.transferQueue(), vulkanDevice.transferQueueFamily(),
+            const bool useAsyncTransfer = renderPath == RenderPath::AsyncCompute &&
+                vulkanDevice.hasAsyncTransferQueue();
+            uploadContext.create(device,
+                                 useAsyncTransfer ? vulkanDevice.transferQueue() : vulkanDevice.graphicsQueue(),
+                                 useAsyncTransfer ? vulkanDevice.transferQueueFamily() : vulkanDevice.graphicsQueueFamily(),
                                  vulkanDevice.graphicsQueue(), vulkanDevice.graphicsQueueFamily(),
-                                 vulkanDevice.computeQueueFamily(),
+                                 renderPath == RenderPath::AsyncCompute
+                                     ? vulkanDevice.computeQueueFamily()
+                                     : vulkanDevice.graphicsQueueFamily(),
                                  vulkanDevice.allocator());
             UploadContext::setCurrent(&uploadContext);
             createCommandBuffers();

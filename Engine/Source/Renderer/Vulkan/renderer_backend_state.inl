@@ -195,6 +195,7 @@
         Scene& scene;
         Registry& registry;
         const RenderOptimizationFeatures& optimizationFeatures;
+        const RenderPath& renderPath;
         AntialiasingLevel antialiasingLevel;
         const ShadowQuality& shadowQuality;
         const RtContactShadowSettings& rtContactShadowSettings;

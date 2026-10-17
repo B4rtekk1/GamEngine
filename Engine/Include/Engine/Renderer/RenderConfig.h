@@ -12,6 +12,12 @@ namespace Engine {
         TAA,
     };
 
+    /** Selects whether compute render passes use the async queue or run in order on graphics. */
+    enum class RenderPath : std::uint8_t {
+        AsyncCompute,
+        Sequential,
+    };
+
     /**
      * Filter budget for directional virtual shadow maps.
      * Low uses one comparison per level. High never falls back to a single
@@ -154,6 +160,7 @@ namespace Engine {
 
     struct RenderConfig final {
         RenderFeatures features{};
+        RenderPath renderPath = RenderPath::AsyncCompute;
         AntialiasingLevel antialiasing = AntialiasingLevel::TAA;
         GrassRenderSettings grass{};
         ShadowQuality shadowQuality = ShadowQuality::High;

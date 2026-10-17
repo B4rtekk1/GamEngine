@@ -72,6 +72,10 @@ namespace Engine {
 
         [[nodiscard]] const RenderOptimizationFeatures &optimizationFeatures() const noexcept;
 
+        void setRenderPath(RenderPath path) noexcept;
+
+        [[nodiscard]] RenderPath renderPath() const noexcept;
+
         void setAntialiasingLevel(AntialiasingLevel level) noexcept;
 
         [[nodiscard]] AntialiasingLevel antialiasingLevel() const noexcept;
@@ -199,6 +203,7 @@ namespace Engine {
         class Backend;
         class State;
         RenderOptimizationFeatures optimizationFeatures_{};
+        RenderPath renderPath_ = RenderPath::AsyncCompute;
         AntialiasingLevel antialiasingLevel_ = AntialiasingLevel::Off;
         ShadowQuality shadowQuality_ = ShadowQuality::High;
         RtContactShadowSettings rtContactShadowSettings_{};

@@ -538,7 +538,9 @@ namespace Engine {
                                     nullptr);
             vkCmdPushConstants(cmd, computePipelineLayouts_[p], VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants),
                                &constants);
-            vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+            const uint32_t groupWidth = p == 1 ? 16U : 8U;
+            vkCmdDispatch(cmd, (extent.width + groupWidth - 1) / groupWidth,
+                          (extent.height + 7) / 8, 1);
         };
         auto inverse = inverseProjection.native();
         const uint32_t sourceMip = quality_.resolutionScale == 1.F ? 0U : 1U;

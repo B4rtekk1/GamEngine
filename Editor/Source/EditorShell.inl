@@ -721,6 +721,18 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             }
         }
         ImGui::Separator();
+        if (ImGui::BeginMenu("Render path")) {
+            const Engine::RenderPath currentPath = renderer.renderPath();
+            if (ImGui::MenuItem("Async compute", nullptr,
+                                currentPath == Engine::RenderPath::AsyncCompute)) {
+                renderer.setRenderPath(Engine::RenderPath::AsyncCompute);
+            }
+            if (ImGui::MenuItem("Sequential", nullptr,
+                                currentPath == Engine::RenderPath::Sequential)) {
+                renderer.setRenderPath(Engine::RenderPath::Sequential);
+            }
+            ImGui::EndMenu();
+        }
         bool contactShadowsEnabled = renderer.contactShadowMode() == Engine::ContactShadowMode::RayTraced;
         if (ImGui::MenuItem("RT contact refinement (VSM)", nullptr, &contactShadowsEnabled)) {
             renderer.setContactShadowMode(contactShadowsEnabled
