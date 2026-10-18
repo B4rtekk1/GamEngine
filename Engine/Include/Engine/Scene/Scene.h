@@ -594,6 +594,7 @@ namespace Engine {
         friend class SceneSerializer;
         friend class Renderer;
         friend class ScriptSystem;
+        friend class Physics;
         friend class PhysicsSystem;
         friend class GlassDestructionSystem;
 

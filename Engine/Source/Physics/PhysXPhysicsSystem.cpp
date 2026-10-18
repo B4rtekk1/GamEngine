@@ -1352,13 +1352,34 @@ namespace Engine {
     std::optional<RaycastHit> Physics::shootRay(
         const Vec3 origin, const Vec3 direction, const float maxDistance,
         const ObjectId ignoredActor, const float energy, const float radius) {
-        auto hit = system_.raycast(*scene_, origin, direction, maxDistance, ignoredActor);
+        const float directionLength = direction.length();
+        if (directionLength <= 0.0F || maxDistance <= 0.0F) return std::nullopt;
+        const Vec3 normalizedDirection = direction * (1.0F / directionLength);
+        constexpr float RayEpsilon = 0.001F;
+        constexpr unsigned MaxIgnoredGlassDebris = 32;
+        Vec3 rayOrigin = origin;
+        float remainingDistance = maxDistance;
+        ObjectId ignored = ignoredActor;
+        std::optional<RaycastHit> hit;
+        for (unsigned skipped = 0; skipped <= MaxIgnoredGlassDebris; ++skipped) {
+            hit = system_.raycast(*scene_, rayOrigin, normalizedDirection,
+                remainingDistance, ignored);
+            if (!hit) return std::nullopt;
+            const Entity hitEntity = scene_->findEntity(hit->actor.id());
+            if (!scene_->registry().has<GlassDebrisComponent>(hitEntity)) break;
+            const float travelled = hit->distance + RayEpsilon;
+            if (travelled >= remainingDistance) return std::nullopt;
+            rayOrigin = hit->point + normalizedDirection * RayEpsilon;
+            remainingDistance -= travelled;
+            ignored = hit->actor.id();
+        }
         if (hit) {
             constexpr std::size_t MaxBulletImpacts = 128;
             if (bulletImpacts_.size() == MaxBulletImpacts) bulletImpacts_.erase(bulletImpacts_.begin());
             bulletImpacts_.push_back({origin, hit->point, hit->normal, hit->actor.id()});
             GlassDestructionSystem::onImpact(*scene_, scene_->findEntity(hit->actor.id()),
-                GlassImpact{.worldPosition = hit->point, .worldDirection = direction,
+                GlassImpact{.worldPosition = hit->point, .worldDirection = normalizedDirection,
+                    .worldNormal = hit->normal,
                     .energy = energy, .radius = radius});
         }
         return hit;

@@ -198,6 +198,29 @@ namespace {
         EXPECT_EQ(scene.objectCount(), 1);
     }
 
+    TEST(GlassDestruction, GlancingBulletDepositsLessFractureEnergy) {
+        Engine::Scene normalScene;
+        Engine::Scene glancingScene;
+        const auto normalPane = Engine::GlassDestructionSystem::createPane(normalScene, "Normal");
+        const auto glancingPane = Engine::GlassDestructionSystem::createPane(glancingScene, "Glancing");
+        const Engine::GlassImpact normal{
+            .worldPosition = {0.0F, 0.0F, 0.0F}, .worldDirection = {0.0F, 0.0F, -1.0F},
+            .worldNormal = {0.0F, 0.0F, 1.0F}, .energy = 10.0F, .radius = 0.1F};
+        const Engine::GlassImpact glancing{
+            .worldPosition = {0.0F, 0.0F, 0.0F}, .worldDirection = {0.995F, 0.0F, -0.1F},
+            .worldNormal = {0.0F, 0.0F, 1.0F}, .energy = 10.0F, .radius = 0.1F};
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(normalScene,
+            normalScene.findEntity(normalPane.id()), normal));
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(glancingScene,
+            glancingScene.findEntity(glancingPane.id()), glancing));
+        Engine::SceneEditor normalEditor(normalScene);
+        Engine::SceneEditor glancingEditor(glancingScene);
+        EXPECT_GT(normalEditor.read<Engine::GlassDestructionComponent>(
+            normalScene.findEntity(normalPane.id())).accumulatedEnergy,
+            glancingEditor.read<Engine::GlassDestructionComponent>(
+                glancingScene.findEntity(glancingPane.id())).accumulatedEnergy);
+    }
+
     TEST(GlassDestruction, HitscanCreatesActualHoleAndProgressiveDamage) {
         Engine::Scene scene;
         Engine::GlassDestructionComponent settings;
@@ -477,18 +500,21 @@ namespace {
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
             {.worldPosition = {-0.5F, 0, 0}, .energy = 2}));
         const auto hitMesh = editor.read<Engine::MeshRendererComponent>(entity).mesh;
+        const auto firstFragmentCount = editor.read<Engine::GlassDestructionComponent>(entity).fragments.size();
         const auto hitTopology = editor.renderTopologyRevision();
         EXPECT_NE(hitMesh.resource(), mesh.resource());
         EXPECT_GT(hitTopology, topology);
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
             {.worldPosition = {0.5F, 0, 0}, .energy = 2}));
         const auto &glass = editor.read<Engine::GlassDestructionComponent>(entity);
+        const auto refinedMesh = editor.read<Engine::MeshRendererComponent>(entity).mesh;
         EXPECT_FALSE(glass.fractured);
         EXPECT_EQ(glass.renderState, Engine::GlassRenderState::Cracked);
         ASSERT_EQ(glass.cracks.size(), 2);
         EXPECT_NE(glass.cracks[0].position, glass.cracks[1].position);
-        EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), hitMesh.resource());
-        EXPECT_EQ(editor.renderTopologyRevision(), hitTopology);
+        EXPECT_NE(refinedMesh.resource(), hitMesh.resource());
+        EXPECT_GT(editor.renderTopologyRevision(), hitTopology);
+        EXPECT_GT(glass.fragments.size(), firstFragmentCount);
         EXPECT_TRUE(std::holds_alternative<Engine::BoxCollider>(editor.read<Engine::ColliderComponent>(entity).shape));
         EXPECT_TRUE(scene.physics().raycast({-0.5F, 0, 2}, {0, 0, -1}));
         std::ostringstream output;

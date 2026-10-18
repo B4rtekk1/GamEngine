@@ -974,26 +974,27 @@ namespace Engine {
                 crack.radius*(0.45F+unit(random)*0.55F),0,0});
         }
         const auto half=glass.size*0.5F;
-        if (!primaryPattern) {
-            const unsigned ringCount=3+unsigned(crack.intensity*4);
-            for (unsigned ring=0; ring<ringCount; ++ring) {
-                const float radius=crack.radius*0.055F*std::pow(12.0F,float(ring)/float(std::max(1U,ringCount-1)));
-                const float ringPhase=unit(random)*glm::two_pi<float>();
-                auto ringPoint=[&](unsigned ray) {
-                    const auto direction=tips[ray%rayCount].direction;
-                    const float angle=std::atan2(direction.y,direction.x);
-                    const float wave=radius*(1+0.13F*std::sin(angle*3+ringPhase)+0.06F*std::sin(angle*5-ringPhase));
-                    return crack.position+direction*wave;
-                };
-                for (unsigned ray=0; ray<rayCount; ++ray) {
-                    const auto a=ringPoint(ray),b=ringPoint(ray+1);
-                    if (std::abs(a.x)>half.x || std::abs(a.y)>half.y ||
-                        std::abs(b.x)>half.x || std::abs(b.y)>half.y) continue;
-                    if (unit(random)<0.18F) continue; // Arrested, incomplete secondary arcs.
-                    const auto mid=(a+b)*0.5F+glm::normalize((a+b)*0.5F-crack.position)*radius*0.06F;
-                    segments.push_back({a,mid,crack.intensity*0.65F});
-                    segments.push_back({mid,b,crack.intensity*0.65F});
-                }
+        // Every impact gets its own concentric response. The first impact
+        // also exposes the shared fracture graph, but later impacts must
+        // not degrade into isolated straight spokes.
+        const unsigned ringCount=4+unsigned(std::ceil(crack.intensity*3.0F));
+        for (unsigned ring=0; ring<ringCount; ++ring) {
+            const float radius=crack.radius*0.055F*std::pow(12.0F,float(ring)/float(std::max(1U,ringCount-1)));
+            const float ringPhase=unit(random)*glm::two_pi<float>();
+            auto ringPoint=[&](unsigned ray) {
+                const auto direction=tips[ray%rayCount].direction;
+                const float angle=std::atan2(direction.y,direction.x);
+                const float wave=radius*(1+0.13F*std::sin(angle*3+ringPhase)+0.06F*std::sin(angle*5-ringPhase));
+                return crack.position+direction*wave;
+            };
+            for (unsigned ray=0; ray<rayCount; ++ray) {
+                const auto a=ringPoint(ray),b=ringPoint(ray+1);
+                if (std::abs(a.x)>half.x || std::abs(a.y)>half.y ||
+                    std::abs(b.x)>half.x || std::abs(b.y)>half.y) continue;
+                if (unit(random)<0.18F) continue; // Arrested, incomplete secondary arcs.
+                const auto mid=(a+b)*0.5F+glm::normalize((a+b)*0.5F-crack.position)*radius*0.06F;
+                segments.push_back({a,mid,crack.intensity*0.65F});
+                segments.push_back({mid,b,crack.intensity*0.65F});
             }
         }
         auto cross=[](glm::vec2 a,glm::vec2 b){return a.x*b.y-a.y*b.x;};
@@ -1188,6 +1189,19 @@ namespace Engine {
         for (unsigned axis=0; axis<2; ++axis)
             if (std::abs(hit[axis])<glass.size[axis]*Epsilon) hit[axis]=0;
 
+        // A glancing bullet couples less energy into the pane than a normal
+        // impact. The fallback keeps direct gameplay calls deterministic.
+        const auto paneNormal = glm::normalize(glm::vec3{matrix * glm::vec4{0, 0, 1, 0}});
+        const auto suppliedNormal = impact.worldNormal.native();
+        const float normalLength = glm::length(suppliedNormal);
+        const auto impactNormal = normalLength > Epsilon
+            ? suppliedNormal / normalLength : paneNormal;
+        const auto direction = impact.worldDirection.native();
+        const float directionLength = glm::length(direction);
+        const float incidence = directionLength > Epsilon
+            ? std::clamp(std::abs(glm::dot(direction / directionLength, impactNormal)), 0.15F, 1.0F) : 1.0F;
+        const float depositedEnergy = impact.energy * incidence;
+
         auto contains = [&](const GlassFragment &fragment) { return containsPoint(fragment.polygon, hit); };
         if (glass.fractured && std::ranges::none_of(glass.fragments,
             [&](const auto &fragment) { return fragment.attached && contains(fragment); })) return false;
@@ -1202,11 +1216,23 @@ namespace Engine {
         if (glass.cracks.size() == 128) glass.cracks.erase(glass.cracks.begin());
         const float scale = std::max(Epsilon, std::min(world.scale.x(), world.scale.y()));
         glass.cracks.push_back({hit, std::max(impact.radius / scale, 0.05F) *
-            (2.0F + std::sqrt(impact.energy / glass.fractureThreshold)),
-            std::min(1.0F, impact.energy / glass.fractureThreshold),
+            (2.0F + std::sqrt(depositedEnergy / glass.fractureThreshold)),
+            std::min(1.0F, depositedEnergy / glass.fractureThreshold),
             glass.seed + glass.impactCount * 1664525U});
         glass.renderState = glass.fractured ? glass.renderState : GlassRenderState::Cracked;
-        glass.accumulatedEnergy = std::min(glass.accumulatedEnergy, std::numeric_limits<float>::max()-impact.energy) + impact.energy;
+        // Every later hit refines the attached material before the material
+        // specific retention rules can return. Surface crack decals remain an
+        // additive detail, never the only representation of the new impact.
+        const bool geometryChanged = glass.impactCount > 1 &&
+            refineImpact(glass, hit, glm::vec2{world.scale.native()}, impact.radius);
+        if (geometryChanged) {
+            registry.modify<MeshRendererComponent>(entity, [&](auto &renderer) {
+                renderer.mesh = scene.glassGeometryHandle(renderMesh(glass));
+            });
+            registry.markChanged<ColliderComponent>(entity);
+        }
+        glass.accumulatedEnergy = std::min(glass.accumulatedEnergy,
+            std::numeric_limits<float>::max()-depositedEnergy) + depositedEnergy;
         registry.markChanged<GlassDestructionComponent>(entity);
         const float effectiveThreshold = glass.fractureThreshold *
             (glass.type == GlassType::Armored ? float(glass.layers) : 1.0F);
@@ -1215,7 +1241,7 @@ namespace Engine {
             for (auto &fragment : glass.fragments) {
                 if (!fragment.attached || !contains(fragment)) continue;
                 if (fragment.layerDamage.size() != glass.layers) fragment.layerDamage.assign(glass.layers, 0);
-                float remaining = impact.energy;
+                float remaining = depositedEnergy;
                 for (auto &damage : fragment.layerDamage) {
                     const float absorbed = std::min(remaining, std::max(0.0F, glass.fractureThreshold-damage));
                     damage += absorbed; remaining -= absorbed;
@@ -1223,21 +1249,15 @@ namespace Engine {
                 penetrated |= std::ranges::all_of(fragment.layerDamage, [&](float damage) { return damage >= glass.fractureThreshold; });
             }
             if (!penetrated) return true;
-        } else if (impact.energy < effectiveThreshold && glass.accumulatedEnergy < effectiveThreshold) return true;
+        } else if (depositedEnergy < effectiveThreshold && glass.accumulatedEnergy < effectiveThreshold) return true;
         // Laminated fragments remain retained by the interlayer until it ruptures.
         if (glass.type == GlassType::Laminated && glass.accumulatedEnergy < effectiveThreshold * 8.0F) return true;
-        if (glass.impactCount > 1 && refineImpact(glass, hit, glm::vec2{world.scale.native()}, impact.radius)) {
-            registry.modify<MeshRendererComponent>(entity, [&](auto &renderer) {
-                renderer.mesh = scene.glassGeometryHandle(renderMesh(glass));
-            });
-            registry.markChanged<ColliderComponent>(entity);
-        }
         if (!glass.fractured) {
             // Each energetic hit adds a local fracture nucleus to surviving glass.
             if (glass.fragments.empty()) prepare(glass, hit);
             glass.fractured = true;
         }
-        const float strength = impact.energy / glass.fractureThreshold;
+        const float strength = depositedEnergy / glass.fractureThreshold;
         auto influence = [&](glm::vec2 point) {
             const auto displacement = glm::vec3{matrix * glm::vec4{point - hit, 0.0F, 0.0F}};
             return std::exp(-glm::dot(displacement, displacement) / (2.0F * std::max(impact.radius * impact.radius, 1.0e-12F)));
@@ -1273,7 +1293,7 @@ namespace Engine {
             const float length2 = glm::dot(edge,edge);
             const auto closest = length2 > Epsilon * Epsilon ? bond.edgeStart + edge *
                 std::clamp(glm::dot(hit-bond.edgeStart,edge)/length2, 0.0F, 1.0F) : bond.center;
-            bond.accumulatedDamage += impact.energy * influence(closest);
+            bond.accumulatedDamage += depositedEnergy * influence(closest);
             const float worldLength = glm::length(glm::vec3{matrix*glm::vec4{edge,0,0}});
             const float strengthScale = bond.length > Epsilon ? worldLength/bond.length * world.scale.z() : 1.0F;
             bond.damage = bond.accumulatedDamage / std::max(bond.strength*strengthScale, 0.001F);

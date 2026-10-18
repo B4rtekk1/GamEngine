@@ -5,91 +5,91 @@
  * @brief Declares the frame-based keyboard and mouse input interface.
  */
 
-#include "Engine/Input/KeyCode.h"
-#include "Engine/Input/Gamepad.h"
-#include "Engine/Input/MouseButton.h"
 #include "Engine/Input/CursorMode.h"
+#include "Engine/Input/Gamepad.h"
+#include "Engine/Input/KeyCode.h"
+#include "Engine/Input/MouseButton.h"
 #include "Engine/Math/Vec2.h"
 
 #include <string_view>
 
 namespace Engine {
+/**
+ * @brief Provides the current and per-frame input state.
+ *
+ * The platform-specific input backend updates this class during event
+ * processing. Call @ref beginFrame once at the beginning of each frame to
+ * clear transient states such as key presses, releases and mouse delta.
+ */
+class Input {
+  public:
     /**
-     * @brief Provides the current and per-frame input state.
+     * @brief Begins a new input frame.
      *
-     * The platform-specific input backend updates this class during event
-     * processing. Call @ref beginFrame once at the beginning of each frame to
-     * clear transient states such as key presses, releases and mouse delta.
+     * Resets frame-transient state while preserving keys and buttons that
+     * remain held down.
      */
-    class Input {
-    public:
-        /**
-         * @brief Begins a new input frame.
-         *
-         * Resets frame-transient state while preserving keys and buttons that
-         * remain held down.
-         */
-        static void beginFrame();
+    static void beginFrame();
 
-        /** @brief Checks whether a key is currently held down. */
-        static bool keyDown(KeyCode key);
+    /** @brief Checks whether a key is currently held down. */
+    static bool keyDown(KeyCode key);
 
-        /** @brief Checks whether a key was pressed during the current frame. */
-        static bool keyPressed(KeyCode key);
+    /** @brief Checks whether a key was pressed during the current frame. */
+    static bool keyPressed(KeyCode key);
 
-        /** @brief Checks whether a key was released during the current frame. */
-        static bool keyReleased(KeyCode key);
+    /** @brief Checks whether a key was released during the current frame. */
+    static bool keyReleased(KeyCode key);
 
-        /** @brief Checks whether a mouse button is currently held down. */
-        static bool mouseDown(MouseButton button);
+    /** @brief Checks whether a mouse button is currently held down. */
+    static bool mouseDown(MouseButton button);
 
-        /** @brief Checks whether a mouse button was pressed this frame. */
-        static bool mousePressed(MouseButton button);
+    /** @brief Checks whether a mouse button was pressed this frame. */
+    static bool mousePressed(MouseButton button);
 
-        /** @brief Checks whether a mouse button was released this frame. */
-        static bool mouseReleased(MouseButton button);
+    /** @brief Checks whether a mouse button was released this frame. */
+    static bool mouseReleased(MouseButton button);
 
-        /** @brief Returns the current mouse position in window coordinates. */
-        static Vec2 mousePosition();
+    /** @brief Returns the current mouse position in window coordinates. */
+    static Vec2 mousePosition();
 
-        /** @brief Returns the mouse movement accumulated during the current frame. */
-        static Vec2 mouseDelta();
+    /** @brief Returns the mouse movement accumulated during the current frame. */
+    static Vec2 mouseDelta();
 
-        /** @brief Returns the mouse-wheel movement accumulated during the current frame. */
-        static float mouseWheel();
+    /** @brief Returns the mouse-wheel movement accumulated during the current frame. */
+    static float mouseWheel();
 
-        /** Changes the system cursor mode for the active game window. Returns false on SDL failure. */
-        static bool setCursorMode(CursorMode mode);
+    /** Changes the system cursor mode for the active game window. Returns false on SDL failure. */
+    static bool setCursorMode(CursorMode mode);
 
-        /** Returns the effective mode, including whether SDL still holds relative mouse mode. */
-        static CursorMode cursorMode();
+    /** Returns the effective mode, including whether SDL still holds relative mouse mode. */
+    static CursorMode cursorMode();
 
-        static bool gamepadDown(GamepadButton button);
-        static bool gamepadPressed(GamepadButton button);
-        static bool gamepadReleased(GamepadButton button);
-        static float gamepadAxis(GamepadAxis axis);
+    static bool gamepadDown(GamepadButton button);
+    static bool gamepadPressed(GamepadButton button);
+    static bool gamepadReleased(GamepadButton button);
+    static float gamepadAxis(GamepadAxis axis);
 
-        /** Action-level input configured through InputMap. */
-        static bool actionDown(std::string_view action);
-        static bool actionPressed(std::string_view action);
-        static bool actionReleased(std::string_view action);
-        static Vec2 axis2D(std::string_view axis);
+    /** Action-level input configured through InputMap. */
+    static bool actionDown(std::string_view action);
+    static bool actionPressed(std::string_view action);
+    static bool actionReleased(std::string_view action);
+    static Vec2 axis2D(std::string_view axis);
 
-    private:
-        friend class SDLInput;
+  private:
+    friend class SDLInput;
 
-        static void setKey(KeyCode key, bool down);
+    static void setKey(KeyCode key, bool down);
 
-        static void setMouseButton(MouseButton button, bool down);
+    static void setMouseButton(MouseButton button, bool down);
 
-        static void setMousePosition(float x, float y); //NOLINT
+    static void setMousePosition(float x, float y); // NOLINT
 
-        static void addMouseDelta(float x, float y); //NOLINT
+    static void addMouseDelta(float x, float y); // NOLINT
 
-        static void addMouseWheel(float value);
+    static void addMouseWheel(float value);
 
-        static void setGamepadButton(GamepadButton button, bool down);
+    static void setGamepadButton(GamepadButton button, bool down);
 
-        static void setGamepadAxis(GamepadAxis axis, float value);
-    };
-}
+    static void setGamepadAxis(GamepadAxis axis, float value);
+};
+} // namespace Engine
