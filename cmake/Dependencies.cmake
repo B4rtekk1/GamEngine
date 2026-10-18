@@ -7,6 +7,46 @@ if(NOT SDL3_FOUND)
     find_package(SDL3 CONFIG REQUIRED HINTS "$ENV{VULKAN_SDK}/cmake")
 endif()
 include(FetchContent)
+
+# Keep source dependencies out of the repository. FetchContent populates this
+# directory during configuration, so a clean checkout only needs CMake and the
+# regular toolchain prerequisites.
+set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/thirdparty" CACHE PATH
+    "Directory used for downloaded third-party dependencies")
+
+FetchContent_Declare(cgltf
+    GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
+    GIT_TAG v1.9
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR cmake-not-used)
+FetchContent_Declare(meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG v0.9
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR cmake-not-used)
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR cmake-not-used)
+FetchContent_Declare(ufbx
+    GIT_REPOSITORY https://github.com/ufbx/ufbx.git
+    GIT_TAG v0.9.0
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR cmake-not-used)
+FetchContent_Declare(VulkanMemoryAllocator
+    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+    GIT_TAG v3.3.0
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR cmake-not-used)
+FetchContent_MakeAvailable(cgltf meshoptimizer stb ufbx VulkanMemoryAllocator)
+
+set(GAMEENGINE_CGLTF_INCLUDE_DIR "${cgltf_SOURCE_DIR}")
+set(GAMEENGINE_MESHOPTIMIZER_INCLUDE_DIR "${meshoptimizer_SOURCE_DIR}")
+set(GAMEENGINE_STB_INCLUDE_DIR "${stb_SOURCE_DIR}")
+set(GAMEENGINE_UFBX_INCLUDE_DIR "${ufbx_SOURCE_DIR}")
+set(GAMEENGINE_VMA_INCLUDE_DIR "${vulkanmemoryallocator_SOURCE_DIR}")
+
 set(PX_GENERATE_GPU_PROJECTS OFF CACHE BOOL "Build PhysX GPU projects" FORCE)
 set(PX_GENERATE_STATIC_LIBRARIES ON CACHE BOOL "Build PhysX static libraries" FORCE)
 set(PX_BUILDSNIPPETS OFF CACHE BOOL "Build PhysX snippets" FORCE)
@@ -58,19 +98,8 @@ add_library(GameEngineImNodes STATIC ${imnodes_SOURCE_DIR}/imnodes.cpp)
 target_include_directories(GameEngineImNodes PUBLIC ${imnodes_SOURCE_DIR})
 target_link_libraries(GameEngineImNodes PUBLIC DearImGui)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
-# Prefer an installed VMA, then fall back to the standalone vendored header.
-if(VMA_INCLUDE_DIR AND NOT EXISTS "${VMA_INCLUDE_DIR}/vk_mem_alloc.h")
-    unset(VMA_INCLUDE_DIR CACHE)
-endif()
-find_path(VMA_INCLUDE_DIR
-    NAMES vk_mem_alloc.h
-    HINTS
-        "$ENV{VULKAN_SDK}/Include/vma"
-        "$ENV{VULKAN_SDK}/Include"
-        "$ENV{VULKAN_SDK}/include/vma"
-        "$ENV{VULKAN_SDK}/include"
-    PATHS "${PROJECT_SOURCE_DIR}/ThridParty/VulkanMemoryAllocator"
-    REQUIRED)
+set(VMA_INCLUDE_DIR "${GAMEENGINE_VMA_INCLUDE_DIR}" CACHE PATH
+    "Vulkan Memory Allocator include directory" FORCE)
 
 # The cooker uses only the portable block codec. Do not add Compressonator's
 # top-level project: it also configures GUI/CLI tools and their dependencies.

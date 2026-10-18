@@ -1152,7 +1152,7 @@ EXCLUDE_SYMLINKS       = NO
 # exclude all test directories for example use the pattern */test/*
 
 EXCLUDE_PATTERNS       = */Assets/* \
-                         */ThridParty/* \
+                         */thirdparty/* \
                          */cmake-build-*/*
 
 # The EXCLUDE_SYMBOLS tag can be used to specify one or more symbol names

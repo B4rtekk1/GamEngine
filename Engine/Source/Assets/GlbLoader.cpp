@@ -11,7 +11,7 @@
 #pragma warning(disable : 4996)
 #endif
 #define CGLTF_IMPLEMENTATION
-#include "ThridParty/cgltf.h"
+#include <cgltf.h>
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif

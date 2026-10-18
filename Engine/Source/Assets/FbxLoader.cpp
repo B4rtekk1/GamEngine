@@ -4,7 +4,7 @@
 #include "DdsImage.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/Meshlet.h"
-#include "ThridParty/ufbx.h"
+#include <ufbx.h>
 
 #include <algorithm>
 #include <array>

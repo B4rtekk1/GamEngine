@@ -1,7 +1,7 @@
 add_library(Engine SHARED
     Source/Renderer/Vulkan/PipelineCache.cpp
     Source/Application.cpp Source/Project.cpp Source/Assets/StbImage.cpp Source/Assets/AssetManager.cpp Source/Assets/Gtex.cpp Source/Assets/Gmesh.cpp Source/Assets/CookCache.cpp Source/Assets/TextureCooker.cpp Source/Assets/GlbLoader.cpp Source/Assets/FbxLoader.cpp Source/Assets/DdsImage.cpp Source/Assets/Content.cpp
-    ${PROJECT_SOURCE_DIR}/ThridParty/ufbx.c
+    ${GAMEENGINE_UFBX_INCLUDE_DIR}/ufbx.c
     Source/Core/Camera.cpp Source/Core/Diagnostics.cpp Source/Core/Profiler.cpp Source/Core/TaskScheduler.cpp Source/Core/Time.cpp Source/ECS/Registry.cpp Source/Input/Input.cpp Source/Input/InputMap.cpp
     Source/Scene/SceneSerializer.cpp Source/Scene/SceneRegistrySerializer.cpp Source/Scene/Scene.cpp Source/Scene/Actor.cpp Source/Scene/TransformSystem.cpp Source/Scene/Prefab.cpp Source/Scene/ScenePresets.cpp
     Source/Physics/GlassDestructionSystem.cpp Source/Physics/PhysXPhysicsSystem.cpp Source/Scripting/ScriptSystem.cpp Source/Scripting/Script.cpp Source/Scripting/ScriptRegistry.cpp Source/Scripting/DynamicLibrary.cpp Source/Scripting/ScriptModuleManager.cpp
@@ -14,7 +14,7 @@ add_library(Engine SHARED
     Source/Renderer/Vulkan/buffer.cpp Source/Renderer/Vulkan/upload_context.cpp Source/Renderer/Vulkan/depth_buffer.cpp Source/Renderer/Vulkan/graphics_pipeline.cpp Source/Renderer/Vulkan/hdr_buffer.cpp Source/Renderer/Vulkan/msaa.cpp Source/Renderer/Vulkan/renderer.cpp Source/Renderer/Vulkan/renderer_scene_helpers.cpp Source/Renderer/Vulkan/CameraController.cpp Source/Renderer/Vulkan/ViewportRenderTarget.cpp Source/Renderer/Vulkan/GpuTimestampProfiler.cpp Source/Renderer/Vulkan/MemoryBudgetManager.cpp Source/Renderer/Vulkan/shadow_map.cpp Source/Renderer/Vulkan/swapchain.cpp Source/Renderer/Vulkan/vulkan_device.cpp Source/Renderer/Vulkan/vma_impl.cpp
     Source/Renderer/Particles/ParticleSystem.cpp Source/Renderer/Geometry/Terrain.cpp Source/Renderer/Geometry/ProceduralCloud.cpp Source/Renderer/Geometry/Meshlet.cpp Source/Renderer/Water/WaterSystem.cpp Source/Renderer/Water/VirtualWaterPageBuilder.cpp Source/Renderer/Water/WaterRenderWorld.cpp Source/Renderer/Water/VirtualWaterRenderer.cpp Source/Renderer/Passes/WaterPass.cpp Source/Renderer/Passes/GlassPass.cpp
     ${PROJECT_SOURCE_DIR}/Platform/SDL/SDLInput.cpp)
-set_source_files_properties(${PROJECT_SOURCE_DIR}/ThridParty/ufbx.c PROPERTIES LANGUAGE CXX)
+set_source_files_properties(${GAMEENGINE_UFBX_INCLUDE_DIR}/ufbx.c PROPERTIES LANGUAGE CXX)
 
 set(GE_BC7_BACKEND "auto" CACHE STRING "BC7 encoder: auto, bc7e, or compressonator")
 set_property(CACHE GE_BC7_BACKEND PROPERTY STRINGS auto bc7e compressonator)
@@ -93,7 +93,7 @@ target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB
     GAMEENGINE_BC7_ENCODER="${GAMEENGINE_BC7_ENCODER}"
     GAMEENGINE_COMPRESSONATOR_REVISION="${GAMEENGINE_COMPRESSONATOR_REVISION}"
     GAMEENGINE_SLANGC_PATH="${GAMEENGINE_SLANGC}")
-target_include_directories(Engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Include> ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR} PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/Source" "${PROJECT_SOURCE_DIR}/ThridParty/stb")
+target_include_directories(Engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Include> ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR} PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/Source" "${GAMEENGINE_CGLTF_INCLUDE_DIR}" "${GAMEENGINE_MESHOPTIMIZER_INCLUDE_DIR}" "${GAMEENGINE_STB_INCLUDE_DIR}" "${GAMEENGINE_UFBX_INCLUDE_DIR}")
 gameengine_enable_warnings(Engine)
 target_link_libraries(Engine PRIVATE ${CMAKE_DL_LIBS})
 gameengine_enable_sanitizers(Engine)
