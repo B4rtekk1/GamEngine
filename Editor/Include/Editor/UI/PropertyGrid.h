@@ -8,18 +8,20 @@ namespace EditorUI {
 
 /** A two-column inspector layout with stable label/value proportions. */
 class PropertyGrid final {
-public:
+  public:
     explicit PropertyGrid(const char* id, float labelWidth = 0.38F);
     ~PropertyGrid();
 
     PropertyGrid(const PropertyGrid&) = delete;
     PropertyGrid& operator=(const PropertyGrid&) = delete;
 
-    [[nodiscard]] bool active() const { return active_; }
+    [[nodiscard]] bool active() const {
+        return active_;
+    }
 
-    template <typename DrawValue>
-    void propertyRow(const char* label, DrawValue&& drawValue) const {
-        if (!active_) return;
+    template <typename DrawValue> void propertyRow(const char* label, DrawValue&& drawValue) const {
+        if (!active_)
+            return;
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::AlignTextToFramePadding();
@@ -31,7 +33,7 @@ public:
         ImGui::PopID();
     }
 
-private:
+  private:
     bool active_{};
 };
 

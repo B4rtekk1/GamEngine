@@ -6,10 +6,10 @@
 namespace Editor {
 
 // Projects need the same cooked lighting asset shipped with the Editor.
-inline void ensureProjectBrdfLut(const std::filesystem::path& assetRoot,
-                                 const std::filesystem::path& editorRoot) {
+inline void ensureProjectBrdfLut(const std::filesystem::path& assetRoot, const std::filesystem::path& editorRoot) {
     const auto destination = assetRoot / "BRDF" / "brdf_lut.bin";
-    if (std::filesystem::exists(destination)) return;
+    if (std::filesystem::exists(destination))
+        return;
 
     const auto source = editorRoot / "Assets" / "BRDF" / "brdf_lut.bin";
     if (!std::filesystem::is_regular_file(source)) {

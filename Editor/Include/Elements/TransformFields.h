@@ -16,7 +16,7 @@
  * constructor.
  */
 class TransformFields final : public EditableField {
-public:
+  public:
     /** @brief Inherits constructors used to bind the editor to a game object. */
     using EditableField::EditableField;
 
@@ -34,11 +34,17 @@ public:
         // ComponentsPanel already scopes the complete inspector to the selected
         // entity. PropertyGrid adds one stable scope per property row.
         EditorUI::PropertyGrid grid{"transform-properties"};
-        grid.propertyRow("Position", [&] { drawVec3Field("##position", "##position", object().position(), 0.05F, "%.2F",
-            [this](const Engine::Vec3& value) { object().setPosition(value); }); });
-        grid.propertyRow("Rotation", [&] { drawVec3Field("##rotation", "##rotation", object().rotation(), 0.5F, "%.1F°",
-            [this](const Engine::Vec3& value) { object().setRotation(value); }); });
-        grid.propertyRow("Scale", [&] { drawVec3Field("##scale", "##scale", object().scale(), 0.01F, "%.2F",
-            [this](const Engine::Vec3& value) { object().setScale(value); }); });
+        grid.propertyRow("Position", [&] {
+            drawVec3Field("##position", "##position", object().position(), 0.05F, "%.2F",
+                          [this](const Engine::Vec3& value) { object().setPosition(value); });
+        });
+        grid.propertyRow("Rotation", [&] {
+            drawVec3Field("##rotation", "##rotation", object().rotation(), 0.5F, "%.1F°",
+                          [this](const Engine::Vec3& value) { object().setRotation(value); });
+        });
+        grid.propertyRow("Scale", [&] {
+            drawVec3Field("##scale", "##scale", object().scale(), 0.01F, "%.2F",
+                          [this](const Engine::Vec3& value) { object().setScale(value); });
+        });
     }
 };

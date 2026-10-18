@@ -1,82 +1,84 @@
-#include "Platform/DefaultFonts.h"
-#include "Platform/RuntimePaths.h"
-#include "imgui.h"
-#include "imgui_internal.h"
-#include "imgui_impl_sdl3.h"
-#include "imgui_impl_vulkan.h"
-#include "imnodes.h"
-
-#include "Engine/Renderer/Renderer.h"
-#include "Engine/Assets/Content.h"
-#include "Engine/Assets/AssetTypes.h"
-#include "Engine/Scene/ScenePresets.h"
-#include "Engine/Scene/SceneEditor.h"
-#include "Engine/Core/Time.h"
-#include "Engine/Core/Profiler.h"
-#include "Engine/Core/Diagnostics.h"
-#include "Engine/Core/Transform.h"
-#include "Engine/Core/Camera.h"
-#include "Engine/Core/SceneCamera.h"
-#include "Engine/Input/Input.h"
-#include "Engine/Math/AABB.h"
-#include "Engine/ECS/Components/ScriptComponent.h"
-#include "Engine/ECS/Components/CameraComponent.h"
-#include "Engine/ECS/Components/ColliderComponent.h"
-#include "Engine/ECS/Components/RigidbodyComponent.h"
-#include "Engine/ECS/Components/TerrainGrassComponent.h"
-#include "Engine/ECS/Components/SmokeEmitterComponent.h"
-#include "Engine/ECS/Components/ProceduralCloudComponent.h"
-#include "Engine/ECS/Components/WaterBodyComponent.h"
-#include "Engine/Renderer/Geometry/ProceduralCloud.h"
-#include "Engine/Scene/Components/LightComponent.h"
-#include "Engine/Renderer/MeshRenderer.h"
-#include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
-#include "Engine/Scene/SceneSerializer.h"
-#include "Engine/Scripting/ScriptSystem.h"
-#include "Engine/Scripting/ScriptRegistry.h"
-#include "Engine/Scripting/ScriptModuleManager.h"
-#include "Engine/Physics/PhysicsSystem.h"
-#include "Engine/Project.h"
+#include "Editor/App/EditorEntityHelpers.h"
+#include "Editor/App/ProjectAssets.h"
+#include "Editor/Build/GameBuildPipeline.h"
+#include "Editor/EditorConstants.h"
+#include "Editor/EditorPreferences.h"
+#include "Editor/EditorState.h"
+#include "Editor/EditorUi.h"
+#include "Editor/Panels/AssetDragDrop.h"
+#include "Editor/Panels/AssetManagerPanel.h"
+#include "Editor/Panels/ComponentsPanel.h"
+#include "Editor/Panels/ConsolePanel.h"
+#include "Editor/Panels/EditorSceneSession.h"
+#include "Editor/Panels/EditorStyle.h"
+#include "Editor/Panels/HierarchyPanel.h"
+#include "Editor/Panels/ProfilerPanel.h"
+#include "Editor/Panels/ShaderGraphPanel.h"
+#include "Editor/Panels/TerminalPanel.h"
+#include "Editor/Platform/WindowsTitleBar.h"
+#include "Editor/TerrainSculptState.h"
+#include "Editor/UI/EditorTheme.h"
 #include "Elements/EditorButton.h"
 #include "Elements/NumericControl.h"
 #include "Elements/TransformFields.h"
-#include "Editor/Panels/EditorSceneSession.h"
-#include "Editor/Panels/EditorStyle.h"
-#include "Editor/Panels/ProfilerPanel.h"
-#include "Editor/Panels/HierarchyPanel.h"
-#include "Editor/Panels/ComponentsPanel.h"
-#include "Editor/Panels/AssetManagerPanel.h"
-#include "Editor/Panels/ConsolePanel.h"
-#include "Editor/Panels/TerminalPanel.h"
-#include "Editor/Panels/ShaderGraphPanel.h"
-#include "Editor/Panels/AssetDragDrop.h"
-#include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
+#include "Engine/Assets/AssetTypes.h"
+#include "Engine/Assets/Content.h"
+#include "Engine/Core/Camera.h"
+#include "Engine/Core/Diagnostics.h"
+#include "Engine/Core/Profiler.h"
+#include "Engine/Core/SceneCamera.h"
+#include "Engine/Core/Time.h"
+#include "Engine/Core/Transform.h"
+#include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/ProceduralCloudComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/ScriptComponent.h"
+#include "Engine/ECS/Components/SmokeEmitterComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/ECS/Components/WaterBodyComponent.h"
+#include "Engine/Input/Input.h"
+#include "Engine/Math/AABB.h"
+#include "Engine/Physics/PhysicsSystem.h"
+#include "Engine/Project.h"
+#include "Engine/Renderer/Geometry/ProceduralCloud.h"
+#include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Renderer/Renderer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
-#include "Editor/App/EditorEntityHelpers.h"
-#include "Editor/App/ProjectAssets.h"
-#include "Editor/EditorState.h"
-#include "Editor/EditorPreferences.h"
-#include "Editor/EditorConstants.h"
-#include "Editor/EditorUi.h"
-#include "Editor/UI/EditorTheme.h"
-#include "Editor/TerrainSculptState.h"
-#include "Editor/Platform/WindowsTitleBar.h"
-#include "Editor/Build/GameBuildPipeline.h"
+#include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
+#include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
+#include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Scene/SceneEditor.h"
+#include "Engine/Scene/ScenePresets.h"
+#include "Engine/Scene/SceneSerializer.h"
+#include "Engine/Scripting/ScriptModuleManager.h"
+#include "Engine/Scripting/ScriptRegistry.h"
+#include "Engine/Scripting/ScriptSystem.h"
+#include "Platform/DefaultFonts.h"
+#include "Platform/RuntimePaths.h"
+#include "Platform/UserPaths.h"
 #include "ScriptHotReload.h"
 #include "ShaderHotReload.h"
-#include "Platform/UserPaths.h"
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+#include "imgui_impl_vulkan.h"
+#include "imgui_internal.h"
+#include "imnodes.h"
 
 using Editor::EntityClipboard;
 using Editor::SceneHistory;
 
-#include <SDL3/SDL.h>
+#include "EditorShell.inl"
+#include "EditorViewport.inl"
+#include "TerrainToolsPanel.inl"
 
-#include <chrono>
-#include <cstdint>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -86,167 +88,180 @@ using Editor::SceneHistory;
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
-#include <optional>
-#include <utility>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "EditorViewport.inl"
-
-#include "TerrainToolsPanel.inl"
-
-#include "EditorShell.inl"
-
 namespace {
-    [[nodiscard]] Engine::Project createOrLoadFirstRunProject() {
-        const std::filesystem::path projectsDirectory = Platform::UserPaths::documents() / "GamEngine Projects";
-        const std::filesystem::path firstProject = projectsDirectory / "MyFirstProject";
-        const std::filesystem::path firstManifest = firstProject / "GamEngine.project";
-        if (std::filesystem::is_regular_file(firstManifest)) return Engine::Project::load(firstManifest);
+[[nodiscard]] Engine::Project createOrLoadFirstRunProject() {
+    const std::filesystem::path projectsDirectory = Platform::UserPaths::documents() / "GamEngine Projects";
+    const std::filesystem::path firstProject = projectsDirectory / "MyFirstProject";
+    const std::filesystem::path firstManifest = firstProject / "GamEngine.project";
+    if (std::filesystem::is_regular_file(firstManifest))
+        return Engine::Project::load(firstManifest);
 
-        std::filesystem::path projectDirectory = firstProject;
-        std::string projectName = "MyFirstProject";
-        for (std::uint32_t suffix = 2; std::filesystem::exists(projectDirectory); ++suffix) {
-            projectName = "MyFirstProject " + std::to_string(suffix);
-            projectDirectory = projectsDirectory / projectName;
-        }
-        return Engine::Project::create(projectDirectory, projectName);
+    std::filesystem::path projectDirectory = firstProject;
+    std::string projectName = "MyFirstProject";
+    for (std::uint32_t suffix = 2; std::filesystem::exists(projectDirectory); ++suffix) {
+        projectName = "MyFirstProject " + std::to_string(suffix);
+        projectDirectory = projectsDirectory / projectName;
     }
+    return Engine::Project::create(projectDirectory, projectName);
+}
 
-    [[nodiscard]] std::filesystem::path executableDirectory() {
-        const char* const basePath = SDL_GetBasePath();
-        if (basePath == nullptr) throw std::runtime_error("Could not determine executable directory");
-        return std::filesystem::path{basePath};
+[[nodiscard]] std::filesystem::path executableDirectory() {
+    const char* const basePath = SDL_GetBasePath();
+    if (basePath == nullptr)
+        throw std::runtime_error("Could not determine executable directory");
+    return std::filesystem::path{basePath};
+}
+
+[[nodiscard]] std::optional<std::filesystem::path>
+findDevelopmentBuildDirectory(const std::filesystem::path& executableDirectory) {
+    for (auto directory = executableDirectory; !directory.empty(); directory = directory.parent_path()) {
+        if (std::filesystem::is_regular_file(directory / "CMakeCache.txt"))
+            return directory;
+        if (directory == directory.root_path())
+            break;
     }
+    return std::nullopt;
+}
 
-    [[nodiscard]] std::optional<std::filesystem::path> findDevelopmentBuildDirectory(
-        const std::filesystem::path& executableDirectory) {
-        for (auto directory = executableDirectory; !directory.empty(); directory = directory.parent_path()) {
-            if (std::filesystem::is_regular_file(directory / "CMakeCache.txt")) return directory;
-            if (directory == directory.root_path()) break;
-        }
-        return std::nullopt;
+[[nodiscard]] std::optional<std::filesystem::path>
+findEngineShaderDirectory(const std::filesystem::path& buildDirectory) {
+    for (auto directory = std::filesystem::current_path(); !directory.empty(); directory = directory.parent_path()) {
+        if (std::filesystem::is_directory(directory / "Engine" / "Shaders"))
+            return directory / "Engine" / "Shaders";
+        if (directory == directory.root_path())
+            break;
     }
-
-    [[nodiscard]] std::optional<std::filesystem::path> findEngineShaderDirectory(
-        const std::filesystem::path& buildDirectory) {
-        for (auto directory = std::filesystem::current_path(); !directory.empty(); directory = directory.parent_path()) {
-            if (std::filesystem::is_directory(directory / "Engine" / "Shaders")) return directory / "Engine" / "Shaders";
-            if (directory == directory.root_path()) break;
-        }
-        for (auto directory = buildDirectory.parent_path(); !directory.empty(); directory = directory.parent_path()) {
-            if (std::filesystem::is_directory(directory / "Engine" / "Shaders")) return directory / "Engine" / "Shaders";
-            if (directory == directory.root_path()) break;
-        }
-        return std::nullopt;
+    for (auto directory = buildDirectory.parent_path(); !directory.empty(); directory = directory.parent_path()) {
+        if (std::filesystem::is_directory(directory / "Engine" / "Shaders"))
+            return directory / "Engine" / "Shaders";
+        if (directory == directory.root_path())
+            break;
     }
+    return std::nullopt;
+}
 
-    [[nodiscard]] std::filesystem::path findShaderGraphSourceDirectory(
-        const std::filesystem::path& editorRoot) {
-        const auto bundled = editorRoot / "ShaderSources";
-        if (std::filesystem::is_regular_file(bundled / "Forward/forward_pbr.slang")) return bundled;
+[[nodiscard]] std::filesystem::path findShaderGraphSourceDirectory(const std::filesystem::path& editorRoot) {
+    const auto bundled = editorRoot / "ShaderSources";
+    if (std::filesystem::is_regular_file(bundled / "Forward/forward_pbr.slang"))
+        return bundled;
 
 #ifndef GE_DISTRIBUTION_BUILD
-        const auto development = std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Engine/Shaders";
-        if (std::filesystem::is_regular_file(development / "Forward/forward_pbr.slang")) return development;
+    const auto development = std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Engine/Shaders";
+    if (std::filesystem::is_regular_file(development / "Forward/forward_pbr.slang"))
+        return development;
 #endif
 
-        throw std::runtime_error("Shader Graph sources are not available. Reinstall the GamEngine Editor.");
-    }
-
-    [[nodiscard]] std::string buildConfigurationFromExecutableDirectory(
-        const std::filesystem::path& executableDirectory) {
-        std::string name = executableDirectory.filename().string();
-        std::ranges::transform(name, name.begin(), [](const unsigned char character) {
-            return static_cast<char>(std::tolower(character));
-        });
-        if (name == "debug") return "Debug";
-        if (name == "release") return "Release";
-        if (name == "relwithdebinfo") return "RelWithDebInfo";
-        if (name == "minsizerel") return "MinSizeRel";
-        return {};
-    }
-
-    [[nodiscard]] bool runCmake(const std::initializer_list<std::string_view> arguments) {
-        std::vector<std::string> values{"cmake"};
-        values.reserve(values.size() + arguments.size());
-        for (const auto argument : arguments) values.emplace_back(argument);
-        std::vector<char *> argv;
-        argv.reserve(values.size() + 1);
-        for (auto &value : values) argv.push_back(value.data());
-        argv.push_back(nullptr);
-
-        const SDL_PropertiesID properties = SDL_CreateProperties();
-        if (!properties) return false;
-        SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, argv.data());
-        SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
-        SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
-        SDL_Process *process = SDL_CreateProcessWithProperties(properties);
-        SDL_DestroyProperties(properties);
-        if (!process) return false;
-        size_t outputSize = 0;
-        int exitCode = -1;
-        void *output = SDL_ReadProcess(process, &outputSize, &exitCode);
-        SDL_free(output);
-        SDL_DestroyProcess(process);
-        return exitCode == 0;
-    }
-
-    [[nodiscard]] bool configureScriptBuild(const std::filesystem::path &editorRoot,
-                                            const std::filesystem::path &projectRoot,
-                                            const std::filesystem::path &assetRoot) {
-        const auto source = editorRoot / "SDK" / "GameScripts";
-        const auto sdk = editorRoot / "SDK";
-        const auto build = projectRoot / "Library" / "ScriptBuild";
-        if (!std::filesystem::is_regular_file(source / "CMakeLists.txt") ||
-            !std::filesystem::is_regular_file(sdk / "Lib" / Platform::EngineLinkLibraryFilename)) return false;
-        std::error_code error;
-        std::filesystem::create_directories(build, error);
-        if (error) return false;
-        // The build tree belongs to the project. Its cache is intentionally
-        // retained between Editor launches; file changes only build the target.
-        if (std::filesystem::is_regular_file(build / "CMakeCache.txt")) {
-            const auto globVerification = build / "CMakeFiles" / "VerifyGlobs.cmake";
-            std::ifstream verification{globVerification, std::ios::binary};
-            const std::string contents{std::istreambuf_iterator<char>{verification}, {}};
-            // Earlier SDK revisions wrote native Windows paths into this CMake
-            // script. CMake then interprets \U in a user path as an escape.
-            if (contents.find('\\') != std::string::npos) {
-                std::filesystem::remove_all(build, error);
-                if (error) return false;
-                std::filesystem::create_directories(build, error);
-                if (error) return false;
-            }
-        }
-        return runCmake({"-S", source.string(), "-B", build.string(),
-                         "-DGE_PROJECT_ROOT=" + projectRoot.string(),
-                         "-DGE_ASSET_ROOT=" + assetRoot.string(),
-                         "-DGE_SDK_ROOT=" + sdk.string(), "-DCMAKE_BUILD_TYPE=Release"});
-    }
-
-    std::filesystem::path findDefaultTerminalFont() {
-        constexpr std::array<const char *, 4> candidates{
-            "C:/Windows/Fonts/consola.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-        };
-        const auto font = std::ranges::find_if(candidates, [](const char *path) {
-            std::error_code error;
-            return std::filesystem::is_regular_file(path, error);
-        });
-        return font == candidates.end() ? std::filesystem::path{} : *font;
-    }
+    throw std::runtime_error("Shader Graph sources are not available. Reinstall the GamEngine Editor.");
 }
+
+[[nodiscard]] std::string buildConfigurationFromExecutableDirectory(const std::filesystem::path& executableDirectory) {
+    std::string name = executableDirectory.filename().string();
+    std::ranges::transform(name, name.begin(),
+                           [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    if (name == "debug")
+        return "Debug";
+    if (name == "release")
+        return "Release";
+    if (name == "relwithdebinfo")
+        return "RelWithDebInfo";
+    if (name == "minsizerel")
+        return "MinSizeRel";
+    return {};
+}
+
+[[nodiscard]] bool runCmake(const std::initializer_list<std::string_view> arguments) {
+    std::vector<std::string> values{"cmake"};
+    values.reserve(values.size() + arguments.size());
+    for (const auto argument : arguments)
+        values.emplace_back(argument);
+    std::vector<char*> argv;
+    argv.reserve(values.size() + 1);
+    for (auto& value : values)
+        argv.push_back(value.data());
+    argv.push_back(nullptr);
+
+    const SDL_PropertiesID properties = SDL_CreateProperties();
+    if (!properties)
+        return false;
+    SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, argv.data());
+    SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+    SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
+    SDL_Process* process = SDL_CreateProcessWithProperties(properties);
+    SDL_DestroyProperties(properties);
+    if (!process)
+        return false;
+    size_t outputSize = 0;
+    int exitCode = -1;
+    void* output = SDL_ReadProcess(process, &outputSize, &exitCode);
+    SDL_free(output);
+    SDL_DestroyProcess(process);
+    return exitCode == 0;
+}
+
+[[nodiscard]] bool configureScriptBuild(const std::filesystem::path& editorRoot,
+                                        const std::filesystem::path& projectRoot,
+                                        const std::filesystem::path& assetRoot) {
+    const auto source = editorRoot / "SDK" / "GameScripts";
+    const auto sdk = editorRoot / "SDK";
+    const auto build = projectRoot / "Library" / "ScriptBuild";
+    if (!std::filesystem::is_regular_file(source / "CMakeLists.txt") ||
+        !std::filesystem::is_regular_file(sdk / "Lib" / Platform::EngineLinkLibraryFilename))
+        return false;
+    std::error_code error;
+    std::filesystem::create_directories(build, error);
+    if (error)
+        return false;
+    // The build tree belongs to the project. Its cache is intentionally
+    // retained between Editor launches; file changes only build the target.
+    if (std::filesystem::is_regular_file(build / "CMakeCache.txt")) {
+        const auto globVerification = build / "CMakeFiles" / "VerifyGlobs.cmake";
+        std::ifstream verification{globVerification, std::ios::binary};
+        const std::string contents{std::istreambuf_iterator<char>{verification}, {}};
+        // Earlier SDK revisions wrote native Windows paths into this CMake
+        // script. CMake then interprets \U in a user path as an escape.
+        if (contents.find('\\') != std::string::npos) {
+            std::filesystem::remove_all(build, error);
+            if (error)
+                return false;
+            std::filesystem::create_directories(build, error);
+            if (error)
+                return false;
+        }
+    }
+    return runCmake({"-S", source.string(), "-B", build.string(), "-DGE_PROJECT_ROOT=" + projectRoot.string(),
+                     "-DGE_ASSET_ROOT=" + assetRoot.string(), "-DGE_SDK_ROOT=" + sdk.string(),
+                     "-DCMAKE_BUILD_TYPE=Release"});
+}
+
+std::filesystem::path findDefaultTerminalFont() {
+    constexpr std::array<const char*, 4> candidates{
+        "C:/Windows/Fonts/consola.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    };
+    const auto font = std::ranges::find_if(candidates, [](const char* path) {
+        std::error_code error;
+        return std::filesystem::is_regular_file(path, error);
+    });
+    return font == candidates.end() ? std::filesystem::path{} : *font;
+}
+} // namespace
 class EditorUiBackend final : public Engine::EditorUiBackend {
-public:
-    bool initialize(void *window, const Engine::EditorUiInitInfo &source) override {
-        if (!ImGui_ImplSDL3_InitForVulkan(static_cast<SDL_Window *>(window))) return false;
+  public:
+    bool initialize(void* window, const Engine::EditorUiInitInfo& source) override {
+        if (!ImGui_ImplSDL3_InitForVulkan(static_cast<SDL_Window*>(window)))
+            return false;
         ImGui_ImplVulkan_InitInfo info{};
         info.ApiVersion = VK_API_VERSION_1_3;
         info.Instance = reinterpret_cast<VkInstance>(source.instance);
@@ -279,11 +294,13 @@ public:
             ImGui_ImplSDL3_Shutdown();
     }
 
-    void processEvent(const void *event) override {
-        ImGui_ImplSDL3_ProcessEvent(static_cast<const SDL_Event *>(event));
+    void processEvent(const void* event) override {
+        ImGui_ImplSDL3_ProcessEvent(static_cast<const SDL_Event*>(event));
     }
 
-    bool wantsTextInput() const override { return ImGui::GetIO().WantTextInput; }
+    bool wantsTextInput() const override {
+        return ImGui::GetIO().WantTextInput;
+    }
 
     void newFrame() override {
         auto& io = ImGui::GetIO();
@@ -297,8 +314,8 @@ public:
     }
 
     std::uintptr_t addTexture(const std::uint64_t imageView, const std::uint32_t imageLayout) override {
-        return reinterpret_cast<std::uintptr_t>(ImGui_ImplVulkan_AddTexture(
-            reinterpret_cast<VkImageView>(imageView), static_cast<VkImageLayout>(imageLayout)));
+        return reinterpret_cast<std::uintptr_t>(ImGui_ImplVulkan_AddTexture(reinterpret_cast<VkImageView>(imageView),
+                                                                            static_cast<VkImageLayout>(imageLayout)));
     }
 
     void removeTexture(const std::uintptr_t texture) noexcept override {
@@ -316,18 +333,19 @@ int main(int argc, char** argv) {
     Editor::registerBuiltinComponents();
     try {
         Engine::Diagnostics::instance().initialize(Platform::UserPaths::editorLogs(),
-                                                   Engine::DiagnosticApplication::Editor,
-                                                   "GamEngine");
+                                                   Engine::DiagnosticApplication::Editor, "GamEngine");
         const std::filesystem::path editorRoot = executableDirectory();
         const std::filesystem::path shaderGraphSourceDirectory = findShaderGraphSourceDirectory(editorRoot);
         std::optional<std::filesystem::path> projectPath;
         std::optional<std::filesystem::path> createProjectPath;
         for (int index = 1; index < argc; ++index) {
             if (std::string_view{argv[index]} == "--project") {
-                if (++index == argc) throw std::runtime_error("--project requires a file path");
+                if (++index == argc)
+                    throw std::runtime_error("--project requires a file path");
                 projectPath = argv[index];
             } else if (std::string_view{argv[index]} == "--create-project") {
-                if (++index == argc) throw std::runtime_error("--create-project requires a directory path");
+                if (++index == argc)
+                    throw std::runtime_error("--create-project requires a directory path");
                 createProjectPath = argv[index];
             }
         }
@@ -335,29 +353,24 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Use either --project or --create-project, not both");
         }
         const Editor::EditorSession previousSession = Editor::loadSession();
-        Engine::Project project = createProjectPath
-                                            ? Engine::Project::create(*createProjectPath)
-                                            : projectPath
-                                            ? Engine::Project::load(*projectPath)
-                                            : std::filesystem::is_regular_file(previousSession.projectManifest)
-                                            ? Engine::Project::load(previousSession.projectManifest)
-                                            : [&] {
-                                                  try {
-                                                      return Engine::Project::discover(
-                                                          std::filesystem::current_path());
-                                                  } catch (const std::runtime_error&) {
-                                                      return createOrLoadFirstRunProject();
-                                                  }
-                                              }();
+        Engine::Project project = createProjectPath ? Engine::Project::create(*createProjectPath)
+                                  : projectPath     ? Engine::Project::load(*projectPath)
+                                  : std::filesystem::is_regular_file(previousSession.projectManifest)
+                                      ? Engine::Project::load(previousSession.projectManifest)
+                                      : [&] {
+                                            try {
+                                                return Engine::Project::discover(std::filesystem::current_path());
+                                            } catch (const std::runtime_error&) {
+                                                return createOrLoadFirstRunProject();
+                                            }
+                                        }();
         Editor::ensureProjectBrdfLut(project.assetRoot(), editorRoot);
         EditorSceneSession::setProjectRoot(project.rootPath(), project.assetRoot());
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
             throw std::runtime_error(SDL_GetError());
         }
-        SDL_Window *window = SDL_CreateWindow((project.name() + " Editor").c_str(),
-                                              EditorConstants::windowWidth,
-                                              EditorConstants::windowHeight,
-                                              SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+        SDL_Window* window = SDL_CreateWindow((project.name() + " Editor").c_str(), EditorConstants::windowWidth,
+                                              EditorConstants::windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
         if (window == nullptr) {
             throw std::runtime_error(SDL_GetError());
         }
@@ -369,7 +382,7 @@ int main(int argc, char** argv) {
         ImNodes::CreateContext();
         ImNodes::SetImGuiContext(ImGui::GetCurrentContext());
         ImNodes::StyleColorsDark();
-        ImGuiIO &imguiIo = ImGui::GetIO();
+        ImGuiIO& imguiIo = ImGui::GetIO();
         const std::filesystem::path statePath = Platform::UserPaths::editorState();
         std::filesystem::create_directories(statePath);
         const std::string imguiIniPath = (statePath / "imgui.ini").string();
@@ -377,9 +390,8 @@ int main(int argc, char** argv) {
         imguiIo.IniFilename = imguiIniPath.c_str();
         imguiIo.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
         const std::filesystem::path uiFont = Platform::defaultUiFont();
-        ImFont* defaultFont = uiFont.empty()
-            ? imguiIo.Fonts->AddFontDefault()
-            : imguiIo.Fonts->AddFontFromFileTTF(uiFont.string().c_str(), 16.0F);
+        ImFont* defaultFont = uiFont.empty() ? imguiIo.Fonts->AddFontDefault()
+                                             : imguiIo.Fonts->AddFontFromFileTTF(uiFont.string().c_str(), 16.0F);
         if (defaultFont == nullptr) {
             throw std::runtime_error("Could not load ImGui font: " + uiFont.string());
         }
@@ -387,14 +399,14 @@ int main(int argc, char** argv) {
         ImFontConfig terminalFontConfig;
         terminalFontConfig.SizePixels = 16.0F;
         ImFont* terminalFont = terminalFontPath.empty()
-            ? imguiIo.Fonts->AddFontDefault(&terminalFontConfig)
-            : imguiIo.Fonts->AddFontFromFileTTF(terminalFontPath.string().c_str(), 16.0F);
+                                   ? imguiIo.Fonts->AddFontDefault(&terminalFontConfig)
+                                   : imguiIo.Fonts->AddFontFromFileTTF(terminalFontPath.string().c_str(), 16.0F);
         EditorStyle::apply();
         auto shaderGraphPanel = std::make_unique<Editor::ShaderGraphPanel>();
         Engine::ShaderGraphAsset shaderGraph{.name = "Untitled Shader Graph"};
         Engine::ShaderPinId shaderGraphPinId = 1;
-        shaderGraph.nodes.push_back(Engine::ShaderNodeFactory::create(
-            Engine::ShaderNodeType::SurfaceOutput, 1, shaderGraphPinId));
+        shaderGraph.nodes.push_back(
+            Engine::ShaderNodeFactory::create(Engine::ShaderNodeType::SurfaceOutput, 1, shaderGraphPinId));
         shaderGraphPanel->open(shaderGraph);
 
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
@@ -407,58 +419,58 @@ int main(int argc, char** argv) {
         bool gameBuildRunning = false;
         std::filesystem::path scriptProjectRoot = project.rootPath();
         const std::filesystem::path scriptBuildDirectory = project.rootPath() / "Library" / "ScriptBuild";
-        const std::filesystem::path modulePath = project.rootPath() / "Library" / "ScriptModules" / Platform::ScriptModuleFilename;
+        const std::filesystem::path modulePath =
+            project.rootPath() / "Library" / "ScriptModules" / Platform::ScriptModuleFilename;
         if (!scriptModules.loadInitialModule(modulePath, Engine::ScriptModuleLoadMode::HotReload)) {
             Editor::ConsolePanel::info("No compiled game scripts module yet; it will be built for this project.");
         }
         // Shader hot reload still uses the source build. C++ script hot reload
         // above is deliberately independent of whether this is a package.
-        const bool portableEditor = std::filesystem::is_regular_file(
-            editorRoot / "Tools" / "Slang" /
+        const bool portableEditor = std::filesystem::is_regular_file(editorRoot / "Tools" / "Slang" /
 #ifdef _WIN32
-            "slangc.exe"
+                                                                     "slangc.exe"
 #else
-            "slangc"
+                                                                     "slangc"
 #endif
         );
         if (configureScriptBuild(editorRoot, project.rootPath(), project.assetRoot())) {
-            scriptHotReload.emplace(project.assetRoot() / "Scripts", modulePath,
-                                    scriptBuildDirectory, "Release");
+            scriptHotReload.emplace(project.assetRoot() / "Scripts", modulePath, scriptBuildDirectory, "Release");
             scriptHotReload->requestBuild();
             Editor::ConsolePanel::info("C++ script hot reload enabled.");
         } else {
-            Editor::ConsolePanel::warning("C++ script toolchain is unavailable. Install CMake and a C++23 compiler (MSVC on Windows, GCC or Clang on Linux), then reopen the project.");
+            Editor::ConsolePanel::warning("C++ script toolchain is unavailable. Install CMake and a C++23 compiler "
+                                          "(MSVC on Windows, GCC or Clang on Linux), then reopen the project.");
         }
         if (!portableEditor) {
             if (const auto buildDirectory = findDevelopmentBuildDirectory(editorRoot)) {
                 if (const auto shaderDirectory = findEngineShaderDirectory(*buildDirectory)) {
                     shaderHotReload.emplace(*shaderDirectory, *buildDirectory,
-                                             *buildDirectory / "resources" / "shaders", editorRoot / "shaders",
-                                             buildConfigurationFromExecutableDirectory(editorRoot));
+                                            *buildDirectory / "resources" / "shaders", editorRoot / "shaders",
+                                            buildConfigurationFromExecutableDirectory(editorRoot));
                 } else {
                     Editor::ConsolePanel::warning("Shader hot reload is unavailable: could not locate Engine/Shaders.");
                 }
             }
         }
         Engine::Assets::Content content{project.assetRoot()};
-        content.setErrorHandler([](const std::string& message) {
-            Editor::ConsolePanel::error("Asset: " + message);
-        });
-        const auto resolveShaderGraphMaterials = [&](const std::optional<std::filesystem::path>& updatedGraph = std::nullopt) {
+        content.setErrorHandler([](const std::string& message) { Editor::ConsolePanel::error("Asset: " + message); });
+        const auto resolveShaderGraphMaterials = [&](const std::optional<std::filesystem::path>& updatedGraph =
+                                                         std::nullopt) {
             const auto forwardTemplate = shaderGraphSourceDirectory / "Forward/forward_pbr.slang";
             const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
             std::unordered_map<std::filesystem::path, std::vector<Engine::Entity>> materialsByGraph;
-            scene.editor().view<Engine::MeshRenderer>([&](const Engine::Entity entity, const Engine::MeshRenderer& meshRenderer) {
-                const auto graphAsset = meshRenderer.material.shaderGraphAsset.lexically_normal();
-                if (meshRenderer.material.shaderSource == Engine::MaterialShaderSource::ShaderGraph &&
-                    !graphAsset.empty() && (!updatedGraph || graphAsset == *updatedGraph)) {
-                    materialsByGraph[graphAsset].push_back(entity);
-                }
-            });
+            scene.editor().view<Engine::MeshRenderer>(
+                [&](const Engine::Entity entity, const Engine::MeshRenderer& meshRenderer) {
+                    const auto graphAsset = meshRenderer.material.shaderGraphAsset.lexically_normal();
+                    if (meshRenderer.material.shaderSource == Engine::MaterialShaderSource::ShaderGraph &&
+                        !graphAsset.empty() && (!updatedGraph || graphAsset == *updatedGraph)) {
+                        materialsByGraph[graphAsset].push_back(entity);
+                    }
+                });
             for (const auto& [graphAsset, entities] : materialsByGraph) {
                 auto material = scene.editor().read<Engine::MeshRenderer>(entities.front()).material;
-                const auto result = Engine::ShaderGraphMaterialCompiler{}.resolve(
-                    material, content.assetRoot(), forwardTemplate, generatedDirectory);
+                const auto result = Engine::ShaderGraphMaterialCompiler{}.resolve(material, content.assetRoot(),
+                                                                                  forwardTemplate, generatedDirectory);
                 if (result.succeeded()) {
                     for (const Engine::Entity entity : entities) {
                         scene.editor().patch<Engine::MeshRenderer>(entity, [&](Engine::MeshRenderer& meshRenderer) {
@@ -475,7 +487,8 @@ int main(int argc, char** argv) {
                         });
                     }
                     std::string error{"Could not resolve Shader Graph material"};
-                    for (const auto& diagnostic : result.diagnostics) error += ": " + diagnostic.message;
+                    for (const auto& diagnostic : result.diagnostics)
+                        error += ": " + diagnostic.message;
                     Editor::ConsolePanel::error(error);
                 }
             }
@@ -485,11 +498,9 @@ int main(int argc, char** argv) {
             resolveShaderGraphMaterials(relativePath);
         });
         Editor::ConsolePanel::info("Editor started for project '" + project.name() + "'.");
-        const bool restoreScene = !projectPath && !createProjectPath &&
-                                  std::filesystem::is_regular_file(previousSession.scenePath);
-        const auto initialScene = restoreScene
-                                      ? previousSession.scenePath
-                                      : project.startupScene();
+        const bool restoreScene =
+            !projectPath && !createProjectPath && std::filesystem::is_regular_file(previousSession.scenePath);
+        const auto initialScene = restoreScene ? previousSession.scenePath : project.startupScene();
         const bool loadInitialSceneAsync = std::filesystem::is_regular_file(initialScene);
         if (loadInitialSceneAsync) {
             EditorSceneSession::setScenePath(initialScene);
@@ -502,8 +513,7 @@ int main(int argc, char** argv) {
         // by default. Antialiasing defaults to TAA and is overridden by the
         // startup scene when that scene stores a different mode.
         EditorUiBackend editorUiBackend;
-        Engine::Renderer renderer{Engine::RenderConfig{
-            .features = Engine::RenderFeatures{.shadows = true}}};
+        Engine::Renderer renderer{Engine::RenderConfig{.features = Engine::RenderFeatures{.shadows = true}}};
         renderer.setEditorUiBackend(&editorUiBackend);
         renderer.setProjectRoot(project.rootPath());
         renderer.initializeCore(scene, window);
@@ -520,8 +530,8 @@ int main(int argc, char** argv) {
                                              const std::chrono::steady_clock::time_point startedAt) {
             const auto elapsed = std::chrono::steady_clock::now() - startedAt;
             const auto milliseconds = std::chrono::duration<double, std::milli>{elapsed}.count();
-            Editor::ConsolePanel::info("[SceneLoad] " + std::string{stage} + ": " +
-                                       std::to_string(milliseconds) + " ms");
+            Editor::ConsolePanel::info("[SceneLoad] " + std::string{stage} + ": " + std::to_string(milliseconds) +
+                                       " ms");
         };
         EntityClipboard clipboard;
         Engine::Entity selectedEntity = Engine::NullEntity;
@@ -539,13 +549,13 @@ int main(int argc, char** argv) {
         };
         const auto setSelection = [&](const Engine::Entity entity) {
             selectedEntities.clear();
-            if (entity != Engine::NullEntity) selectedEntities.push_back(entity);
+            if (entity != Engine::NullEntity)
+                selectedEntities.push_back(entity);
             selectedEntity = entity;
             renderer.setEditorSelection(selectedEntity);
         };
         const auto toggleSelection = [&](const Engine::Entity entity) {
-            if (const auto found = std::ranges::find(selectedEntities, entity);
-                found != selectedEntities.end()) {
+            if (const auto found = std::ranges::find(selectedEntities, entity); found != selectedEntities.end()) {
                 selectedEntities.erase(found);
                 if (selectedEntity == entity)
                     selectedEntity = selectedEntities.empty() ? Engine::NullEntity : selectedEntities.back();
@@ -626,8 +636,7 @@ int main(int argc, char** argv) {
                     initialSceneSyncPending = true;
                     Editor::ConsolePanel::info("[SceneLoad] ECS ready: " + initialScene.string());
                 } catch (const std::exception& error) {
-                    Editor::ConsolePanel::error("Could not load startup scene: " +
-                                                std::string{error.what()});
+                    Editor::ConsolePanel::error("Could not load startup scene: " + std::string{error.what()});
                 }
                 initialSceneLoad.reset();
             }
@@ -643,14 +652,18 @@ int main(int argc, char** argv) {
                                                     EditorSceneSession::antialiasingLevel(renderer))) {
                     physicsSystem.reset();
                     playing = !playing;
-                    if (!playing) static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Normal));
-                    if (!playing) resolveShaderGraphMaterials();
+                    if (!playing)
+                        static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Normal));
+                    if (!playing)
+                        resolveShaderGraphMaterials();
                     paused = false;
                     physicsAccumulator = 0.0;
                     showGameView = playing;
-                    if (!playing) requestFullSceneReload();
+                    if (!playing)
+                        requestFullSceneReload();
                     Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
-                } else Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
+                } else
+                    Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
             }
             if (events.togglePause && playing) {
                 paused = !paused;
@@ -683,18 +696,13 @@ int main(int argc, char** argv) {
             bool duplicateRequested = false;
             bool resetHistoryRequested = false;
             bool gameBuildRequested = false;
-            if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project, editorRoot, titleBar,
-                                                                 antialiasingChanged, sceneLoaded, sceneSaved,
-                                                                 sceneDeleted,
-                                                                 playing, paused, playToggleRequested,
-                                                                 pauseToggleRequested, history.canUndo(),
-                                                                 history.canRedo(), clipboard.canPaste(scene),
-                                                                 undoRequested, redoRequested, copyRequested,
-                                                                 pasteRequested, duplicateRequested,
-                                                                 resetHistoryRequested, showHierarchy,
-                                                                 showViewport, showInspector, showAssetManager,
-                                                                 showTerrainTools, showConsole, showTerminal,
-                                                                 showShaderGraph, showProfiler, gameBuildRequested);
+            if (const Engine::Entity created = drawEditorMenuBar(
+                    scene, renderer, content, project, editorRoot, titleBar, antialiasingChanged, sceneLoaded,
+                    sceneSaved, sceneDeleted, playing, paused, playToggleRequested, pauseToggleRequested,
+                    history.canUndo(), history.canRedo(), clipboard.canPaste(scene), undoRequested, redoRequested,
+                    copyRequested, pasteRequested, duplicateRequested, resetHistoryRequested, showHierarchy,
+                    showViewport, showInspector, showAssetManager, showTerrainTools, showConsole, showTerminal,
+                    showShaderGraph, showProfiler, gameBuildRequested);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
@@ -704,7 +712,8 @@ int main(int argc, char** argv) {
             if (gameBuildRequested && !gameBuildRunning) {
                 try {
                     const auto activeScenePath = EditorSceneSession::scenePath();
-                    if (activeScenePath.empty()) throw std::runtime_error("Save the startup scene before building the game.");
+                    if (activeScenePath.empty())
+                        throw std::runtime_error("Save the startup scene before building the game.");
                     Engine::SceneSerializer::save(scene, activeScenePath, renderer.antialiasingLevel());
                     EditorSceneSession::markSceneSaved(activeScenePath);
                     Editor::ConsolePanel::info(std::string{"Building "} + Platform::BuildPlatform +
@@ -712,11 +721,10 @@ int main(int argc, char** argv) {
                     const Engine::Project buildProject = project;
                     const std::filesystem::path buildEditorRoot = editorRoot;
                     gameBuildRunning = true;
-                    gameBuild = std::async(std::launch::async,
-                                           [buildEditorRoot, buildProject] {
-                                               const Editor::GameBuildPipeline pipeline{buildEditorRoot};
-                                               return pipeline.build(buildProject, {});
-                                           });
+                    gameBuild = std::async(std::launch::async, [buildEditorRoot, buildProject] {
+                        const Editor::GameBuildPipeline pipeline{buildEditorRoot};
+                        return pipeline.build(buildProject, {});
+                    });
                 } catch (const std::exception& error) {
                     Editor::ConsolePanel::error("Game build failed: " + std::string{error.what()});
                 }
@@ -728,7 +736,8 @@ int main(int argc, char** argv) {
                 if (build.success) {
                     Editor::ConsolePanel::info("Game build complete: " + build.executable.string());
                 } else {
-                    for (const auto& error : build.errors) Editor::ConsolePanel::error("Game build failed: " + error);
+                    for (const auto& error : build.errors)
+                        Editor::ConsolePanel::error("Game build failed: " + error);
                 }
             }
             if (sceneDeleted) {
@@ -760,8 +769,7 @@ int main(int argc, char** argv) {
                 resolveShaderGraphMaterials();
                 requestFullSceneReload();
             }
-            if (!playing && selectedEntity != Engine::NullEntity &&
-                scene.editor().valid(selectedEntity)) {
+            if (!playing && selectedEntity != Engine::NullEntity && scene.editor().valid(selectedEntity)) {
                 if (copyRequested) {
                     clipboard.copy(scene, selectedEntity);
                 }
@@ -780,7 +788,8 @@ int main(int argc, char** argv) {
                 }
                 physicsSystem.reset();
                 playing = enabled;
-                if (!playing) static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Normal));
+                if (!playing)
+                    static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Normal));
                 paused = false;
                 physicsAccumulator = 0.0;
                 showGameView = playing;
@@ -791,15 +800,16 @@ int main(int argc, char** argv) {
                 Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
                 return true;
             };
-            if (playToggleRequested) static_cast<void>(setPlayMode(!playing));
+            if (playToggleRequested)
+                static_cast<void>(setPlayMode(!playing));
             if (pauseToggleRequested && playing) {
                 paused = !paused;
                 physicsAccumulator = 0.0;
             }
-            const ImGuiViewport *viewport = ImGui::GetMainViewport();
-            const ImVec2 dockSize{viewport->WorkSize.x,
-                                  std::max(0.0F, viewport->WorkSize.y -
-                                                    static_cast<float>(EditorConstants::statusBarHeight))};
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            const ImVec2 dockSize{
+                viewport->WorkSize.x,
+                std::max(0.0F, viewport->WorkSize.y - static_cast<float>(EditorConstants::statusBarHeight))};
             // Keep the status bar outside the dockspace. DockSpaceOverViewport
             // uses the complete work area, which allowed docked panels to
             // continue underneath the status bar.
@@ -807,9 +817,9 @@ int main(int argc, char** argv) {
             ImGui::SetNextWindowSize(dockSize);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
             ImGui::Begin("##editor-dockspace", nullptr,
-                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
-                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                         ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground);
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                             ImGuiWindowFlags_NoBackground);
             const ImGuiID dockspaceId = viewport->ID;
             ImGui::DockSpace(dockspaceId, {0.0F, 0.0F}, ImGuiDockNodeFlags_PassthruCentralNode);
             EditorStyle::configureDockLayout(dockSize, restorePersistedLayout);
@@ -818,19 +828,21 @@ int main(int argc, char** argv) {
             HierarchyPanel::Action hierarchyAction = HierarchyPanel::Action::None;
             Engine::Entity hierarchyActionEntity = Engine::NullEntity;
             if (showHierarchy) {
-                if (const Engine::Entity clicked = HierarchyPanel::draw(
-                        scene, content, selectedEntities, hierarchyAction, hierarchyActionEntity,
-                        clipboard.canPaste(scene), playing, showHierarchy);
+                if (const Engine::Entity clicked =
+                        HierarchyPanel::draw(scene, content, selectedEntities, hierarchyAction, hierarchyActionEntity,
+                                             clipboard.canPaste(scene), playing, showHierarchy);
                     clicked != Engine::NullEntity) {
                     // Ctrl toggles individual rows; Shift extends the set.
                     // The last clicked object remains the active inspector/gizmo target.
-                    if (ImGui::GetIO().KeyCtrl) toggleSelection(clicked);
+                    if (ImGui::GetIO().KeyCtrl)
+                        toggleSelection(clicked);
                     else if (ImGui::GetIO().KeyShift) {
                         if (std::ranges::find(selectedEntities, clicked) == selectedEntities.end())
                             selectedEntities.push_back(clicked);
                         selectedEntity = clicked;
                         renderer.setEditorSelection(selectedEntity);
-                    } else setSelection(clicked);
+                    } else
+                        setSelection(clicked);
                 }
             }
             if (!playing && hierarchyAction == HierarchyPanel::Action::Paste) {
@@ -848,8 +860,7 @@ int main(int argc, char** argv) {
                     clipboard.copy(scene, hierarchyActionEntity);
                 }
             }
-            if (!playing && !ImGui::GetIO().WantTextInput &&
-                !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+            if (!playing && !ImGui::GetIO().WantTextInput && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
                 bool gizmoModeChanged = false;
                 if (ImGui::IsKeyPressed(ImGuiKey_W)) {
                     gizmoMode = GizmoMode::Translate;
@@ -863,48 +874,48 @@ int main(int argc, char** argv) {
                     gizmoMode = GizmoMode::Scale;
                     gizmoModeChanged = true;
                 }
-                if (gizmoModeChanged && selectedEntity != Engine::NullEntity &&
-                    scene.editor().valid(selectedEntity)) {
+                if (gizmoModeChanged && selectedEntity != Engine::NullEntity && scene.editor().valid(selectedEntity)) {
                     renderer.setEditorSelection(selectedEntity);
                 }
             }
             ViewportInteraction viewportInteraction{};
             if (showViewport) {
-                viewportInteraction = drawViewport(
-                    scene, content, selectedEntity, selectedEntities, renderer,
-                    renderer.gameViewport(), renderer.sceneViewport(),
-                    renderer.editorCameraYaw(), renderer.editorCameraPitch(), showGameView, gizmoMode,
-                    selectionTool, terrainSculpt, playing, showViewport);
+                viewportInteraction =
+                    drawViewport(scene, content, selectedEntity, selectedEntities, renderer, renderer.gameViewport(),
+                                 renderer.sceneViewport(), renderer.editorCameraYaw(), renderer.editorCameraPitch(),
+                                 showGameView, gizmoMode, selectionTool, terrainSculpt, playing, showViewport);
             }
             if (viewportInteraction.playModeAction == PlayModeAction::Start && !playing) {
                 static_cast<void>(setPlayMode(true));
             } else if (viewportInteraction.playModeAction == PlayModeAction::Stop && playing) {
                 static_cast<void>(setPlayMode(false));
-            } else if (viewportInteraction.playModeAction == PlayModeAction::Restart && playing &&
-                       setPlayMode(false)) {
+            } else if (viewportInteraction.playModeAction == PlayModeAction::Restart && playing && setPlayMode(false)) {
                 static_cast<void>(setPlayMode(true));
             }
             if (playing && viewportInteraction.gameViewClicked)
                 static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Locked));
             if (showTerrainTools) {
-                drawTerrainToolsPanel(scene, content, selectedEntity, renderer, terrainSculpt,
-                                      playing, showTerrainTools);
+                drawTerrainToolsPanel(scene, content, selectedEntity, renderer, terrainSculpt, playing,
+                                      showTerrainTools);
             }
             if (viewportInteraction.createdEntity != Engine::NullEntity) {
                 setSelection(viewportInteraction.createdEntity);
             }
             if (!playing && viewportInteraction.sceneClicked) {
-                constexpr float viewportAspect = EditorConstants::viewportWidthRatio /
-                                                 EditorConstants::viewportHeightRatio;
-                const Engine::Entity hit = pickSceneEntity(scene, physicsSystem, renderer,
-                                                           viewportInteraction.normalizedX,
-                                                           viewportInteraction.normalizedY, viewportAspect);
-                if (ImGui::GetIO().KeyCtrl && hit != Engine::NullEntity) toggleSelection(hit);
+                constexpr float viewportAspect =
+                    EditorConstants::viewportWidthRatio / EditorConstants::viewportHeightRatio;
+                const Engine::Entity hit =
+                    pickSceneEntity(scene, physicsSystem, renderer, viewportInteraction.normalizedX,
+                                    viewportInteraction.normalizedY, viewportAspect);
+                if (ImGui::GetIO().KeyCtrl && hit != Engine::NullEntity)
+                    toggleSelection(hit);
                 else if (ImGui::GetIO().KeyShift && hit != Engine::NullEntity) {
-                    if (std::ranges::find(selectedEntities, hit) == selectedEntities.end()) selectedEntities.push_back(hit);
+                    if (std::ranges::find(selectedEntities, hit) == selectedEntities.end())
+                        selectedEntities.push_back(hit);
                     selectedEntity = hit;
                     renderer.setEditorSelection(selectedEntity);
-                } else setSelection(hit);
+                } else
+                    setSelection(hit);
             }
             if (!playing && viewportInteraction.selectionCommitted) {
                 if (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift) {
@@ -912,7 +923,8 @@ int main(int argc, char** argv) {
                         if (std::ranges::find(selectedEntities, entity) == selectedEntities.end())
                             selectedEntities.push_back(entity);
                     }
-                    if (!selectedEntities.empty()) selectedEntity = selectedEntities.back();
+                    if (!selectedEntities.empty())
+                        selectedEntity = selectedEntities.back();
                     renderer.setEditorSelection(selectedEntity);
                 } else {
                     selectedEntities = std::move(viewportInteraction.selectedEntities);
@@ -920,64 +932,63 @@ int main(int argc, char** argv) {
                     renderer.setEditorSelection(selectedEntity);
                 }
             }
-            const bool inspectorConsumesMouseWheel = showInspector &&
-                ComponentsPanel::draw(scene, content, shaderGraphSourceDirectory, selectedEntities, selectedEntity,
-                                      deferredWaterBodyRemovals, showInspector);
+            const bool inspectorConsumesMouseWheel =
+                showInspector && ComponentsPanel::draw(scene, content, shaderGraphSourceDirectory, selectedEntities,
+                                                       selectedEntity, deferredWaterBodyRemovals, showInspector);
             if (showAssetManager) {
-                if (const Engine::Entity created =
-                        AssetManagerPanel::draw(scene, content, playing, showAssetManager,
-                                                !project.manifestPath().empty(),
-                                                [&](const std::filesystem::path& relativePath) {
-                                                    try {
-                                                        shaderGraph = Engine::ShaderGraphSerializer::load(
-                                                            content.assetRoot() / relativePath);
-                                                        shaderGraphPanel->open(shaderGraph,
-                                                                               content.assetRoot() / relativePath);
-                                                        showShaderGraph = true;
-                                                    } catch (const std::exception& error) {
-                                                        Editor::ConsolePanel::error("Could not open shader graph: " +
-                                                                                    std::string{error.what()});
-                                                    }
-                                                },
-                                                [&](const std::filesystem::path& deletedPath) {
-                                                    if (deletedPath != EditorSceneSession::scenePath()) return;
+                if (const Engine::Entity created = AssetManagerPanel::draw(
+                        scene, content, playing, showAssetManager, !project.manifestPath().empty(),
+                        [&](const std::filesystem::path& relativePath) {
+                            try {
+                                shaderGraph = Engine::ShaderGraphSerializer::load(content.assetRoot() / relativePath);
+                                shaderGraphPanel->open(shaderGraph, content.assetRoot() / relativePath);
+                                showShaderGraph = true;
+                            } catch (const std::exception& error) {
+                                Editor::ConsolePanel::error("Could not open shader graph: " +
+                                                            std::string{error.what()});
+                            }
+                        },
+                        [&](const std::filesystem::path& deletedPath) {
+                            if (deletedPath != EditorSceneSession::scenePath())
+                                return;
 
-                                                    EditorSceneSession::clearSavedScene();
-                                                    Engine::ScenePreset emptyScene;
-                                                    Engine::SceneSerializer::replace(scene, emptyScene);
-                                                    scene.plane = Engine::NullEntity;
-                                                    scene.camera = Engine::NullEntity;
-                                                    scene.particleSystem = Engine::NullEntity;
-                                                    scene.editorGameObjects.clear();
-                                                    scene.editorCubes.clear();
-                                                    scene.editorPlanes.clear();
-                                                    scene.editorSpheres.clear();
-                                                    scene.editorCapsules.clear();
-                                                    scene.editorRamps.clear();
-                                                    scene.editorLights.clear();
-                                                    scene.editorTerrains.clear();
-                                                    scene.editorClouds.clear();
-                                                    history.reset(scene);
-                                                    lastPersistedSceneRevision = scene.editor().mutationRevision();
-                                                    requestFullSceneReload();
-                                                });
+                            EditorSceneSession::clearSavedScene();
+                            Engine::ScenePreset emptyScene;
+                            Engine::SceneSerializer::replace(scene, emptyScene);
+                            scene.plane = Engine::NullEntity;
+                            scene.camera = Engine::NullEntity;
+                            scene.particleSystem = Engine::NullEntity;
+                            scene.editorGameObjects.clear();
+                            scene.editorCubes.clear();
+                            scene.editorPlanes.clear();
+                            scene.editorSpheres.clear();
+                            scene.editorCapsules.clear();
+                            scene.editorRamps.clear();
+                            scene.editorLights.clear();
+                            scene.editorTerrains.clear();
+                            scene.editorClouds.clear();
+                            history.reset(scene);
+                            lastPersistedSceneRevision = scene.editor().mutationRevision();
+                            requestFullSceneReload();
+                        });
                     created != Engine::NullEntity) {
                     setSelection(created);
                 }
             }
-            if (showConsole) Editor::ConsolePanel::draw(showConsole);
-            if (showTerminal) terminal.draw(showTerminal);
-            if (showShaderGraph) shaderGraphPanel->draw(showShaderGraph);
+            if (showConsole)
+                Editor::ConsolePanel::draw(showConsole);
+            if (showTerminal)
+                terminal.draw(showTerminal);
+            if (showShaderGraph)
+                shaderGraphPanel->draw(showShaderGraph);
             Editor::drawProfilerPanel(renderer, showProfiler);
             drawStatusBar(scene, selectedEntity, playing, paused);
-            if (!playing && selectedEntity != Engine::NullEntity &&
-                scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&
-                ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+            if (!playing && selectedEntity != Engine::NullEntity && scene.editor().valid(selectedEntity) &&
+                !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
                 deferEntityDestruction(selectedEntity);
                 setSelection(Engine::NullEntity);
             }
-            if (!playing && !ImGui::GetIO().WantTextInput &&
-                ImGui::GetIO().KeyCtrl) {
+            if (!playing && !ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl) {
                 if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_N)) {
                     selectedEntity = scene.createGameObject();
                     renderer.setEditorSelection(selectedEntity);
@@ -1007,8 +1018,7 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            renderer.setEditorSceneCameraInput(
-                viewportInteraction.cameraInput && !inspectorConsumesMouseWheel);
+            renderer.setEditorSceneCameraInput(viewportInteraction.cameraInput && !inspectorConsumesMouseWheel);
             // A Stop click changes `playing` after drawViewport() has produced
             // its interaction state.  Do not pass that stale state to the
             // camera controller, so its relative-mouse mode is released now.
@@ -1018,13 +1028,12 @@ int main(int argc, char** argv) {
             if (antialiasingChanged) {
                 rendererReloadPending = true;
             }
-            const bool sceneStructureChanged = !sceneLoaded &&
-                                               scene.editor().structuralRevision() != sceneStructureBeforeUi;
+            const bool sceneStructureChanged =
+                !sceneLoaded && scene.editor().structuralRevision() != sceneStructureBeforeUi;
             // ImGui::Image has already captured this frame's viewport descriptor.
             // Rebuilding scene resources can release that descriptor, so defer the
             // rebuild until its draw commands have been submitted below.
-            bool sceneResourceSyncPending = sceneStructureChanged ||
-                                            viewportInteraction.terrainGrassChanged;
+            bool sceneResourceSyncPending = sceneStructureChanged || viewportInteraction.terrainGrassChanged;
             if (!sceneResourceSyncPending && viewportInteraction.terrainGeometryChanged) {
                 for (const Engine::Entity terrain : viewportInteraction.terrainGeometryEntities)
                     renderer.updateMeshGeometry(terrain);
@@ -1040,8 +1049,7 @@ int main(int argc, char** argv) {
             // decoded GLB image pixels. Capture only after an actual mutation
             // and once an interactive edit has finished; SceneHistory performs
             // the revision check before touching the serializer.
-            const bool editingScene = ImGui::IsAnyItemActive() ||
-                                      ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            const bool editingScene = ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left);
             if (!playing && !sceneLoaded && !editingScene) {
                 static_cast<void>(history.capture(scene));
             }
@@ -1051,21 +1059,19 @@ int main(int argc, char** argv) {
             }
             const auto now = std::chrono::steady_clock::now();
             const std::uint64_t currentSceneRevision = scene.editor().mutationRevision();
-            if (!playing && EditorSceneSession::hasSavedScene() &&
-                currentSceneRevision != lastPersistedSceneRevision &&
+            if (!playing && EditorSceneSession::hasSavedScene() && currentSceneRevision != lastPersistedSceneRevision &&
                 now - lastAutoSaveAttempt >= autoSaveInterval) {
                 lastAutoSaveAttempt = now;
                 try {
                     const std::filesystem::path path = EditorSceneSession::scenePath();
-                    if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
-                    Engine::SceneSerializer::save(scene, path,
-                                                  EditorSceneSession::antialiasingLevel(renderer));
+                    if (!path.parent_path().empty())
+                        std::filesystem::create_directories(path.parent_path());
+                    Engine::SceneSerializer::save(scene, path, EditorSceneSession::antialiasingLevel(renderer));
                     EditorSceneSession::markSceneSaved(path);
                     lastPersistedSceneRevision = currentSceneRevision;
                     Editor::ConsolePanel::info("Auto-saved scene: " + path.string());
                 } catch (const std::exception& error) {
-                    Editor::ConsolePanel::warning("Could not auto-save scene: " +
-                                                  std::string{error.what()});
+                    Editor::ConsolePanel::warning("Could not auto-save scene: " + std::string{error.what()});
                 }
             }
             if (playing && !paused) {
@@ -1078,8 +1084,7 @@ int main(int argc, char** argv) {
                         GE_PROFILE_SCOPE("Physics");
                         physicsSystem.update(scene, static_cast<float>(EditorConstants::physicsStep));
                     } catch (const std::exception& error) {
-                        Editor::ConsolePanel::error("Physics simulation stopped: " +
-                                                    std::string{error.what()});
+                        Editor::ConsolePanel::error("Physics simulation stopped: " + std::string{error.what()});
                         static_cast<void>(setPlayMode(false));
                         break;
                     }
@@ -1102,8 +1107,9 @@ int main(int argc, char** argv) {
                 if (configureScriptBuild(editorRoot, project.rootPath(), project.assetRoot())) {
                     if (!scriptHotReload) {
                         scriptHotReload.emplace(project.assetRoot() / "Scripts",
-                            project.rootPath() / "Library/ScriptModules" / Platform::ScriptModuleFilename,
-                            project.rootPath() / "Library/ScriptBuild", "Release");
+                                                project.rootPath() / "Library/ScriptModules" /
+                                                    Platform::ScriptModuleFilename,
+                                                project.rootPath() / "Library/ScriptBuild", "Release");
                         scriptHotReload->requestBuild();
                     }
                 } else {
@@ -1114,18 +1120,17 @@ int main(int argc, char** argv) {
             }
             if (scriptHotReload) {
                 scriptHotReload->setProject(project.assetRoot() / "Scripts",
-                    project.rootPath() / "Library/ScriptModules" / Platform::ScriptModuleFilename,
-                    project.rootPath() / "Library/ScriptBuild");
+                                            project.rootPath() / "Library/ScriptModules" /
+                                                Platform::ScriptModuleFilename,
+                                            project.rootPath() / "Library/ScriptBuild");
                 scriptHotReload->poll(
-                    scriptModules, scene,
-                    [](const std::string &message) { Editor::ConsolePanel::info(message); },
-                    [](const std::string &message) { Editor::ConsolePanel::warning(message); });
+                    scriptModules, scene, [](const std::string& message) { Editor::ConsolePanel::info(message); },
+                    [](const std::string& message) { Editor::ConsolePanel::warning(message); });
             }
             if (shaderHotReload) {
-                shaderHotReload->poll(
-                    [&renderer] { return renderer.reloadShaders(); },
-                    [](const std::string& message) { Editor::ConsolePanel::info(message); },
-                    [](const std::string& message) { Editor::ConsolePanel::warning(message); });
+                shaderHotReload->poll([&renderer] { return renderer.reloadShaders(); },
+                                      [](const std::string& message) { Editor::ConsolePanel::info(message); },
+                                      [](const std::string& message) { Editor::ConsolePanel::warning(message); });
             }
             ImGui::Render();
             const bool deferSceneGpuWork = skipRendererFrameAfterSceneRestore;
@@ -1135,8 +1140,7 @@ int main(int argc, char** argv) {
                     renderer.renderFrame();
                 }
             }
-            if (!deferSceneGpuWork &&
-                (!deferredWaterBodyRemovals.empty() || !deferredEntityDestructions.empty())) {
+            if (!deferSceneGpuWork && (!deferredWaterBodyRemovals.empty() || !deferredEntityDestructions.empty())) {
                 // `renderFrame()` has submitted every command that references
                 // the old render snapshot (including ImGui::Image). Now the
                 // ECS can change and the renderer can atomically rebuild its
@@ -1148,8 +1152,7 @@ int main(int argc, char** argv) {
                 }
                 deferredEntityDestructions.clear();
                 for (const Engine::Entity entity : deferredWaterBodyRemovals) {
-                    if (!scene.editor().valid(entity) ||
-                        !scene.editor().has<Engine::WaterBodyComponent>(entity)) {
+                    if (!scene.editor().valid(entity) || !scene.editor().has<Engine::WaterBodyComponent>(entity)) {
                         continue;
                     }
                     // Water is an editor archetype. Removing it must not
@@ -1185,7 +1188,8 @@ int main(int argc, char** argv) {
                 // Duplicated objects do not exist in the renderer's cached
                 // renderable list until synchronization completes. Reapply
                 // the selection so the next frame can outline it immediately.
-                if (sceneStructureChanged) renderer.setEditorSelection(selectedEntity);
+                if (sceneStructureChanged)
+                    renderer.setEditorSelection(selectedEntity);
                 initialSceneSyncPending = false;
                 initialSceneFirstRenderableFramePending = completingInitialSceneLoad;
             }
@@ -1218,13 +1222,11 @@ int main(int argc, char** argv) {
 
             // Keep the editor UI responsive without unnecessarily throttling
             // the game simulation while Play Mode is active.
-            if (const auto elapsed = std::chrono::steady_clock::now() - start;
-                !playing && elapsed < targetFrame) {
+            if (const auto elapsed = std::chrono::steady_clock::now() - start; !playing && elapsed < targetFrame) {
                 std::this_thread::sleep_for(targetFrame - elapsed);
             }
         }
-        Editor::saveSession({.projectManifest = project.manifestPath(),
-                             .scenePath = EditorSceneSession::scenePath()});
+        Editor::saveSession({.projectManifest = project.manifestPath(), .scenePath = EditorSceneSession::scenePath()});
         terminal.shutdown();
         scriptModules.unload(scene);
         renderer.shutdown();
@@ -1236,12 +1238,12 @@ int main(int argc, char** argv) {
         SDL_Quit();
         Engine::Diagnostics::instance().shutdown();
         return 0;
-    } catch (const std::exception &error) {
-        Engine::Diagnostics::instance().report(Engine::DiagnosticSeverity::Error, error.what(), {.subsystem = "Editor"});
+    } catch (const std::exception& error) {
+        Engine::Diagnostics::instance().report(Engine::DiagnosticSeverity::Error, error.what(),
+                                               {.subsystem = "Editor"});
         Engine::Diagnostics::instance().shutdown();
         std::fprintf(stderr, "Editor error: %s\n", error.what());
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "GamEngine Editor error",
-                                 error.what(), nullptr);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "GamEngine Editor error", error.what(), nullptr);
         return 1;
     }
 }

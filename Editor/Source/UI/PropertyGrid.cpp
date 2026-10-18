@@ -11,7 +11,8 @@ PropertyGrid::PropertyGrid(const char* id, const float labelWidth) {
 }
 
 PropertyGrid::~PropertyGrid() {
-    if (active_) ImGui::EndTable();
+    if (active_)
+        ImGui::EndTable();
 }
 
 } // namespace EditorUI

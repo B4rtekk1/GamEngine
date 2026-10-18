@@ -1,12 +1,12 @@
 #include "Editor/Panels/ConsolePanel.h"
+
 #include "Elements/NumericControl.h"
 #include "Engine/Core/Diagnostics.h"
-
 #include "imgui.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <ctime>
 #include <limits>
 #include <string>
@@ -16,17 +16,21 @@ namespace {
 
 Editor::LogLevel toLogLevel(const Engine::DiagnosticSeverity level) {
     switch (level) {
-    case Engine::DiagnosticSeverity::Info: return Editor::LogLevel::Info;
-    case Engine::DiagnosticSeverity::Warning: return Editor::LogLevel::Warning;
-    case Engine::DiagnosticSeverity::Error: return Editor::LogLevel::Error;
+    case Engine::DiagnosticSeverity::Info:
+        return Editor::LogLevel::Info;
+    case Engine::DiagnosticSeverity::Warning:
+        return Editor::LogLevel::Warning;
+    case Engine::DiagnosticSeverity::Error:
+        return Editor::LogLevel::Error;
     }
     return Editor::LogLevel::Error;
 }
 
-std::string formatDiagnostic(const Engine::Diagnostic &diagnostic) {
+std::string formatDiagnostic(const Engine::Diagnostic& diagnostic) {
     std::string result = diagnostic.message;
-    const auto append = [&](const char *label, const std::string &value) {
-        if (!value.empty()) result += " | " + std::string{label} + ": " + value;
+    const auto append = [&](const char* label, const std::string& value) {
+        if (!value.empty())
+            result += " | " + std::string{label} + ": " + value;
     };
     append("System", diagnostic.context.subsystem);
     append("Object", diagnostic.context.object);
@@ -38,9 +42,12 @@ std::string formatDiagnostic(const Engine::Diagnostic &diagnostic) {
 
 const char* levelName(const Editor::LogLevel level) {
     switch (level) {
-    case Editor::LogLevel::Info: return "Info";
-    case Editor::LogLevel::Warning: return "Warning";
-    case Editor::LogLevel::Error: return "Error";
+    case Editor::LogLevel::Info:
+        return "Info";
+    case Editor::LogLevel::Warning:
+        return "Warning";
+    case Editor::LogLevel::Error:
+        return "Error";
     }
     return "Unknown";
 }
@@ -59,16 +66,15 @@ std::string formatTime(const std::chrono::system_clock::time_point timestamp) {
 }
 
 bool matchesFilter(const Engine::Diagnostic& entry, const char* filter) {
-    if (filter == nullptr || *filter == '\0') return true;
-    std::string message = formatTime(entry.timestamp) + " " + levelName(toLogLevel(entry.severity)) + " " +
-                          formatDiagnostic(entry);
+    if (filter == nullptr || *filter == '\0')
+        return true;
+    std::string message =
+        formatTime(entry.timestamp) + " " + levelName(toLogLevel(entry.severity)) + " " + formatDiagnostic(entry);
     std::string query{filter};
-    std::ranges::transform(message, message.begin(), [](unsigned char value) {
-        return static_cast<char>(std::tolower(value));
-    });
-    std::ranges::transform(query, query.begin(), [](unsigned char value) {
-        return static_cast<char>(std::tolower(value));
-    });
+    std::ranges::transform(message, message.begin(),
+                           [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    std::ranges::transform(query, query.begin(),
+                           [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
     return message.find(query) != std::string::npos;
 }
 
@@ -77,15 +83,21 @@ bool matchesFilter(const Engine::Diagnostic& entry, const char* filter) {
 namespace Editor {
 
 void ConsolePanel::add(const LogLevel level, const std::string_view message) {
-    const auto severity = level == LogLevel::Info ? Engine::DiagnosticSeverity::Info
-                        : level == LogLevel::Warning ? Engine::DiagnosticSeverity::Warning
-                                                     : Engine::DiagnosticSeverity::Error;
+    const auto severity = level == LogLevel::Info      ? Engine::DiagnosticSeverity::Info
+                          : level == LogLevel::Warning ? Engine::DiagnosticSeverity::Warning
+                                                       : Engine::DiagnosticSeverity::Error;
     Engine::Diagnostics::instance().report(severity, std::string{message}, {.subsystem = "Editor"});
 }
 
-void ConsolePanel::info(const std::string_view message) { add(LogLevel::Info, message); }
-void ConsolePanel::warning(const std::string_view message) { add(LogLevel::Warning, message); }
-void ConsolePanel::error(const std::string_view message) { add(LogLevel::Error, message); }
+void ConsolePanel::info(const std::string_view message) {
+    add(LogLevel::Info, message);
+}
+void ConsolePanel::warning(const std::string_view message) {
+    add(LogLevel::Warning, message);
+}
+void ConsolePanel::error(const std::string_view message) {
+    add(LogLevel::Error, message);
+}
 
 void ConsolePanel::clear() {
     Engine::Diagnostics::instance().clear();
@@ -105,7 +117,8 @@ void ConsolePanel::draw(bool& isOpen) {
     static bool autoScroll = true;
     static float textScale = 1.0F;
     static char filter[256]{};
-    if (ImGui::Button("Clear")) clear();
+    if (ImGui::Button("Clear"))
+        clear();
     ImGui::SameLine();
     ImGui::Checkbox("Info", &showInfo);
     ImGui::SameLine();
@@ -116,9 +129,9 @@ void ConsolePanel::draw(bool& isOpen) {
     ImGui::Checkbox("Auto-scroll", &autoScroll);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(130.0F);
-    Editor::Controls::sliderFloat("Text size", &textScale, 0.75F, 2.0F, "x%.2f",
-                                  ImGuiSliderFlags_AlwaysClamp);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Changes the size of log entries.");
+    Editor::Controls::sliderFloat("Text size", &textScale, 0.75F, 2.0F, "x%.2f", ImGuiSliderFlags_AlwaysClamp);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Changes the size of log entries.");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputTextWithHint("##console-filter", "Filter logs...", filter, sizeof(filter));
@@ -129,9 +142,11 @@ void ConsolePanel::draw(bool& isOpen) {
     std::string output;
     for (const Engine::Diagnostic& entry : diagnostics) {
         const LogLevel level = toLogLevel(entry.severity);
-        const bool enabled = level == LogLevel::Info ? showInfo
-                             : level == LogLevel::Warning ? showWarnings : showErrors;
-        if (!enabled || !matchesFilter(entry, filter)) continue;
+        const bool enabled = level == LogLevel::Info      ? showInfo
+                             : level == LogLevel::Warning ? showWarnings
+                                                          : showErrors;
+        if (!enabled || !matchesFilter(entry, filter))
+            continue;
         output += '[' + formatTime(entry.timestamp) + "] ";
         output += levelName(level);
         output += "  ";

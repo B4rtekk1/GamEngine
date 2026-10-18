@@ -255,7 +255,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
                                uint2 pixelCoordinate, uint temporalSampleIndex,
                                bool temporalShadowJitter, out bool resident,
                                out float clipEdge, out float blockerCount,
-                               out float penumbraRadius, out uint2 virtualPage)
+                               out float penumbraRadius, out uint2 virtualPage,
+                               bool forceSingleTap)
 {
     blockerCount = 0.0;
     penumbraRadius = 0.0;
@@ -287,7 +288,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     // settings.  A single coarse-clipmap texel spans centimetres in world
     // space, so using it at High creates visible stair-steps after a page
     // fallback.
-    const bool useSingleTap = shadowQuality == SHADOW_QUALITY_LOW ||
+    const bool useSingleTap = forceSingleTap ||
+                              shadowQuality == SHADOW_QUALITY_LOW ||
                               (shadowQuality == SHADOW_QUALITY_MEDIUM && level >= 2);
     if (useSingleTap)
         return 1.0 - shadowMap.SampleCmpLevelZero(centerAtlasUv, currentDepth - bias);
@@ -556,6 +558,7 @@ float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix
 }
 
 uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
+                              ShadowClipConstants clipConstants[7],
                               const uint shadowQuality,
 #if defined(SHADOW_COMPUTE)
                               float3 worldRight, float3 worldDown,
@@ -564,6 +567,22 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
 {
     const float threshold = shadowTexelFootprintThreshold(shadowQuality);
     footprintInTexels = 0.0;
+    // All regular clipmaps share the same light basis and differ only by
+    // orthographic scale. Compute the expensive screen-space derivatives once
+    // at level 0; the texel footprint then scales by the inverse texel size.
+    // The per-level matrix multiply below is still required for bounds, but
+    // the two derivative transforms are no longer repeated seven times.
+    const float4 baseClip = mul(float4(worldPosition, 1.0), clipMatrices[0]);
+    float baseFootprint = 0.0;
+    if (abs(baseClip.w) >= 1.0e-6)
+    {
+        const float2 baseUv = baseClip.xy / baseClip.w * 0.5 + 0.5;
+        baseFootprint = shadowFootprintFromProjectedUv(baseUv, clipMatrices[0]
+#if defined(SHADOW_COMPUTE)
+            , worldRight, worldDown
+#endif
+        );
+    }
     [unroll]
     for (uint level = 0; level < SHADOW_CLIP_LEVELS; ++level)
     {
@@ -573,13 +592,11 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
         if (any(uv < 0.0) || any(uv >= 1.0)) continue;
 
         // This is the same LOD rule as receiver marking, but uses both
-        // screen-space axes.  Sampling must never let incidental L0 cache
+        // screen-space axes. Sampling must never let incidental L0 cache
         // residency override the requested geometric LOD.
-        const float levelFootprint = shadowFootprintFromProjectedUv(uv, clipMatrices[level]
-#if defined(SHADOW_COMPUTE)
-            , worldRight, worldDown
-#endif
-        );
+        const float levelFootprint = baseFootprint *
+            clipConstants[0].worldTexelSize /
+            max(clipConstants[level].worldTexelSize, 1.0e-6);
         if (levelFootprint <= threshold || level + 1 == SHADOW_CLIP_LEVELS)
         {
             footprintInTexels = levelFootprint;
@@ -612,7 +629,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
     bool resident;
     float desiredFootprintInTexels;
     const uint desiredLevel = selectVirtualShadowLevel(
-        worldPosition, clipMatrices, shadowQuality,
+        worldPosition, clipMatrices, clipConstants, shadowQuality,
 #if defined(SHADOW_COMPUTE)
         worldRight, worldDown,
 #endif
@@ -630,7 +647,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
             shadowMap, linearShadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
             clipMatrices[level], clipConstants[level], level, pageTable, shadowQuality, pixelCoordinate,
             temporalSampleIndex, temporalShadowJitter, resident, clipEdge,
-            blockerCount, penumbraRadius, virtualPage);
+            blockerCount, penumbraRadius, virtualPage, false);
         if (level == desiredLevel)
             debug.desiredResident = resident ? 1u : 0u;
         if (resident)
@@ -669,7 +686,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
                     clipMatrices[level + 1], clipConstants[level + 1], level + 1,
                     pageTable, shadowQuality, pixelCoordinate, temporalSampleIndex,
                     temporalShadowJitter, nextResident, nextClipEdge,
-                    nextBlockerCount, nextPenumbraRadius, nextVirtualPage);
+                    nextBlockerCount, nextPenumbraRadius, nextVirtualPage, true);
                 if (nextResident)
                     shadow = lerp(shadow, nextShadow, transition);
             }

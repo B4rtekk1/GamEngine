@@ -12,13 +12,15 @@ struct CaptionButtonBounds {
     float right = 0.0F;
     float bottom = 0.0F;
 
-    [[nodiscard]] bool valid() const noexcept { return right > left && bottom > top; }
+    [[nodiscard]] bool valid() const noexcept {
+        return right > left && bottom > top;
+    }
 };
 
 // Extends the SDL client area into the Win32 title bar while leaving the DWM
 // caption buttons (and therefore Windows 11 Snap Layouts) under Windows' control.
 class WindowsTitleBar {
-public:
+  public:
     WindowsTitleBar() = default;
     ~WindowsTitleBar();
 
@@ -40,7 +42,7 @@ public:
     [[nodiscard]] int nativeHeight() const noexcept;
     [[nodiscard]] float dpiScale() const noexcept;
 
-private:
+  private:
 #ifdef _WIN32
     struct HitRegion {
         int left = 0;

@@ -5,414 +5,406 @@
 #include "Editor/Panels/ConsolePanel.h"
 #include "Editor/UI/EditorTheme.h"
 #include "Elements/NumericControl.h"
-#include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Assets/TextureCooker.h"
 #include "Engine/Core/TaskScheduler.h"
+#include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "imgui.h"
 
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
-#include <regex>
-#include <optional>
-#include <mutex>
-#include <string>
-#include <vector>
-
-#include <SDL3/SDL.h>
 #include <future>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <regex>
+#include <string>
+#include <vector>
 
 // NOLINTBEGIN(readability-magic-numbers)
 // NOLINTBEGIN(readability-identifier-length)
 
 namespace {
-    enum class AssetKind { Model, Texture, Shader, Scene, Audio, Other };
+enum class AssetKind { Model, Texture, Shader, Scene, Audio, Other };
 
-    struct AssetEntry final {
-        std::filesystem::path relative;
-        std::uintmax_t size{};
-        AssetKind kind{AssetKind::Other};
-    };
+struct AssetEntry final {
+    std::filesystem::path relative;
+    std::uintmax_t size{};
+    AssetKind kind{AssetKind::Other};
+};
 
-    struct AssetCatalog final {
-        std::vector<AssetEntry> files;
-        std::vector<std::filesystem::path> folders;
-    };
+struct AssetCatalog final {
+    std::vector<AssetEntry> files;
+    std::vector<std::filesystem::path> folders;
+};
 
-    struct TextureCookJob final {
-        std::atomic<bool> running{};
-        Engine::Assets::TextureCookProgress progress;
-        std::mutex resultMutex;
-        std::optional<Engine::Assets::TextureCookSummary> result;
-        Engine::TaskHandle task;
-    };
+struct TextureCookJob final {
+    std::atomic<bool> running{};
+    Engine::Assets::TextureCookProgress progress;
+    std::mutex resultMutex;
+    std::optional<Engine::Assets::TextureCookSummary> result;
+    Engine::TaskHandle task;
+};
 
-    std::string lower(std::string value) {
-        std::ranges::transform(value, value.begin(),
-                               [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return value;
-    }
+std::string lower(std::string value) {
+    std::ranges::transform(value, value.begin(),
+                           [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
 
-    struct ImportDialogState {
-        std::mutex mutex;
-        bool ready{};
-        std::vector<std::filesystem::path> sources;
-        std::string error;
-        std::filesystem::path destination;
-        std::filesystem::path assetRoot;
-    };
+struct ImportDialogState {
+    std::mutex mutex;
+    bool ready{};
+    std::vector<std::filesystem::path> sources;
+    std::string error;
+    std::filesystem::path destination;
+    std::filesystem::path assetRoot;
+};
 
-    struct ImportResult {
-        std::filesystem::path assetRoot;
-        std::vector<std::string> imported;
-        std::string error;
-    };
+struct ImportResult {
+    std::filesystem::path assetRoot;
+    std::vector<std::string> imported;
+    std::string error;
+};
 
-    void SDLCALL importDialogFinished(void* userdata, const char* const* files, int) {
-        // The dialog owns this reference until its callback, including on shutdown.
-        const std::unique_ptr<std::shared_ptr<ImportDialogState>> owner{
-            static_cast<std::shared_ptr<ImportDialogState>*>(userdata)};
-        const auto& state = *owner;
-        std::lock_guard lock(state->mutex);
-        try {
-            if (!files) state->error = SDL_GetError();
-            else for (auto file = files; *file; ++file) {
+void SDLCALL importDialogFinished(void* userdata, const char* const* files, int) {
+    // The dialog owns this reference until its callback, including on shutdown.
+    const std::unique_ptr<std::shared_ptr<ImportDialogState>> owner{
+        static_cast<std::shared_ptr<ImportDialogState>*>(userdata)};
+    const auto& state = *owner;
+    std::lock_guard lock(state->mutex);
+    try {
+        if (!files)
+            state->error = SDL_GetError();
+        else
+            for (auto file = files; *file; ++file) {
                 const std::string_view utf8{*file};
                 state->sources.emplace_back(std::u8string{utf8.begin(), utf8.end()});
             }
-        } catch (const std::exception& exception) {
-            state->error = exception.what();
-        }
-        state->ready = true;
+    } catch (const std::exception& exception) {
+        state->error = exception.what();
     }
+    state->ready = true;
+}
 
-    void showImportDialog(const std::shared_ptr<ImportDialogState>& state,
-                          const bool folder, const bool archiveOnly) {
-        static constexpr SDL_DialogFileFilter archiveFilter{"ZIP archives", "zip;ZIP"};
-        static constexpr SDL_DialogFileFilter allFilesFilter{"All files", "*"};
-        auto* callbackState = new std::shared_ptr<ImportDialogState>{state};
-        // The focused window belongs to this Editor; SDL supports portal dialogs on Wayland.
-        SDL_Window* window = SDL_GetKeyboardFocus();
-        if (folder) {
-            SDL_ShowOpenFolderDialog(importDialogFinished, callbackState, window, nullptr, true);
-        } else {
-            SDL_ShowOpenFileDialog(importDialogFinished, callbackState, window,
-                                  archiveOnly ? &archiveFilter : &allFilesFilter, 1, nullptr, true);
-        }
+void showImportDialog(const std::shared_ptr<ImportDialogState>& state, const bool folder, const bool archiveOnly) {
+    static constexpr SDL_DialogFileFilter archiveFilter{"ZIP archives", "zip;ZIP"};
+    static constexpr SDL_DialogFileFilter allFilesFilter{"All files", "*"};
+    auto* callbackState = new std::shared_ptr<ImportDialogState>{state};
+    // The focused window belongs to this Editor; SDL supports portal dialogs on Wayland.
+    SDL_Window* window = SDL_GetKeyboardFocus();
+    if (folder) {
+        SDL_ShowOpenFolderDialog(importDialogFinished, callbackState, window, nullptr, true);
+    } else {
+        SDL_ShowOpenFileDialog(importDialogFinished, callbackState, window,
+                               archiveOnly ? &archiveFilter : &allFilesFilter, 1, nullptr, true);
     }
+}
 
-    bool is_model(const std::filesystem::path &path) {
-        const auto ext = lower(path.extension().string());
-        return ext == ".gltf" || ext == ".glb" || ext == ".fbx" || ext == ".gmesh";
-    }
+bool is_model(const std::filesystem::path& path) {
+    const auto ext = lower(path.extension().string());
+    return ext == ".gltf" || ext == ".glb" || ext == ".fbx" || ext == ".gmesh";
+}
 
-    bool is_shader_graph(const std::filesystem::path &path) {
-        return lower(path.extension().string()) == ".shadergraph";
-    }
+bool is_shader_graph(const std::filesystem::path& path) {
+    return lower(path.extension().string()) == ".shadergraph";
+}
 
-    AssetKind asset_kind(const std::filesystem::path &path) {
-        const auto ext = lower(path.extension().string());
-        if (ext == ".gltf" || ext == ".glb" || ext == ".gmesh" || ext == ".obj" || ext == ".fbx")
-            return AssetKind::Model;
-        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" ||
-            ext == ".dds" || ext == ".hdr")
-            return AssetKind::Texture;
-        if (ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".glsl" || ext == ".slang" || ext == ".spv" ||
-            ext == ".shadergraph")
-            return AssetKind::Shader;
-        if (ext == ".scene")
-            return AssetKind::Scene;
-        if (ext == ".wav" || ext == ".ogg" || ext == ".mp3")
-            return AssetKind::Audio;
-        return AssetKind::Other;
-    }
+AssetKind asset_kind(const std::filesystem::path& path) {
+    const auto ext = lower(path.extension().string());
+    if (ext == ".gltf" || ext == ".glb" || ext == ".gmesh" || ext == ".obj" || ext == ".fbx")
+        return AssetKind::Model;
+    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".dds" ||
+        ext == ".hdr")
+        return AssetKind::Texture;
+    if (ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".glsl" || ext == ".slang" || ext == ".spv" ||
+        ext == ".shadergraph")
+        return AssetKind::Shader;
+    if (ext == ".scene")
+        return AssetKind::Scene;
+    if (ext == ".wav" || ext == ".ogg" || ext == ".mp3")
+        return AssetKind::Audio;
+    return AssetKind::Other;
+}
 
-    const char *kind_name(const AssetKind kind) {
-        switch (kind) {
-            case AssetKind::Model:
-                return "3D Model";
-            case AssetKind::Texture:
-                return "Texture";
-            case AssetKind::Shader:
-                return "Shader";
-            case AssetKind::Scene:
-                return "Scene";
-            case AssetKind::Audio:
-                return "Audio";
-            case AssetKind::Other:
-                return "File";
-        }
+const char* kind_name(const AssetKind kind) {
+    switch (kind) {
+    case AssetKind::Model:
+        return "3D Model";
+    case AssetKind::Texture:
+        return "Texture";
+    case AssetKind::Shader:
+        return "Shader";
+    case AssetKind::Scene:
+        return "Scene";
+    case AssetKind::Audio:
+        return "Audio";
+    case AssetKind::Other:
         return "File";
     }
+    return "File";
+}
 
-    ImVec4 kind_color(const AssetKind kind) {
-        switch (kind) {
-            case AssetKind::Model:
-                return {0.25F, 0.72F, 0.88F, 1.0F};
-            case AssetKind::Texture:
-                return {0.69F, 0.55F, 0.91F, 1.0F};
-            case AssetKind::Shader:
-                return {0.95F, 0.65F, 0.27F, 1.0F};
-            case AssetKind::Scene:
-                return {0.35F, 0.82F, 0.59F, 1.0F};
-            case AssetKind::Audio:
-                return {0.91F, 0.45F, 0.62F, 1.0F};
-            case AssetKind::Other:
-                return {0.54F, 0.60F, 0.69F, 1.0F};
-        }
+ImVec4 kind_color(const AssetKind kind) {
+    switch (kind) {
+    case AssetKind::Model:
+        return {0.25F, 0.72F, 0.88F, 1.0F};
+    case AssetKind::Texture:
+        return {0.69F, 0.55F, 0.91F, 1.0F};
+    case AssetKind::Shader:
+        return {0.95F, 0.65F, 0.27F, 1.0F};
+    case AssetKind::Scene:
+        return {0.35F, 0.82F, 0.59F, 1.0F};
+    case AssetKind::Audio:
+        return {0.91F, 0.45F, 0.62F, 1.0F};
+    case AssetKind::Other:
         return {0.54F, 0.60F, 0.69F, 1.0F};
     }
+    return {0.54F, 0.60F, 0.69F, 1.0F};
+}
 
-    std::string decode_uri(std::string value) {
-        const auto hex = [](const char c) -> int {
-            if (c >= '0' && c <= '9')
-                return c - '0';
-            if (c >= 'a' && c <= 'f')
-                return c - 'a' + 10;
-            if (c >= 'A' && c <= 'F')
-                return c - 'A' + 10;
-            return -1;
-        };
-        for (std::size_t i = 0; i + 2 < value.size();) {
-            if (value[i] != '%') {
-                ++i;
-                continue;
-            }
-            const int high = hex(value[i + 1]);
-            const int low = hex(value[i + 2]);
-            if (high < 0 || low < 0) {
-                ++i;
-                continue;
-            }
-            value.replace(i, 3, 1, static_cast<char>((high << 4) | low));
+std::string decode_uri(std::string value) {
+    const auto hex = [](const char c) -> int {
+        if (c >= '0' && c <= '9')
+            return c - '0';
+        if (c >= 'a' && c <= 'f')
+            return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
+        return -1;
+    };
+    for (std::size_t i = 0; i + 2 < value.size();) {
+        if (value[i] != '%') {
             ++i;
+            continue;
         }
-        return value;
+        const int high = hex(value[i + 1]);
+        const int low = hex(value[i + 2]);
+        if (high < 0 || low < 0) {
+            ++i;
+            continue;
+        }
+        value.replace(i, 3, 1, static_cast<char>((high << 4) | low));
+        ++i;
     }
+    return value;
+}
 
-    std::vector<std::filesystem::path> gltf_dependencies(const std::filesystem::path &model) {
-        std::vector<std::filesystem::path> result;
-        if (lower(model.extension().string()) != ".gltf")
-            return result;
-        std::ifstream file(model);
-        if (!file)
-            return result;
-        const std::string source{std::istreambuf_iterator<char>{file}, {}};
-        const std::regex uriPattern{R"REGEX("uri"\s*:\s*"([^"]+)")REGEX"};
-        for (std::sregex_iterator it{source.begin(), source.end(), uriPattern}, end; it != end; ++it) {
-            std::string uri = decode_uri((*it)[1].str());
-            if (uri.starts_with("data:") || uri.starts_with("#"))
-                continue;
-            if (const auto query = uri.find_first_of("?#"); query != std::string::npos)
+std::vector<std::filesystem::path> gltf_dependencies(const std::filesystem::path& model) {
+    std::vector<std::filesystem::path> result;
+    if (lower(model.extension().string()) != ".gltf")
+        return result;
+    std::ifstream file(model);
+    if (!file)
+        return result;
+    const std::string source{std::istreambuf_iterator<char>{file}, {}};
+    const std::regex uriPattern{R"REGEX("uri"\s*:\s*"([^"]+)")REGEX"};
+    for (std::sregex_iterator it{source.begin(), source.end(), uriPattern}, end; it != end; ++it) {
+        std::string uri = decode_uri((*it)[1].str());
+        if (uri.starts_with("data:") || uri.starts_with("#"))
+            continue;
+        if (const auto query = uri.find_first_of("?#"); query != std::string::npos)
             uri.erase(query);
-            const auto path = (model.parent_path() / std::filesystem::path{uri}).lexically_normal();
-            if (std::ranges::find(result, path) == result.end())
-                result.push_back(path);
-        }
-        return result;
+        const auto path = (model.parent_path() / std::filesystem::path{uri}).lexically_normal();
+        if (std::ranges::find(result, path) == result.end())
+            result.push_back(path);
     }
+    return result;
+}
 
-    AssetCatalog scan_assets(const std::filesystem::path &root) {
-        AssetCatalog result;
-        std::error_code error;
-        if (!std::filesystem::is_directory(root, error))
-            return result;
-        for (std::filesystem::recursive_directory_iterator
-                     it{root, std::filesystem::directory_options::skip_permission_denied, error},
-                     end;
-             it != end; it.increment(error)) {
-            if (error) {
-                error.clear();
-                continue;
-            }
-            const auto relative = it->path().lexically_relative(root);
-            if (it->is_directory(error))
-                result.folders.push_back(relative);
-            else if (it->is_regular_file(error))
-                result.files.push_back({relative, it->file_size(error), asset_kind(relative)});
+AssetCatalog scan_assets(const std::filesystem::path& root) {
+    AssetCatalog result;
+    std::error_code error;
+    if (!std::filesystem::is_directory(root, error))
+        return result;
+    for (std::filesystem::recursive_directory_iterator
+             it{root, std::filesystem::directory_options::skip_permission_denied, error},
+         end;
+         it != end; it.increment(error)) {
+        if (error) {
             error.clear();
+            continue;
         }
-        std::ranges::sort(result.files, [](const AssetEntry &a, const AssetEntry &b) {
-            return lower(a.relative.generic_string()) < lower(b.relative.generic_string());
-        });
-        std::ranges::sort(result.folders, [](const auto &a, const auto &b) {
-            return lower(a.generic_string()) < lower(b.generic_string());
-        });
-        return result;
+        const auto relative = it->path().lexically_relative(root);
+        if (it->is_directory(error))
+            result.folders.push_back(relative);
+        else if (it->is_regular_file(error))
+            result.files.push_back({relative, it->file_size(error), asset_kind(relative)});
+        error.clear();
     }
+    std::ranges::sort(result.files, [](const AssetEntry& a, const AssetEntry& b) {
+        return lower(a.relative.generic_string()) < lower(b.relative.generic_string());
+    });
+    std::ranges::sort(result.folders, [](const auto& a, const auto& b) {
+        return lower(a.generic_string()) < lower(b.generic_string());
+    });
+    return result;
+}
 
-    std::string format_size(const std::uintmax_t bytes) {
-        char text[32]{};
-        if (bytes >= 1024ULL * 1024ULL)
-            std::snprintf(text, sizeof(text), "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
-        else if (bytes >= 1024ULL)
-            std::snprintf(text, sizeof(text), "%.1f KB", static_cast<double>(bytes) / 1024.0);
-        else
-            std::snprintf(text, sizeof(text), "%llu B", static_cast<unsigned long long>(bytes));
-        return text;
+std::string format_size(const std::uintmax_t bytes) {
+    char text[32]{};
+    if (bytes >= 1024ULL * 1024ULL)
+        std::snprintf(text, sizeof(text), "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+    else if (bytes >= 1024ULL)
+        std::snprintf(text, sizeof(text), "%.1f KB", static_cast<double>(bytes) / 1024.0);
+    else
+        std::snprintf(text, sizeof(text), "%llu B", static_cast<unsigned long long>(bytes));
+    return text;
+}
+
+std::string clipped_label(const std::string& value, const float width) {
+    if (ImGui::CalcTextSize(value.c_str()).x <= width)
+        return value;
+    std::string result = value;
+    while (result.size() > 3 && ImGui::CalcTextSize((result + "...").c_str()).x > width)
+        result.pop_back();
+    return result + "...";
+}
+
+bool scene_uses_asset(const Engine::ScenePreset& scene, const std::filesystem::path& root,
+                      const std::filesystem::path& relative) {
+    const auto assetPath = (root / relative).lexically_normal();
+    bool used = false;
+    scene.view().view<Engine::MeshRenderer>([&](const Engine::Entity, const Engine::MeshRenderer& renderer) {
+        const auto resource = renderer.mesh.resource();
+        if (resource && resource->sourcePath.lexically_normal() == assetPath)
+            used = true;
+    });
+    return used;
+}
+
+bool delete_asset_file(const Engine::ScenePreset& scene, const std::filesystem::path& root,
+                       const std::filesystem::path& relative, std::string& error) {
+    // Asset paths come from the catalog, but keep this check here as a hard
+    // boundary before performing a filesystem mutation.
+    if (relative.empty() || relative.is_absolute()) {
+        error = "Invalid asset path";
+        return false;
     }
-
-    std::string clipped_label(const std::string &value, const float width) {
-        if (ImGui::CalcTextSize(value.c_str()).x <= width)
-            return value;
-        std::string result = value;
-        while (result.size() > 3 && ImGui::CalcTextSize((result + "...").c_str()).x > width)
-            result.pop_back();
-        return result + "...";
-    }
-
-    bool scene_uses_asset(const Engine::ScenePreset &scene, const std::filesystem::path &root,
-                          const std::filesystem::path &relative) {
-        const auto assetPath = (root / relative).lexically_normal();
-        bool used = false;
-        scene.view().view<Engine::MeshRenderer>([&](const Engine::Entity,
-                                                    const Engine::MeshRenderer &renderer) {
-            const auto resource = renderer.mesh.resource();
-            if (resource && resource->sourcePath.lexically_normal() == assetPath)
-                used = true;
-        });
-        return used;
-    }
-
-    bool delete_asset_file(const Engine::ScenePreset &scene, const std::filesystem::path &root,
-                           const std::filesystem::path &relative,
-                           std::string &error) {
-        // Asset paths come from the catalog, but keep this check here as a hard
-        // boundary before performing a filesystem mutation.
-        if (relative.empty() || relative.is_absolute()) {
-            error = "Invalid asset path";
+    for (const auto& part : relative) {
+        if (part == "..") {
+            error = "Asset path escapes the asset directory";
             return false;
         }
-        for (const auto &part: relative) {
-            if (part == "..") {
-                error = "Asset path escapes the asset directory";
-                return false;
-            }
-        }
-
-        if (scene_uses_asset(scene, root, relative)) {
-            error = "Asset is used by the current scene; remove it from the scene first";
-            return false;
-        }
-
-        const auto path = (root / relative).lexically_normal();
-        std::error_code filesystemError;
-        if (!std::filesystem::is_regular_file(path, filesystemError)) {
-            error = "Asset does not exist: " + relative.generic_string();
-            return false;
-        }
-        if (!std::filesystem::remove(path, filesystemError) || filesystemError) {
-            error = "Could not delete asset: " + relative.generic_string();
-            return false;
-        }
-        if (path.extension() == ".scene") {
-            std::filesystem::remove(std::filesystem::path{path.string() + ".terrain"}, filesystemError);
-        }
-        return true;
     }
 
-    void draw_folder_icon(const ImVec2 min, const float size, const bool selected) {
-        auto *draw = ImGui::GetWindowDrawList();
-        const ImU32 back =
-                ImGui::GetColorU32(selected ? ImVec4{0.25F, 0.72F, 0.88F, 1.0F} : ImVec4{0.78F, 0.61F, 0.29F, 1.0F});
-        const ImU32 front =
-                ImGui::GetColorU32(selected ? ImVec4{0.38F, 0.82F, 0.95F, 1.0F} : ImVec4{0.94F, 0.76F, 0.38F, 1.0F});
-        const float y = min.y + size * 0.16F;
-        draw->AddRectFilled({min.x, y + size * 0.14F}, {min.x + size, y + size * 0.75F}, back, size * 0.08F);
-        draw->AddRectFilled({min.x + size * 0.06F, y}, {min.x + size * 0.48F, y + size * 0.29F}, back, size * 0.06F);
-        draw->AddRectFilled({min.x, y + size * 0.27F}, {min.x + size, y + size * 0.82F}, front, size * 0.08F);
+    if (scene_uses_asset(scene, root, relative)) {
+        error = "Asset is used by the current scene; remove it from the scene first";
+        return false;
     }
 
-    void draw_file_icon(const ImVec2 min, const float size, const AssetKind kind, const bool selected) {
-        auto *draw = ImGui::GetWindowDrawList();
-        const ImVec4 accent = selected ? ImVec4{0.39F, 0.86F, 0.96F, 1.0F} : kind_color(kind);
-        const ImU32 color = ImGui::GetColorU32(accent);
-        const ImU32 fill = ImGui::GetColorU32(ImVec4{accent.x * 0.24F, accent.y * 0.24F, accent.z * 0.24F, 1.0F});
-        const float fold = size * 0.25F;
-        draw->AddRectFilled(min, {min.x + size, min.y + size}, fill, size * 0.08F);
-        draw->AddRect(min, {min.x + size, min.y + size}, color, size * 0.08F, 0, 1.5F);
-        draw->AddLine({min.x + size - fold, min.y}, {min.x + size - fold, min.y + fold}, color, 1.3F);
-        draw->AddLine({min.x + size - fold, min.y + fold}, {min.x + size, min.y + fold}, color, 1.3F);
-        const char *mark = kind == AssetKind::Model
-                               ? "3D"
-                               : kind == AssetKind::Texture
-                                     ? "IMG"
-                                     : kind == AssetKind::Shader
-                                           ? "<>"
-                                           : kind == AssetKind::Scene
-                                                 ? "SCN"
-                                                 : kind == AssetKind::Audio
-                                                       ? "SND"
-                                                       : "FILE";
-        const auto textSize = ImGui::CalcTextSize(mark);
-        draw->AddText({min.x + (size - textSize.x) * 0.5F, min.y + size * 0.54F - textSize.y * 0.5F}, color, mark);
+    const auto path = (root / relative).lexically_normal();
+    std::error_code filesystemError;
+    if (!std::filesystem::is_regular_file(path, filesystemError)) {
+        error = "Asset does not exist: " + relative.generic_string();
+        return false;
     }
-
-    bool matches_filter(const AssetEntry &asset, const std::string &filter) {
-        return filter.empty() || lower(asset.relative.generic_string()).find(filter) != std::string::npos ||
-               lower(kind_name(asset.kind)).find(filter) != std::string::npos;
+    if (!std::filesystem::remove(path, filesystemError) || filesystemError) {
+        error = "Could not delete asset: " + relative.generic_string();
+        return false;
     }
-
-    void draw_folder_tree(const std::filesystem::path &parent, const std::vector<std::filesystem::path> &folders,
-                          std::filesystem::path &selectedFolder, std::filesystem::path &selectedAsset) {
-        for (const auto &folder: folders) {
-            if (folder.parent_path() != parent)
-                continue;
-            ImGui::PushID(folder.generic_string().c_str());
-            auto flags =
-                    ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow |
-                    ImGuiTreeNodeFlags_OpenOnDoubleClick;
-            if (selectedFolder == folder)
-                flags |= ImGuiTreeNodeFlags_Selected;
-            const bool open = ImGui::TreeNodeEx(folder.filename().string().c_str(), flags);
-            if (ImGui::IsItemClicked()) {
-                selectedFolder = folder;
-                selectedAsset.clear();
-            }
-            if (open) {
-                draw_folder_tree(folder, folders, selectedFolder, selectedAsset);
-                ImGui::TreePop();
-            }
-            ImGui::PopID();
-        }
+    if (path.extension() == ".scene") {
+        std::filesystem::remove(std::filesystem::path{path.string() + ".terrain"}, filesystemError);
     }
+    return true;
+}
 
-    void draw_breadcrumbs(std::filesystem::path &folder, std::filesystem::path &selectedAsset) {
-        if (ImGui::SmallButton("Assets")) {
-            folder.clear();
+void draw_folder_icon(const ImVec2 min, const float size, const bool selected) {
+    auto* draw = ImGui::GetWindowDrawList();
+    const ImU32 back =
+        ImGui::GetColorU32(selected ? ImVec4{0.25F, 0.72F, 0.88F, 1.0F} : ImVec4{0.78F, 0.61F, 0.29F, 1.0F});
+    const ImU32 front =
+        ImGui::GetColorU32(selected ? ImVec4{0.38F, 0.82F, 0.95F, 1.0F} : ImVec4{0.94F, 0.76F, 0.38F, 1.0F});
+    const float y = min.y + size * 0.16F;
+    draw->AddRectFilled({min.x, y + size * 0.14F}, {min.x + size, y + size * 0.75F}, back, size * 0.08F);
+    draw->AddRectFilled({min.x + size * 0.06F, y}, {min.x + size * 0.48F, y + size * 0.29F}, back, size * 0.06F);
+    draw->AddRectFilled({min.x, y + size * 0.27F}, {min.x + size, y + size * 0.82F}, front, size * 0.08F);
+}
+
+void draw_file_icon(const ImVec2 min, const float size, const AssetKind kind, const bool selected) {
+    auto* draw = ImGui::GetWindowDrawList();
+    const ImVec4 accent = selected ? ImVec4{0.39F, 0.86F, 0.96F, 1.0F} : kind_color(kind);
+    const ImU32 color = ImGui::GetColorU32(accent);
+    const ImU32 fill = ImGui::GetColorU32(ImVec4{accent.x * 0.24F, accent.y * 0.24F, accent.z * 0.24F, 1.0F});
+    const float fold = size * 0.25F;
+    draw->AddRectFilled(min, {min.x + size, min.y + size}, fill, size * 0.08F);
+    draw->AddRect(min, {min.x + size, min.y + size}, color, size * 0.08F, 0, 1.5F);
+    draw->AddLine({min.x + size - fold, min.y}, {min.x + size - fold, min.y + fold}, color, 1.3F);
+    draw->AddLine({min.x + size - fold, min.y + fold}, {min.x + size, min.y + fold}, color, 1.3F);
+    const char* mark = kind == AssetKind::Model     ? "3D"
+                       : kind == AssetKind::Texture ? "IMG"
+                       : kind == AssetKind::Shader  ? "<>"
+                       : kind == AssetKind::Scene   ? "SCN"
+                       : kind == AssetKind::Audio   ? "SND"
+                                                    : "FILE";
+    const auto textSize = ImGui::CalcTextSize(mark);
+    draw->AddText({min.x + (size - textSize.x) * 0.5F, min.y + size * 0.54F - textSize.y * 0.5F}, color, mark);
+}
+
+bool matches_filter(const AssetEntry& asset, const std::string& filter) {
+    return filter.empty() || lower(asset.relative.generic_string()).find(filter) != std::string::npos ||
+           lower(kind_name(asset.kind)).find(filter) != std::string::npos;
+}
+
+void draw_folder_tree(const std::filesystem::path& parent, const std::vector<std::filesystem::path>& folders,
+                      std::filesystem::path& selectedFolder, std::filesystem::path& selectedAsset) {
+    for (const auto& folder : folders) {
+        if (folder.parent_path() != parent)
+            continue;
+        ImGui::PushID(folder.generic_string().c_str());
+        auto flags =
+            ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+        if (selectedFolder == folder)
+            flags |= ImGuiTreeNodeFlags_Selected;
+        const bool open = ImGui::TreeNodeEx(folder.filename().string().c_str(), flags);
+        if (ImGui::IsItemClicked()) {
+            selectedFolder = folder;
             selectedAsset.clear();
         }
-        // A breadcrumb click assigns to `folder`. Iterate a stable snapshot: a
-        // range-for over `folder` itself would retain invalid path iterators after
-        // that assignment and crash while advancing to the next segment.
-        const std::filesystem::path displayedFolder = folder;
-        std::filesystem::path accumulated;
-        for (const auto &part: displayedFolder) {
-            accumulated /= part;
-            ImGui::SameLine(0.0F, 4.0F);
-            ImGui::TextDisabled(">");
-            ImGui::SameLine(0.0F, 4.0F);
-            ImGui::PushID(accumulated.generic_string().c_str());
-            if (ImGui::SmallButton(part.string().c_str())) {
-                folder = accumulated;
-                selectedAsset.clear();
-            }
-            ImGui::PopID();
+        if (open) {
+            draw_folder_tree(folder, folders, selectedFolder, selectedAsset);
+            ImGui::TreePop();
         }
+        ImGui::PopID();
     }
+}
+
+void draw_breadcrumbs(std::filesystem::path& folder, std::filesystem::path& selectedAsset) {
+    if (ImGui::SmallButton("Assets")) {
+        folder.clear();
+        selectedAsset.clear();
+    }
+    // A breadcrumb click assigns to `folder`. Iterate a stable snapshot: a
+    // range-for over `folder` itself would retain invalid path iterators after
+    // that assignment and crash while advancing to the next segment.
+    const std::filesystem::path displayedFolder = folder;
+    std::filesystem::path accumulated;
+    for (const auto& part : displayedFolder) {
+        accumulated /= part;
+        ImGui::SameLine(0.0F, 4.0F);
+        ImGui::TextDisabled(">");
+        ImGui::SameLine(0.0F, 4.0F);
+        ImGui::PushID(accumulated.generic_string().c_str());
+        if (ImGui::SmallButton(part.string().c_str())) {
+            folder = accumulated;
+            selectedAsset.clear();
+        }
+        ImGui::PopID();
+    }
+}
 } // namespace
 
-Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content &content,
-                                       const bool disabled, bool &isOpen, const bool projectIsOpen,
-                                       const std::function<void(const std::filesystem::path &)> &openShaderGraph,
-                                       const std::function<void(const std::filesystem::path &)> &sceneDeleted) {
+Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
+                                       const bool disabled, bool& isOpen, const bool projectIsOpen,
+                                       const std::function<void(const std::filesystem::path&)>& openShaderGraph,
+                                       const std::function<void(const std::filesystem::path&)>& sceneDeleted) {
     static std::filesystem::path selected;
     static std::filesystem::path selectedFolder;
     static std::filesystem::path scannedRoot;
@@ -440,7 +432,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     const auto refresh = [&] {
         catalog = scan_assets(root);
         if (!selected.empty() &&
-            std::ranges::none_of(catalog.files, [&](const AssetEntry &a) { return a.relative == selected; }))
+            std::ranges::none_of(catalog.files, [&](const AssetEntry& a) { return a.relative == selected; }))
             selected.clear();
         if (!selectedFolder.empty() && std::ranges::find(catalog.folders, selectedFolder) == catalog.folders.end())
             selectedFolder.clear();
@@ -460,7 +452,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                         if (Editor::AssetImporter::import(source, state->destination, failure))
                             result.imported.push_back(source.filename().string());
                         else {
-                            if (!result.error.empty()) result.error += "\n";
+                            if (!result.error.empty())
+                                result.error += "\n";
                             result.error += source.filename().string() + ": " + failure;
                         }
                     }
@@ -473,18 +466,25 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     // been delivered synchronously by the platform.
     if (importDialog) {
         bool ready;
-        { std::lock_guard lock(importDialog->mutex); ready = importDialog->ready; }
-        if (ready) importDialog.reset();
+        {
+            std::lock_guard lock(importDialog->mutex);
+            ready = importDialog->ready;
+        }
+        if (ready)
+            importDialog.reset();
     }
     if (importJob && importJob->wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
         try {
             const auto result = importJob->get();
-            if (result.assetRoot == root) refresh();
-            for (const auto& name : result.imported) Editor::ConsolePanel::info("Imported asset: " + name);
+            if (result.assetRoot == root)
+                refresh();
+            for (const auto& name : result.imported)
+                Editor::ConsolePanel::info("Imported asset: " + name);
             if (!result.error.empty()) {
                 error = result.error;
                 Editor::ConsolePanel::error("Could not import asset: " + error);
-            } else error.clear();
+            } else
+                error.clear();
         } catch (const std::exception& exception) {
             error = exception.what();
             Editor::ConsolePanel::error("Could not import asset: " + error);
@@ -497,11 +497,11 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         try {
             created = Editor::AssetDragDrop::instantiateModel(scene, content, selected);
             error.clear();
-        } catch (const std::exception &exception) {
+        } catch (const std::exception& exception) {
             error = exception.what();
         }
     };
-    const auto requestDelete = [&](const std::filesystem::path &asset) {
+    const auto requestDelete = [&](const std::filesystem::path& asset) {
         deleteCandidate = asset;
         openDeletePopup = true;
     };
@@ -512,13 +512,12 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         try {
             Engine::ShaderGraphAsset graph{.id = Engine::createUUID(), .name = relative.stem().string()};
             Engine::ShaderPinId nextPin = 1;
-            graph.nodes.push_back(Engine::ShaderNodeFactory::create(
-                Engine::ShaderNodeType::SurfaceOutput, 1, nextPin));
+            graph.nodes.push_back(Engine::ShaderNodeFactory::create(Engine::ShaderNodeType::SurfaceOutput, 1, nextPin));
             Engine::ShaderGraphSerializer::save(graph, root / relative);
             refresh();
             selected = relative;
             openShaderGraph(relative);
-        } catch (const std::exception &exception) {
+        } catch (const std::exception& exception) {
             error = exception.what();
         }
     };
@@ -539,10 +538,9 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                 return std::string{buffer};
             };
             const auto report = "Cooked " + std::to_string(summary->cooked) + " assets; skipped " +
-                                std::to_string(summary->skipped) + " of " +
-                                std::to_string(summary->discovered) + ".\nTextures: source hash " +
-                                ms(summary->standalone.sourceHashMilliseconds) + " ms, decode " +
-                                ms(summary->standalone.decodeMilliseconds) + " ms, mips " +
+                                std::to_string(summary->skipped) + " of " + std::to_string(summary->discovered) +
+                                ".\nTextures: source hash " + ms(summary->standalone.sourceHashMilliseconds) +
+                                " ms, decode " + ms(summary->standalone.decodeMilliseconds) + " ms, mips " +
                                 ms(summary->standalone.mipGenerationMilliseconds) + " ms, encode " +
                                 ms(summary->standalone.blockEncodeMilliseconds) + " ms, .gtex write " +
                                 ms(summary->standalone.writeMilliseconds) + " ms.\nglTF: source scan " +
@@ -559,8 +557,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
             if (summary->failed == 0) {
                 Editor::ConsolePanel::info(report);
             } else {
-                Editor::ConsolePanel::error(report + "\n" + std::to_string(summary->failed) +
-                                            " failed.\n" + summary->errors);
+                Editor::ConsolePanel::error(report + "\n" + std::to_string(summary->failed) + " failed.\n" +
+                                            summary->errors);
             }
         }
     }
@@ -584,8 +582,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     if (ImGui::Button("Compress all textures##asset-compress"))
         ImGui::OpenPopup("##asset-compress-confirm");
     if (ImGui::BeginPopupModal("##asset-compress-confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped(
-            "Generate .gtex files for source images and .gmesh files for every GLB/glTF in Assets? Embedded model images also get .gtex files.");
+        ImGui::TextWrapped("Generate .gtex files for source images and .gmesh files for every GLB/glTF in Assets? "
+                           "Embedded model images also get .gtex files.");
         ImGui::TextDisabled("Unchanged cooked assets are skipped. This can take a while.");
         if (ImGui::Button("Compress all")) {
             cookJob.progress.discovered.store(0, std::memory_order_release);
@@ -595,35 +593,38 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                 cookJob.result.reset();
             }
             cookJob.running.store(true, std::memory_order_release);
-            auto *job = &cookJob;
-            cookJob.task = Engine::TaskScheduler::global().schedule([job, root] {
-                Engine::Assets::TextureCookSummary summary;
-                try {
-                    summary = Engine::Assets::cook_all_textures(root, &job->progress);
-                    const auto meshes = Engine::Assets::cook_all_gltf_meshes(root);
-                    summary.discovered += meshes.discovered;
-                    summary.cooked += meshes.cooked;
-                    summary.skipped += meshes.skipped;
-                    summary.failed += meshes.failed;
-                    summary.errors += meshes.errors;
-                    summary.gltfTextures = meshes.gltfTextures;
-                    summary.gltf = meshes.gltf;
-                } catch (const std::exception &exception) {
-                    summary.failed = 1;
-                    summary.errors = exception.what();
-                } catch (...) {
-                    summary.failed = 1;
-                    summary.errors = "Unknown error while cooking textures";
-                }
-                {
-                    std::scoped_lock lock(job->resultMutex);
-                    job->result = std::move(summary);
-                }
-            }, Engine::TaskPriority::Low);
+            auto* job = &cookJob;
+            cookJob.task = Engine::TaskScheduler::global().schedule(
+                [job, root] {
+                    Engine::Assets::TextureCookSummary summary;
+                    try {
+                        summary = Engine::Assets::cook_all_textures(root, &job->progress);
+                        const auto meshes = Engine::Assets::cook_all_gltf_meshes(root);
+                        summary.discovered += meshes.discovered;
+                        summary.cooked += meshes.cooked;
+                        summary.skipped += meshes.skipped;
+                        summary.failed += meshes.failed;
+                        summary.errors += meshes.errors;
+                        summary.gltfTextures = meshes.gltfTextures;
+                        summary.gltf = meshes.gltf;
+                    } catch (const std::exception& exception) {
+                        summary.failed = 1;
+                        summary.errors = exception.what();
+                    } catch (...) {
+                        summary.failed = 1;
+                        summary.errors = "Unknown error while cooking textures";
+                    }
+                    {
+                        std::scoped_lock lock(job->resultMutex);
+                        job->result = std::move(summary);
+                    }
+                },
+                Engine::TaskPriority::Low);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
@@ -631,13 +632,12 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         const auto discovered = cookJob.progress.discovered.load(std::memory_order_acquire);
         const auto completed = cookJob.progress.completed.load(std::memory_order_acquire);
         ImGui::Text("%s textures: %u / %u",
-                    cookJob.progress.paused.load(std::memory_order_acquire) ? "Paused" : "Compressing",
-                    completed, discovered);
-        ImGui::ProgressBar(discovered == 0 ? 0.0F : static_cast<float>(completed) / discovered,
-                           {-1.0F, 0.0F});
+                    cookJob.progress.paused.load(std::memory_order_acquire) ? "Paused" : "Compressing", completed,
+                    discovered);
+        ImGui::ProgressBar(discovered == 0 ? 0.0F : static_cast<float>(completed) / discovered, {-1.0F, 0.0F});
         ImGui::SameLine();
-        if (ImGui::Button(cookJob.progress.paused.load(std::memory_order_acquire)
-                              ? "Resume##asset-cook" : "Pause##asset-cook"))
+        if (ImGui::Button(cookJob.progress.paused.load(std::memory_order_acquire) ? "Resume##asset-cook"
+                                                                                  : "Pause##asset-cook"))
             cookJob.progress.paused.store(!cookJob.progress.paused.load(std::memory_order_relaxed),
                                           std::memory_order_release);
     }
@@ -652,9 +652,12 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
             importDialog->assetRoot = root;
             showImportDialog(importDialog, folder, archiveOnly);
         };
-        if (ImGui::MenuItem("File...")) requestImport(false, false);
-        if (ImGui::MenuItem("Folder...")) requestImport(true, false);
-        if (ImGui::MenuItem("ZIP archive...")) requestImport(false, true);
+        if (ImGui::MenuItem("File..."))
+            requestImport(false, false);
+        if (ImGui::MenuItem("Folder..."))
+            requestImport(true, false);
+        if (ImGui::MenuItem("ZIP archive..."))
+            requestImport(false, true);
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
@@ -664,7 +667,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!projectIsOpen);
-    if (ImGui::Button("New Shader Graph")) createShaderGraph();
+    if (ImGui::Button("New Shader Graph"))
+        createShaderGraph();
     ImGui::EndDisabled();
     ImGui::SameLine();
     char filterBuffer[256]{};
@@ -683,15 +687,13 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         showInspector = !showInspector;
 
     const std::string filterLower = lower(filter);
-    const auto visibleFiles = std::ranges::count_if(catalog.files, [&](const AssetEntry &a) {
+    const auto visibleFiles = std::ranges::count_if(catalog.files, [&](const AssetEntry& a) {
         return matches_filter(a, filterLower) && (!filter.empty() || a.relative.parent_path() == selectedFolder);
     });
     const auto visibleFolders =
-            filter.empty()
-                ? std::ranges::count_if(catalog.folders, [&](const auto &f) {
-                    return f.parent_path() == selectedFolder;
-                })
-                : 0;
+        filter.empty()
+            ? std::ranges::count_if(catalog.folders, [&](const auto& f) { return f.parent_path() == selectedFolder; })
+            : 0;
 
     ImGui::BeginChild("##asset-browser", {0.0F, -24.0F}, false);
     const float treeWidth = std::clamp(ImGui::GetContentRegionAvail().x * 0.22F, 170.0F, 245.0F);
@@ -709,7 +711,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     ImGui::SameLine();
     const bool inspectorVisible = showInspector && !selected.empty() && ImGui::GetContentRegionAvail().x > 560.0F;
     const float inspectorWidth =
-            inspectorVisible ? std::clamp(ImGui::GetContentRegionAvail().x * 0.28F, 210.0F, 300.0F) : 0.0F;
+        inspectorVisible ? std::clamp(ImGui::GetContentRegionAvail().x * 0.28F, 210.0F, 300.0F) : 0.0F;
     ImGui::BeginChild("##asset-content", {-inspectorWidth, 0.0F}, false);
     draw_breadcrumbs(selectedFolder, selected);
     if (!filter.empty()) {
@@ -725,7 +727,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         const int columns = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / (tileSize + 24.0F)));
         if (ImGui::BeginTable("##asset-grid", columns, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX)) {
             if (filter.empty())
-                for (const auto &folder: catalog.folders) {
+                for (const auto& folder : catalog.folders) {
                     if (folder.parent_path() != selectedFolder)
                         continue;
                     ImGui::TableNextColumn();
@@ -745,7 +747,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                     }
                     ImGui::PopID();
                 }
-            for (const auto &asset: catalog.files) {
+            for (const auto& asset : catalog.files) {
                 if (!matches_filter(asset, filterLower) ||
                     (filter.empty() && asset.relative.parent_path() != selectedFolder))
                     continue;
@@ -757,21 +759,23 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                     selected = asset.relative;
                     error.clear();
                 }
-                const bool isEnvironment = lower(asset.relative.extension().string()) == ".hdr" || lower(
-                                               asset.relative.extension().string()) == ".exr";
+                const bool isEnvironment = lower(asset.relative.extension().string()) == ".hdr" ||
+                                           lower(asset.relative.extension().string()) == ".exr";
                 if ((is_model(asset.relative) || asset.kind == AssetKind::Texture || is_shader_graph(asset.relative) ||
-                     isEnvironment) && ImGui::BeginDragDropSource()) {
+                     isEnvironment) &&
+                    ImGui::BeginDragDropSource()) {
                     selected = asset.relative;
-                    if (is_model(asset.relative)) Editor::AssetDragDrop::setModelPayload(asset.relative);
-                    else if (is_shader_graph(asset.relative)) Editor::AssetDragDrop::setShaderGraphPayload(
-                        asset.relative);
-                    else if (isEnvironment) Editor::AssetDragDrop::setEnvironmentPayload(asset.relative);
-                    else Editor::AssetDragDrop::setTexturePayload(asset.relative);
-                    ImGui::TextUnformatted(isEnvironment
-                                               ? "Set scene environment"
-                                               : (is_shader_graph(asset.relative)
-                                                      ? "Assign Shader Graph"
-                                                      : "Add model to scene"));
+                    if (is_model(asset.relative))
+                        Editor::AssetDragDrop::setModelPayload(asset.relative);
+                    else if (is_shader_graph(asset.relative))
+                        Editor::AssetDragDrop::setShaderGraphPayload(asset.relative);
+                    else if (isEnvironment)
+                        Editor::AssetDragDrop::setEnvironmentPayload(asset.relative);
+                    else
+                        Editor::AssetDragDrop::setTexturePayload(asset.relative);
+                    ImGui::TextUnformatted(isEnvironment ? "Set scene environment"
+                                                         : (is_shader_graph(asset.relative) ? "Assign Shader Graph"
+                                                                                            : "Add model to scene"));
                     ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                     ImGui::EndDragDropSource();
                 }
@@ -786,8 +790,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                 ImGui::GetWindowDrawList()->AddText({min.x + 6.0F, min.y + tileSize + 24.0F},
                                                     ImGui::GetColorU32(ImGuiCol_TextDisabled), ext.c_str());
                 if (doubleClicked) {
-                    if (is_model(asset.relative)) instantiate();
-                    else if (is_shader_graph(asset.relative)) openShaderGraph(asset.relative);
+                    if (is_model(asset.relative))
+                        instantiate();
+                    else if (is_shader_graph(asset.relative))
+                        openShaderGraph(asset.relative);
                 }
                 if (ImGui::BeginPopupContextItem("##context")) {
                     ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
@@ -814,13 +820,13 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         }
     } else if (ImGui::BeginTable("##asset-list", 3,
                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp |
-                                 ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY)) {
+                                     ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.62F);
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 0.23F);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 0.15F);
         ImGui::TableHeadersRow();
         if (filter.empty())
-            for (const auto &folder: catalog.folders) {
+            for (const auto& folder : catalog.folders) {
                 if (folder.parent_path() != selectedFolder)
                     continue;
                 ImGui::TableNextRow();
@@ -836,7 +842,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                 ImGui::TableSetColumnIndex(1);
                 ImGui::TextDisabled("Folder");
             }
-        for (const auto &asset: catalog.files) {
+        for (const auto& asset : catalog.files) {
             if (!matches_filter(asset, filterLower) ||
                 (filter.empty() && asset.relative.parent_path() != selectedFolder))
                 continue;
@@ -848,24 +854,29 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                 selected = asset.relative;
                 error.clear();
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                    if (is_model(asset.relative)) instantiate();
-                    else if (is_shader_graph(asset.relative)) openShaderGraph(asset.relative);
+                    if (is_model(asset.relative))
+                        instantiate();
+                    else if (is_shader_graph(asset.relative))
+                        openShaderGraph(asset.relative);
                 }
             }
-            const bool isEnvironment = lower(asset.relative.extension().string()) == ".hdr" || lower(
-                                           asset.relative.extension().string()) == ".exr";
+            const bool isEnvironment = lower(asset.relative.extension().string()) == ".hdr" ||
+                                       lower(asset.relative.extension().string()) == ".exr";
             if ((is_model(asset.relative) || asset.kind == AssetKind::Texture || is_shader_graph(asset.relative) ||
-                 isEnvironment) && ImGui::BeginDragDropSource()) {
+                 isEnvironment) &&
+                ImGui::BeginDragDropSource()) {
                 selected = asset.relative;
-                if (is_model(asset.relative)) Editor::AssetDragDrop::setModelPayload(asset.relative);
-                else if (is_shader_graph(asset.relative)) Editor::AssetDragDrop::setShaderGraphPayload(asset.relative);
-                else if (isEnvironment) Editor::AssetDragDrop::setEnvironmentPayload(asset.relative);
-                else Editor::AssetDragDrop::setTexturePayload(asset.relative);
-                ImGui::TextUnformatted(isEnvironment
-                                           ? "Set scene environment"
-                                           : (is_shader_graph(asset.relative)
-                                                  ? "Assign Shader Graph"
-                                                  : "Add model to scene"));
+                if (is_model(asset.relative))
+                    Editor::AssetDragDrop::setModelPayload(asset.relative);
+                else if (is_shader_graph(asset.relative))
+                    Editor::AssetDragDrop::setShaderGraphPayload(asset.relative);
+                else if (isEnvironment)
+                    Editor::AssetDragDrop::setEnvironmentPayload(asset.relative);
+                else
+                    Editor::AssetDragDrop::setTexturePayload(asset.relative);
+                ImGui::TextUnformatted(
+                    isEnvironment ? "Set scene environment"
+                                  : (is_shader_graph(asset.relative) ? "Assign Shader Graph" : "Add model to scene"));
                 ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                 ImGui::EndDragDropSource();
             }
@@ -890,7 +901,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     if (visibleFiles == 0 && visibleFolders == 0) {
         const auto available = ImGui::GetContentRegionAvail();
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(12.0F, available.y * 0.24F));
-        const char *message = filter.empty() ? "This folder is empty" : "No assets match your search";
+        const char* message = filter.empty() ? "This folder is empty" : "No assets match your search";
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                              std::max(0.0F, (available.x - ImGui::CalcTextSize(message).x) * 0.5F));
         ImGui::TextDisabled("%s", message);
@@ -927,7 +938,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         ImGui::SameLine();
         ImGui::BeginChild("##asset-inspector", {0.0F, 0.0F}, true);
         const auto it =
-                std::ranges::find_if(catalog.files, [&](const AssetEntry &a) { return a.relative == selected; });
+            std::ranges::find_if(catalog.files, [&](const AssetEntry& a) { return a.relative == selected; });
         if (it != catalog.files.end()) {
             const float preview = std::min(76.0F, ImGui::GetContentRegionAvail().x * 0.38F);
             draw_file_icon(ImGui::GetCursorScreenPos(), preview, it->kind, true);
@@ -945,11 +956,11 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                                       dependencies.size())) {
                     if (dependencies.empty())
                         ImGui::TextDisabled("Embedded or none");
-                    for (const auto &dependency: dependencies) {
+                    for (const auto& dependency : dependencies) {
                         std::error_code dependencyError;
                         const bool exists = std::filesystem::is_regular_file(dependency, dependencyError);
-                        ImGui::TextColored(exists ? EditorUI::colors().success : EditorUI::colors().error,
-                                           "%s %s", exists ? "OK" : "!", dependency.filename().string().c_str());
+                        ImGui::TextColored(exists ? EditorUI::colors().success : EditorUI::colors().error, "%s %s",
+                                           exists ? "OK" : "!", dependency.filename().string().c_str());
                     }
                     ImGui::TreePop();
                 }
@@ -981,8 +992,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     }
     if (!projectIsOpen) {
         ImGui::SameLine();
-        ImGui::TextColored(EditorUI::colors().warning,
-                           "  |  Open or create a project before importing assets");
+        ImGui::TextColored(EditorUI::colors().warning, "  |  Open or create a project before importing assets");
     }
     ImGui::End();
     return created;

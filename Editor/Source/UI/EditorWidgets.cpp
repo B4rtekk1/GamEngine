@@ -26,8 +26,7 @@ void panelHeader(const char* title, const char* detail) {
     ImGui::Separator();
 }
 
-bool searchBox(const char* id, const char* hint, char* value, const std::size_t capacity,
-               const float width) {
+bool searchBox(const char* id, const char* hint, char* value, const std::size_t capacity, const float width) {
     ImGui::SetNextItemWidth(width);
     const ImVec2 padding = ImGui::GetStyle().FramePadding;
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {padding.x + 18.0F, padding.y});

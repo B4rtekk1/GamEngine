@@ -5,14 +5,16 @@
 #include <filesystem>
 #include <memory>
 
-namespace Platform { class TerminalSession; }
+namespace Platform {
+class TerminalSession;
+}
 struct ImFont;
 
 namespace Editor {
 
 /** Dockable interactive shell, kept separate from the engine diagnostics console. */
 class TerminalPanel final {
-public:
+  public:
     TerminalPanel(std::filesystem::path projectRoot, ImFont* terminalFont);
     ~TerminalPanel();
 
@@ -23,7 +25,7 @@ public:
     void shutdown();
     void draw(bool& isOpen);
 
-private:
+  private:
     void restart();
     void handleKeyboard();
     void drawScreen();

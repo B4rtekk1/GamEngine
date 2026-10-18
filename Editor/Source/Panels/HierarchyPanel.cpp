@@ -1,15 +1,16 @@
 #include "Editor/Panels/HierarchyPanel.h"
 
 #include "Editor/App/EditorEntityHelpers.h"
-#include "Engine/Assets/Content.h"
-#include "Engine/ECS/Components/RigidbodyComponent.h"
-#include "Engine/Scene/SceneEditor.h"
-#include "Engine/Scene/Components/IdentityComponents.h"
+#include "Editor/EditorUi.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/Panels/ConsolePanel.h"
-#include "Editor/EditorUi.h"
 #include "Editor/UI/EditorTheme.h"
 #include "Editor/UI/EditorWidgets.h"
+#include "Engine/Assets/Content.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/SceneEditor.h"
+#include "imgui_internal.h"
 
 #include <algorithm>
 #include <exception>
@@ -17,12 +18,10 @@
 #include <unordered_set>
 #include <vector>
 
-#include "imgui_internal.h"
-
-Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
-                                    const std::vector<Engine::Entity>& selection, Action &action,
-                                    Engine::Entity &actionEntity, const bool canPaste,
-                                    const bool disabled, bool& isOpen) {
+Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
+                                    const std::vector<Engine::Entity>& selection, Action& action,
+                                    Engine::Entity& actionEntity, const bool canPaste, const bool disabled,
+                                    bool& isOpen) {
     Engine::Entity clicked = Engine::NullEntity;
     const auto selected = [&](const Engine::Entity entity) {
         return std::ranges::find(selection, entity) != selection.end();
@@ -54,39 +53,50 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
             clicked = scene.createGameObject();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("3D Object/Cube")) clicked = scene.createCube();
-        if (ImGui::MenuItem("3D Object/Glass")) clicked = scene.createGlass();
-        if (ImGui::MenuItem("3D Object/Sphere")) clicked = scene.createSphere();
-        if (ImGui::MenuItem("3D Object/Capsule")) clicked = scene.createCapsule();
-        if (ImGui::MenuItem("3D Object/Plane")) clicked = scene.createPlane();
-        if (ImGui::MenuItem("3D Object/Ramp")) clicked = scene.createRamp();
+        if (ImGui::MenuItem("3D Object/Cube"))
+            clicked = scene.createCube();
+        if (ImGui::MenuItem("3D Object/Glass"))
+            clicked = scene.createGlass();
+        if (ImGui::MenuItem("3D Object/Sphere"))
+            clicked = scene.createSphere();
+        if (ImGui::MenuItem("3D Object/Capsule"))
+            clicked = scene.createCapsule();
+        if (ImGui::MenuItem("3D Object/Plane"))
+            clicked = scene.createPlane();
+        if (ImGui::MenuItem("3D Object/Ramp"))
+            clicked = scene.createRamp();
         ImGui::Separator();
-        if (ImGui::MenuItem("Camera")) clicked = scene.createCamera();
-        if (ImGui::MenuItem("Light/Directional Light")) clicked = scene.createLight();
-        if (ImGui::MenuItem("Terrain")) clicked = scene.createTerrain();
+        if (ImGui::MenuItem("Camera"))
+            clicked = scene.createCamera();
+        if (ImGui::MenuItem("Light/Directional Light"))
+            clicked = scene.createLight();
+        if (ImGui::MenuItem("Terrain"))
+            clicked = scene.createTerrain();
         if (ImGui::BeginMenu("Water")) {
-            if (ImGui::MenuItem("Ocean")) clicked = scene.createOcean();
-            if (ImGui::MenuItem("Lake")) clicked = scene.createLake();
-            if (ImGui::MenuItem("River")) clicked = scene.createRiver();
+            if (ImGui::MenuItem("Ocean"))
+                clicked = scene.createOcean();
+            if (ImGui::MenuItem("Lake"))
+                clicked = scene.createLake();
+            if (ImGui::MenuItem("River"))
+                clicked = scene.createRiver();
             ImGui::EndMenu();
         }
     };
     const auto acceptModelDrop = [&](const Engine::Entity parent = Engine::NullEntity) {
-        if (disabled) return;
-        if (const ImGuiPayload* payload =
-                ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::modelPayload)) {
+        if (disabled)
+            return;
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::modelPayload)) {
             try {
-                clicked = Editor::AssetDragDrop::instantiateModel(
-                    scene, content, Editor::AssetDragDrop::modelPath(*payload));
+                clicked =
+                    Editor::AssetDragDrop::instantiateModel(scene, content, Editor::AssetDragDrop::modelPath(*payload));
                 if (parent != Engine::NullEntity && clicked != Engine::NullEntity && canParent(clicked) &&
                     scene.editor().valid(parent) && scene.editor().valid(clicked) &&
                     scene.editor().has<Engine::UUIDComponent>(parent)) {
-                    const Engine::ParentComponent link{
-                        .parentUuid = scene.editor().read<Engine::UUIDComponent>(parent).value
-                    };
+                    const Engine::ParentComponent link{.parentUuid =
+                                                           scene.editor().read<Engine::UUIDComponent>(parent).value};
                     if (scene.editor().has<Engine::ParentComponent>(clicked)) {
-                        scene.editor().patch<Engine::ParentComponent>(
-                            clicked, [&](auto& component) { component = link; });
+                        scene.editor().patch<Engine::ParentComponent>(clicked,
+                                                                      [&](auto& component) { component = link; });
                     } else {
                         scene.editor().add<Engine::ParentComponent>(clicked, link);
                     }
@@ -116,16 +126,15 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
     }
     ImGui::EndDisabled();
     if (!scene.hasUsablePrimaryCamera()) {
-        ImGui::TextColored(EditorUI::colors().warning,
-                           "! No usable primary camera — fallback camera is active");
+        ImGui::TextColored(EditorUI::colors().warning, "! No usable primary camera — fallback camera is active");
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Add a perspective CameraComponent with Transform and mark it Primary.");
         }
     }
     ImGui::Spacing();
 
-    const bool sceneOpen = ImGui::TreeNodeEx(
-        "Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth);
+    const bool sceneOpen =
+        ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth);
     if (ImGui::BeginDragDropTarget()) {
         acceptModelDrop();
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_ENTITY")) {
@@ -134,14 +143,13 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         ImGui::EndDragDropTarget();
     }
     if (sceneOpen) {
-        const auto entityLabel = [&](const char *name, const Engine::Entity entity) {
+        const auto entityLabel = [&](const char* name, const Engine::Entity entity) {
             if (entity != Engine::NullEntity) {
                 if (!containsCaseInsensitive(name, filter)) {
                     return;
                 }
                 char label[64];
-                std::snprintf(label, sizeof(label), "%s  (%u)", name,
-                              Engine::entityIndex(entity));
+                std::snprintf(label, sizeof(label), "%s  (%u)", name, Engine::entityIndex(entity));
                 if (ImGui::Selectable(label, selected(entity))) {
                     clicked = entity;
                 }
@@ -159,9 +167,9 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                 byUuid.emplace(scene.editor().read<Engine::UUIDComponent>(entity).value, entity);
             }
         });
-        std::unordered_map<Engine::Entity, std::vector<Engine::Entity> > children;
+        std::unordered_map<Engine::Entity, std::vector<Engine::Entity>> children;
         std::vector<Engine::Entity> roots;
-        for (const Engine::Entity entity: entities) {
+        for (const Engine::Entity entity : entities) {
             if (scene.editor().has<Engine::ParentComponent>(entity)) {
                 const Engine::UUID parent = scene.editor().read<Engine::ParentComponent>(entity).parentUuid;
                 if (const auto found = byUuid.find(parent); found != byUuid.end()) {
@@ -194,25 +202,33 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
             const bool hidden = hiddenEntities.contains(entity);
             const bool locked = lockedEntities.contains(entity);
             ImGui::PushID(static_cast<int>(entity));
-            ImGui::PushStyleColor(ImGuiCol_Text, hidden ? EditorUI::colors().textSecondary : EditorUI::colors().textPrimary);
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  hidden ? EditorUI::colors().textSecondary : EditorUI::colors().textPrimary);
             if (ImGui::SmallButton(hidden ? "-##visibility" : "o##visibility")) {
-                if (hidden) hiddenEntities.erase(entity); else hiddenEntities.insert(entity);
+                if (hidden)
+                    hiddenEntities.erase(entity);
+                else
+                    hiddenEntities.insert(entity);
             }
             ImGui::PopStyleColor();
             ImGui::SameLine(0.0F, 2.0F);
-            ImGui::PushStyleColor(ImGuiCol_Text, locked ? EditorUI::colors().warning : EditorUI::colors().textSecondary);
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  locked ? EditorUI::colors().warning : EditorUI::colors().textSecondary);
             if (ImGui::SmallButton(locked ? "L##lock" : "l##lock")) {
-                if (locked) lockedEntities.erase(entity); else lockedEntities.insert(entity);
+                if (locked)
+                    lockedEntities.erase(entity);
+                else
+                    lockedEntities.insert(entity);
             }
             ImGui::PopStyleColor();
             ImGui::SameLine(0.0F, 5.0F);
             ImGui::PopID();
         };
-        const auto drawNode = [&](auto &&self, const Engine::Entity entity) -> void {
+        const auto drawNode = [&](auto&& self, const Engine::Entity entity) -> void {
             if (!visited.insert(entity).second) {
                 return;
             }
-            const char *name = entityName(scene, entity);
+            const char* name = entityName(scene, entity);
             if (!containsCaseInsensitive(name, filter)) {
                 return;
             }
@@ -222,8 +238,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
             // Use the complete ECS handle for ImGui's hidden ID. The index
             // alone is not a stable identity because Registry recycles slots
             // and distinguishes them by generation.
-            std::snprintf(label, sizeof(label), "%s##%llu", name,
-                          static_cast<unsigned long long>(entity));
+            std::snprintf(label, sizeof(label), "%s##%llu", name, static_cast<unsigned long long>(entity));
             const auto drawContextMenu = [&] {
                 if (!ImGui::BeginPopupContextItem()) {
                     return;
@@ -279,8 +294,8 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                 drawContextMenu();
                 return;
             }
-            const ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth |
-                                             (selected(entity) ? ImGuiTreeNodeFlags_Selected : 0);
+            const ImGuiTreeNodeFlags flags =
+                ImGuiTreeNodeFlags_SpanAvailWidth | (selected(entity) ? ImGuiTreeNodeFlags_Selected : 0);
             drawRowControls(entity);
             ImGui::SameLine(0.0F, 4.0F);
             const bool open = ImGui::TreeNodeEx(label, flags);
@@ -302,46 +317,44 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
             }
             drawContextMenu();
             if (open) {
-                for (const Engine::Entity child: childIt->second) {
+                for (const Engine::Entity child : childIt->second) {
                     self(self, child);
                 }
                 ImGui::TreePop();
             }
         };
-        for (const Engine::Entity entity: roots) {
+        for (const Engine::Entity entity : roots) {
             drawNode(drawNode, entity);
         }
-        if (!disabled && droppedHierarchyEntity != Engine::NullEntity &&
-            scene.editor().valid(droppedHierarchyEntity) &&
+        if (!disabled && droppedHierarchyEntity != Engine::NullEntity && scene.editor().valid(droppedHierarchyEntity) &&
             hierarchyDropParent == Engine::NullEntity) {
             // Dropping on the Scene row makes the object a root again.
             if (scene.editor().has<Engine::ParentComponent>(droppedHierarchyEntity)) {
                 scene.editor().remove<Engine::ParentComponent>(droppedHierarchyEntity);
             }
         } else if (!disabled && droppedHierarchyEntity != Engine::NullEntity &&
-                   hierarchyDropParent != Engine::NullEntity &&
-                   droppedHierarchyEntity != hierarchyDropParent &&
+                   hierarchyDropParent != Engine::NullEntity && droppedHierarchyEntity != hierarchyDropParent &&
                    scene.editor().valid(droppedHierarchyEntity) && scene.editor().valid(hierarchyDropParent) &&
                    scene.editor().has<Engine::UUIDComponent>(hierarchyDropParent)) {
             // A proposed parent cannot be one of the dragged entity's descendants.
             bool createsCycle = false;
-            for (Engine::Entity ancestor = hierarchyDropParent;
-                 ancestor != Engine::NullEntity && !createsCycle;) {
+            for (Engine::Entity ancestor = hierarchyDropParent; ancestor != Engine::NullEntity && !createsCycle;) {
                 if (ancestor == droppedHierarchyEntity) {
                     createsCycle = true;
                     break;
                 }
-                if (!scene.editor().has<Engine::ParentComponent>(ancestor)) break;
+                if (!scene.editor().has<Engine::ParentComponent>(ancestor))
+                    break;
                 const Engine::UUID parentUuid = scene.editor().read<Engine::ParentComponent>(ancestor).parentUuid;
                 const auto found = byUuid.find(parentUuid);
                 ancestor = found == byUuid.end() ? Engine::NullEntity : found->second;
             }
             if (!createsCycle && canParent(droppedHierarchyEntity)) {
-                const Engine::ParentComponent link{.parentUuid =
-                    scene.editor().read<Engine::UUIDComponent>(hierarchyDropParent).value};
+                const Engine::ParentComponent link{
+                    .parentUuid = scene.editor().read<Engine::UUIDComponent>(hierarchyDropParent).value};
                 if (scene.editor().has<Engine::ParentComponent>(droppedHierarchyEntity)) {
-                    scene.editor().patch<Engine::ParentComponent>(
-                        droppedHierarchyEntity, [&](auto& component) { component = link; });
+                    scene.editor().patch<Engine::ParentComponent>(droppedHierarchyEntity,
+                                                                  [&](auto& component) { component = link; });
                 } else {
                     scene.editor().add<Engine::ParentComponent>(droppedHierarchyEntity, link);
                 }
@@ -364,8 +377,8 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                 ImGui::SetKeyboardFocusHere();
                 focusRenameInput = false;
             }
-            const bool submitted = ImGui::InputText("Name", nameBuffer, sizeof(nameBuffer),
-                                                    ImGuiInputTextFlags_EnterReturnsTrue);
+            const bool submitted =
+                ImGui::InputText("Name", nameBuffer, sizeof(nameBuffer), ImGuiInputTextFlags_EnterReturnsTrue);
             renameValue = nameBuffer;
             if (!renameError.empty()) {
                 ImGui::TextColored(EditorUI::colors().error, "%s", renameError.c_str());
@@ -393,8 +406,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
     // behaviour of the Scene row without obscuring entity items.
     const ImVec2 dropArea = ImGui::GetContentRegionAvail();
     const ImVec2 dropMin = ImGui::GetCursorScreenPos();
-    const ImRect dropRect{dropMin, {dropMin.x + dropArea.x,
-                                   dropMin.y + std::max(dropArea.y, 28.0F)}};
+    const ImRect dropRect{dropMin, {dropMin.x + dropArea.x, dropMin.y + std::max(dropArea.y, 28.0F)}};
     if (ImGui::BeginDragDropTargetCustom(dropRect, ImGui::GetID("##hierarchy-asset-drop"))) {
         acceptModelDrop();
         ImGui::EndDragDropTarget();

@@ -55,4 +55,4 @@ constexpr float viewportHeightRatio = 9.0F;
 constexpr float cameraFieldOfView = 60.0F;
 constexpr float cameraNearPlane = 0.1F;
 constexpr float cameraFarPlane = 1000.0F;
-}
+} // namespace EditorConstants

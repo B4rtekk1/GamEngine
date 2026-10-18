@@ -2,7 +2,7 @@
 
 #include "Engine/ECS/Components/ScriptComponent.h"
 
-const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity entity) {
+const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
     const auto view = scene.view();
     if (view.has<Engine::NameComponent>(entity)) {
         return view.read<Engine::NameComponent>(entity).value.c_str();
@@ -19,32 +19,32 @@ const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity en
     if (entity == scene.camera) {
         return "Camera";
     }
-    for (const Engine::Entity editorCube: scene.editorCubes) {
+    for (const Engine::Entity editorCube : scene.editorCubes) {
         if (editorCube == entity) {
             return "Cube";
         }
     }
-    for (const Engine::Entity editorPlane: scene.editorPlanes) {
+    for (const Engine::Entity editorPlane : scene.editorPlanes) {
         if (editorPlane == entity) {
             return "Plane";
         }
     }
-    for (const Engine::Entity editorSphere: scene.editorSpheres) {
+    for (const Engine::Entity editorSphere : scene.editorSpheres) {
         if (editorSphere == entity) {
             return "Sphere";
         }
     }
-    for (const Engine::Entity editorCapsule: scene.editorCapsules) {
+    for (const Engine::Entity editorCapsule : scene.editorCapsules) {
         if (editorCapsule == entity) {
             return "Capsule";
         }
     }
-    for (const Engine::Entity editorRamp: scene.editorRamps) {
+    for (const Engine::Entity editorRamp : scene.editorRamps) {
         if (editorRamp == entity) {
             return "Ramp";
         }
     }
-    for (const Engine::Entity editorLight: scene.editorLights) {
+    for (const Engine::Entity editorLight : scene.editorLights) {
         if (editorLight == entity) {
             return "Light";
         }

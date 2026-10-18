@@ -2,9 +2,17 @@
 
 #include "Editor/App/EditorEntityHelpers.h"
 #include "Editor/EditorUi.h"
-#include "Editor/Panels/EditorSceneSession.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/Panels/ConsolePanel.h"
+#include "Editor/Panels/EditorSceneSession.h"
+#include "Editor/UI/ComponentCard.h"
+#include "Editor/UI/EditorIcons.h"
+#include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
+#include "Editor/UI/PropertyGrid.h"
+#include "Elements/EditorButton.h"
+#include "Elements/NumericControl.h"
+#include "Elements/TransformFields.h"
 #include "Engine/Assets/AssetTypes.h"
 #include "Engine/Assets/Content.h"
 #include "Engine/Core/Camera.h"
@@ -27,25 +35,17 @@
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Scripting/ScriptRegistry.h"
 #include "Engine/Scripting/ScriptSystem.h"
-#include "Editor/UI/ComponentCard.h"
-#include "Editor/UI/EditorIcons.h"
-#include "Editor/UI/EditorTheme.h"
-#include "Editor/UI/EditorWidgets.h"
-#include "Editor/UI/PropertyGrid.h"
-#include "Elements/NumericControl.h"
-#include "Elements/EditorButton.h"
-#include "Elements/TransformFields.h"
 
 #include <algorithm>
 #include <cfloat>
 #include <climits>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
-static bool drawRemovableComponentHeader(const char *label, const char *id, bool &remove) {
+static bool drawRemovableComponentHeader(const char* label, const char* id, bool& remove) {
     const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
     // SameLine(pos_x) is relative to the content origin.  Using
     // GetWindowContentRegionMax() here placed the button outside the active
@@ -56,17 +56,16 @@ static bool drawRemovableComponentHeader(const char *label, const char *id, bool
     ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x);
     ImGui::PushID(id);
     remove = ImGui::SmallButton("Remove");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove this component");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Remove this component");
     ImGui::PopID();
     return open;
 }
 
-bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
+bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
                            const std::filesystem::path& shaderSourceDirectory,
-                           const std::vector<Engine::Entity>& selection,
-                           const Engine::Entity active,
-                           std::vector<Engine::Entity>& deferredWaterBodyRemovals,
-                           bool& isOpen) {
+                           const std::vector<Engine::Entity>& selection, const Engine::Entity active,
+                           std::vector<Engine::Entity>& deferredWaterBodyRemovals, bool& isOpen) {
     const Engine::Entity selected = active;
     ImGui::Begin("Inspector", &isOpen);
     EditorUI::panelHeader("Inspector");
@@ -78,17 +77,16 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         ImGui::Spacing();
         ImGui::Spacing();
         ImGui::Spacing();
-        EditorUI::emptyState(EditorUI::Icons::empty, "Nothing selected",
-                             "Pick an object in the Hierarchy or click it in the Scene View to edit its properties here.");
+        EditorUI::emptyState(
+            EditorUI::Icons::empty, "Nothing selected",
+            "Pick an object in the Hierarchy or click it in the Scene View to edit its properties here.");
         if (!scene.hasUsablePrimaryCamera()) {
             ImGui::Spacing();
-            ImGui::TextColored(EditorUI::colors().warning,
-                               "! Scene problem: no usable primary camera");
+            ImGui::TextColored(EditorUI::colors().warning, "! Scene problem: no usable primary camera");
             ImGui::TextDisabled("The runtime is rendering with its fallback camera.");
         }
-        const bool consumesMouseWheel = ImGui::IsWindowHovered(
-                                            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel
-                                        != 0.0F;
+        const bool consumesMouseWheel =
+            ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0F;
         ImGui::End();
         return consumesMouseWheel;
     }
@@ -97,15 +95,16 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
     // the selected entity. Without this, an active text/drag control from the
     // source object is reused when a duplicate becomes selected in the same
     // panel, making the inspector appear to keep editing the original.
-    ImGui::PushID(reinterpret_cast<const void *>(static_cast<std::uintptr_t>(selected)));
+    ImGui::PushID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(selected)));
     ImGui::TextColored(EditorUI::colors().textPrimary, "%s", entityName(scene, selected));
     ImGui::SameLine();
     ImGui::TextDisabled("· Entity %u", Engine::entityIndex(selected));
     const bool multiSelection = selection.size() > 1;
-    if (multiSelection) ImGui::TextDisabled("%zu objects selected · editing common Transform", selection.size());
+    if (multiSelection)
+        ImGui::TextDisabled("%zu objects selected · editing common Transform", selection.size());
     if (!multiSelection && scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
         const auto readScene = scene.editor();
-        const auto &name = readScene.read<Engine::NameComponent>(selected).value;
+        const auto& name = readScene.read<Engine::NameComponent>(selected).value;
         char editableName[260]{};
         std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
         ImGui::SetNextItemWidth(-1.0F);
@@ -121,8 +120,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
     ImGui::TextDisabled("Rename the object, then tweak its components below.");
     if (!scene.hasUsablePrimaryCamera()) {
         ImGui::Spacing();
-        ImGui::TextColored(EditorUI::colors().warning,
-                           "! Scene problem: no usable primary camera");
+        ImGui::TextColored(EditorUI::colors().warning, "! Scene problem: no usable primary camera");
         ImGui::TextDisabled("The runtime is rendering with its fallback camera.");
         ImGui::TextDisabled("Add or repair a perspective camera with Transform, then mark it Primary.");
     }
@@ -154,11 +152,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 }
             };
             ImGui::TextDisabled("Values apply to every selected object.");
-            EditableField::drawSharedVec3Field("Position", "##multi-position", transform.position, 0.05F, "%.2F",
+            EditableField::drawSharedVec3Field(
+                "Position", "##multi-position", transform.position, 0.05F, "%.2F",
                 [&](const Engine::Vec3& value) { apply(&Engine::GameObject::setPosition, value); });
-            EditableField::drawSharedVec3Field("Rotation", "##multi-rotation", transform.rotation, 0.5F, "%.1F°",
+            EditableField::drawSharedVec3Field(
+                "Rotation", "##multi-rotation", transform.rotation, 0.5F, "%.1F°",
                 [&](const Engine::Vec3& value) { apply(&Engine::GameObject::setRotation, value); });
-            EditableField::drawSharedVec3Field("Scale", "##multi-scale", transform.scale, 0.01F, "%.2F",
+            EditableField::drawSharedVec3Field(
+                "Scale", "##multi-scale", transform.scale, 0.01F, "%.2F",
                 [&](const Engine::Vec3& value) { apply(&Engine::GameObject::setScale, value); });
         }
     }
@@ -166,8 +167,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
     if (multiSelection) {
         ImGui::Separator();
         ImGui::TextDisabled("Other components are shown for one object at a time.");
-        const bool consumesMouseWheel = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-            ImGui::GetIO().MouseWheel != 0.0F;
+        const bool consumesMouseWheel =
+            ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0F;
         ImGui::PopID();
         ImGui::End();
         return consumesMouseWheel;
@@ -179,211 +180,215 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             if (scene.editor().has<Engine::WaterBodyComponent>(selected)) {
                 // A water archetype has no independently-removable mesh.
                 // Retire the complete entity after frame submission.
-                if (std::ranges::find(deferredWaterBodyRemovals, selected) ==
-                    deferredWaterBodyRemovals.end()) {
+                if (std::ranges::find(deferredWaterBodyRemovals, selected) == deferredWaterBodyRemovals.end()) {
                     deferredWaterBodyRemovals.push_back(selected);
                 }
             } else {
                 scene.editor().remove<Engine::MeshRenderer>(selected);
             }
         } else if (open) {
-        const auto readScene = scene.editor();
-        const auto &source = readScene.read<Engine::MeshRenderer>(selected);
-        auto renderer = source;
-        bool changed = false;
+            const auto readScene = scene.editor();
+            const auto& source = readScene.read<Engine::MeshRenderer>(selected);
+            auto renderer = source;
+            bool changed = false;
 
-        ImGui::TextDisabled("Mesh");
-        if (const auto resource = renderer.mesh.resource()) {
-            const auto path = resource->sourcePath.generic_string();
-            ImGui::TextWrapped("%s", path.empty() ? "Generated geometry" : path.c_str());
-            ImGui::TextDisabled("%u vertices · %u triangles", resource->vertexCount,
-                                resource->indexCount / 3);
-            if (const auto sourceMesh = renderer.mesh.source()) {
-                ImGui::TextDisabled("%zu textures · %zu source materials", sourceMesh->images.size(),
-                                    sourceMesh->materials.size());
+            ImGui::TextDisabled("Mesh");
+            if (const auto resource = renderer.mesh.resource()) {
+                const auto path = resource->sourcePath.generic_string();
+                ImGui::TextWrapped("%s", path.empty() ? "Generated geometry" : path.c_str());
+                ImGui::TextDisabled("%u vertices · %u triangles", resource->vertexCount, resource->indexCount / 3);
+                if (const auto sourceMesh = renderer.mesh.source()) {
+                    ImGui::TextDisabled("%zu textures · %zu source materials", sourceMesh->images.size(),
+                                        sourceMesh->materials.size());
+                } else {
+                    ImGui::TextDisabled("Source data released after GPU upload");
+                }
             } else {
-                ImGui::TextDisabled("Source data released after GPU upload");
-            }
-        } else {
                 ImGui::TextColored(EditorUI::colors().error, "Missing mesh");
-        }
+            }
 
-        ImGui::Separator();
-        constexpr const char* shaderTypes[] = {"Built-in", "Shader Graph"};
-        int shaderType = static_cast<int>(renderer.material.shaderSource);
-        if (ImGui::Combo("Shader Type##mesh-material", &shaderType, shaderTypes, std::size(shaderTypes))) {
-            renderer.material.shaderSource = static_cast<Engine::MaterialShaderSource>(shaderType);
+            ImGui::Separator();
+            constexpr const char* shaderTypes[] = {"Built-in", "Shader Graph"};
+            int shaderType = static_cast<int>(renderer.material.shaderSource);
+            if (ImGui::Combo("Shader Type##mesh-material", &shaderType, shaderTypes, std::size(shaderTypes))) {
+                renderer.material.shaderSource = static_cast<Engine::MaterialShaderSource>(shaderType);
+                if (renderer.material.shaderSource == Engine::MaterialShaderSource::BuiltIn) {
+                    renderer.material.shaderGraphAsset.clear();
+                    renderer.material.shaderProgram = {};
+                    renderer.material.shaderProgramSpirv.clear();
+                }
+                changed = true;
+            }
             if (renderer.material.shaderSource == Engine::MaterialShaderSource::BuiltIn) {
-                renderer.material.shaderGraphAsset.clear();
-                renderer.material.shaderProgram = {};
-                renderer.material.shaderProgramSpirv.clear();
-            }
-            changed = true;
-        }
-        if (renderer.material.shaderSource == Engine::MaterialShaderSource::BuiltIn) {
-            constexpr const char* shaders[] = {"Standard PBR", "Unlit", "Hologram", "Water"};
-            int shader = static_cast<int>(renderer.material.shader);
-            if (ImGui::Combo("Shader##mesh-material", &shader, shaders, std::size(shaders))) {
-                renderer.material.shader = static_cast<Engine::MaterialShader>(shader);
-                changed = true;
-            }
-        } else {
-            ImGui::TextDisabled("Shader Graph");
-            const std::string graphLabel = renderer.material.shaderGraphAsset.empty()
-                                               ? "None"
-                                               : renderer.material.shaderGraphAsset.generic_string();
-            const auto assignShaderGraph = [&](const std::filesystem::path& graphPath) {
-                renderer.material.shaderSource = Engine::MaterialShaderSource::ShaderGraph;
-                renderer.material.shaderGraphAsset = graphPath;
-                renderer.material.shaderProgram = {};
-                renderer.material.shaderProgramSpirv.clear();
-                changed = true;
-                const auto templatePath = shaderSourceDirectory / "Forward/forward_pbr.slang";
-                const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
-                auto candidate = renderer.material;
-                const auto result = Engine::ShaderGraphMaterialCompiler{}.resolve(
-                    candidate, content.assetRoot(), templatePath, generatedDirectory);
-                if (result.succeeded()) {
-                    renderer.material.shaderProgram = candidate.shaderProgram;
-                    renderer.material.shaderProgramSpirv = std::move(candidate.shaderProgramSpirv);
-                    return true;
+                constexpr const char* shaders[] = {"Standard PBR", "Unlit", "Hologram", "Water"};
+                int shader = static_cast<int>(renderer.material.shader);
+                if (ImGui::Combo("Shader##mesh-material", &shader, shaders, std::size(shaders))) {
+                    renderer.material.shader = static_cast<Engine::MaterialShader>(shader);
+                    changed = true;
                 }
-                std::string error{"Could not compile Shader Graph"};
-                for (const auto& diagnostic : result.diagnostics) error += ": " + diagnostic.message;
-                Editor::ConsolePanel::error(error);
-                return false;
-            };
-            if (ImGui::Button(graphLabel.c_str(), {-1.0F, 0.0F})) {
-                ImGui::OpenPopup("Select Shader Graph##mesh-material");
-            }
-            if (ImGui::BeginDragDropTarget()) {
-                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::shaderGraphPayload)) {
-                    assignShaderGraph(Editor::AssetDragDrop::shaderGraphPath(*payload));
-                }
-                ImGui::EndDragDropTarget();
-            }
-            if (ImGui::BeginPopup("Select Shader Graph##mesh-material")) {
-                bool found = false;
-                std::error_code error;
-                const std::filesystem::recursive_directory_iterator end;
-                for (std::filesystem::recursive_directory_iterator it{
-                         content.assetRoot(), std::filesystem::directory_options::skip_permission_denied, error};
-                     !error && it != end; it.increment(error)) {
-                    if (!it->is_regular_file(error) || it->path().extension() != ".shadergraph") continue;
-                    const auto relative = it->path().lexically_relative(content.assetRoot());
-                    ImGui::PushID(relative.generic_string().c_str());
-                    if (ImGui::Selectable(relative.generic_string().c_str())) {
-                        if (assignShaderGraph(relative)) ImGui::CloseCurrentPopup();
+            } else {
+                ImGui::TextDisabled("Shader Graph");
+                const std::string graphLabel = renderer.material.shaderGraphAsset.empty()
+                                                   ? "None"
+                                                   : renderer.material.shaderGraphAsset.generic_string();
+                const auto assignShaderGraph = [&](const std::filesystem::path& graphPath) {
+                    renderer.material.shaderSource = Engine::MaterialShaderSource::ShaderGraph;
+                    renderer.material.shaderGraphAsset = graphPath;
+                    renderer.material.shaderProgram = {};
+                    renderer.material.shaderProgramSpirv.clear();
+                    changed = true;
+                    const auto templatePath = shaderSourceDirectory / "Forward/forward_pbr.slang";
+                    const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
+                    auto candidate = renderer.material;
+                    const auto result = Engine::ShaderGraphMaterialCompiler{}.resolve(candidate, content.assetRoot(),
+                                                                                      templatePath, generatedDirectory);
+                    if (result.succeeded()) {
+                        renderer.material.shaderProgram = candidate.shaderProgram;
+                        renderer.material.shaderProgramSpirv = std::move(candidate.shaderProgramSpirv);
+                        return true;
                     }
-                    ImGui::PopID();
-                    found = true;
+                    std::string error{"Could not compile Shader Graph"};
+                    for (const auto& diagnostic : result.diagnostics)
+                        error += ": " + diagnostic.message;
+                    Editor::ConsolePanel::error(error);
+                    return false;
+                };
+                if (ImGui::Button(graphLabel.c_str(), {-1.0F, 0.0F})) {
+                    ImGui::OpenPopup("Select Shader Graph##mesh-material");
                 }
-                if (!found) ImGui::TextDisabled("No .shadergraph assets in Assets.");
-                ImGui::EndPopup();
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* payload =
+                            ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::shaderGraphPayload)) {
+                        assignShaderGraph(Editor::AssetDragDrop::shaderGraphPath(*payload));
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+                if (ImGui::BeginPopup("Select Shader Graph##mesh-material")) {
+                    bool found = false;
+                    std::error_code error;
+                    const std::filesystem::recursive_directory_iterator end;
+                    for (std::filesystem::recursive_directory_iterator it{
+                             content.assetRoot(), std::filesystem::directory_options::skip_permission_denied, error};
+                         !error && it != end; it.increment(error)) {
+                        if (!it->is_regular_file(error) || it->path().extension() != ".shadergraph")
+                            continue;
+                        const auto relative = it->path().lexically_relative(content.assetRoot());
+                        ImGui::PushID(relative.generic_string().c_str());
+                        if (ImGui::Selectable(relative.generic_string().c_str())) {
+                            if (assignShaderGraph(relative))
+                                ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::PopID();
+                        found = true;
+                    }
+                    if (!found)
+                        ImGui::TextDisabled("No .shadergraph assets in Assets.");
+                    ImGui::EndPopup();
+                }
+                if (renderer.material.shaderProgram == 0 && !renderer.material.shaderGraphAsset.empty()) {
+                    ImGui::TextColored(EditorUI::colors().warning, "Shader Graph needs compilation.");
+                }
             }
-            if (renderer.material.shaderProgram == 0 && !renderer.material.shaderGraphAsset.empty()) {
-                ImGui::TextColored(EditorUI::colors().warning, "Shader Graph needs compilation.");
-            }
-        }
-        ImGui::TextDisabled("Material override");
-        if (ImGui::Checkbox("Override imported material slot 0##mesh-material", &renderer.materialOverride)) {
-            if (renderer.materialOverride) {
-                if (const auto sourceMesh = renderer.mesh.source(); sourceMesh && !sourceMesh->materials.empty())
-                    renderer.material.pbr = sourceMesh->materials.front();
-            }
-            changed = true;
-        }
-        float baseColor[4] = {
-            renderer.material.pbr.baseColor.r(), renderer.material.pbr.baseColor.g(),
-            renderer.material.pbr.baseColor.b(), renderer.material.pbr.baseColor.a()
-        };
-        if (ImGui::ColorEdit4("Base Color##mesh-material", baseColor,
-                              ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_Float)) {
-            renderer.material.pbr.baseColor = Engine::Color{baseColor[0], baseColor[1],
-                                                         baseColor[2], baseColor[3]}.clamped();
-            changed = true;
-        }
-        changed |= Editor::Controls::sliderFloat("Metallic##mesh-material", &renderer.material.pbr.metallic,
-                                      0.0F, 1.0F, "%.2f");
-        changed |= Editor::Controls::sliderFloat("Roughness##mesh-material", &renderer.material.pbr.roughness,
-                                      0.0F, 1.0F, "%.2f");
-        changed |= Editor::Controls::sliderFloat("Ambient Occlusion##mesh-material",
-                                      &renderer.material.pbr.aoStrength, 0.0F, 1.0F, "%.2f");
-        changed |= ImGui::DragFloat("Normal Scale##mesh-material", &renderer.material.pbr.normalScale,
-                                    0.01F, 0.0F, 10.0F, "%.2f");
-        ImGui::Separator();
-        ImGui::TextDisabled("Displacement");
-        changed |= ImGui::DragFloat("Scale##mesh-material", &renderer.material.pbr.displacementScale,
-                                    0.001F, -10.0F, 10.0F, "%.4f m");
-        changed |= ImGui::DragFloat("Offset##mesh-material", &renderer.material.pbr.displacementOffset,
-                                    0.001F, -10.0F, 10.0F, "%.4f m");
-        renderer.material.pbr.displacementScale = std::clamp(renderer.material.pbr.displacementScale,
-                                                              -10.0F, 10.0F);
-        renderer.material.pbr.displacementOffset = std::clamp(renderer.material.pbr.displacementOffset,
-                                                               -10.0F, 10.0F);
-        ImGui::Separator();
-        ImGui::TextDisabled("GlassThin");
-        auto& glass = renderer.material.pbr;
-        changed |= Editor::Controls::sliderFloat("Transmission##mesh-material", &glass.transmission, 0.0F, 1.0F, "%.3f");
-        if (glass.transmission > 0.0F) {
-            changed |= ImGui::DragFloat("IOR##mesh-material", &glass.ior, 0.01F, 1.0F, 3.0F, "%.3f");
-            changed |= ImGui::DragFloat("Thickness##mesh-material", &glass.thickness, 0.0001F, 0.0F, 1.0F, "%.4f m");
-            float attenuation[3] = {glass.attenuationColor.r(), glass.attenuationColor.g(), glass.attenuationColor.b()};
-            if (ImGui::ColorEdit3("Attenuation Color##mesh-material", attenuation, ImGuiColorEditFlags_Float)) {
-                glass.attenuationColor = Engine::Color{attenuation[0], attenuation[1], attenuation[2]}.clamped();
+            ImGui::TextDisabled("Material override");
+            if (ImGui::Checkbox("Override imported material slot 0##mesh-material", &renderer.materialOverride)) {
+                if (renderer.materialOverride) {
+                    if (const auto sourceMesh = renderer.mesh.source(); sourceMesh && !sourceMesh->materials.empty())
+                        renderer.material.pbr = sourceMesh->materials.front();
+                }
                 changed = true;
             }
-            changed |= ImGui::DragFloat("Attenuation Distance##mesh-material", &glass.attenuationDistance, 0.01F, 0.0F, 1000.0F, "%.3f m");
-            ImGui::TextDisabled("Distance 0 disables volume absorption. Base Color tints transmission.");
-            changed |= Editor::Controls::sliderFloat("Dirt Intensity##mesh-material", &glass.dirtIntensity, 0.0F, 1.0F, "%.2f");
-            glass.ior = std::clamp(glass.ior, 1.0F, 3.0F);
-            glass.thickness = std::max(glass.thickness, 0.0F);
-            glass.attenuationDistance = std::max(glass.attenuationDistance, 0.0F);
-        }
-        ImGui::Separator();
-        ImGui::TextDisabled("Emission");
-        float emissive[3] = {renderer.material.pbr.emissiveColor.r(), renderer.material.pbr.emissiveColor.g(),
-                             renderer.material.pbr.emissiveColor.b()};
-        if (ImGui::ColorEdit3("Emissive Color##mesh-material", emissive, ImGuiColorEditFlags_Float)) {
-            renderer.material.pbr.emissiveColor = Engine::Color{emissive[0], emissive[1], emissive[2]}.clamped();
-            changed = true;
-        }
-        changed |= ImGui::DragFloat("Emissive Intensity##mesh-material", &renderer.material.pbr.emissiveIntensity,
-                                    0.1F, 0.0F, 1000.0F, "%.2f");
-        renderer.material.pbr.metallic = std::clamp(renderer.material.pbr.metallic, 0.0F, 1.0F);
-        renderer.material.pbr.roughness = std::clamp(renderer.material.pbr.roughness, 0.0F, 1.0F);
-        renderer.material.pbr.aoStrength = std::clamp(renderer.material.pbr.aoStrength, 0.0F, 1.0F);
-        renderer.material.pbr.normalScale = std::max(0.0F, renderer.material.pbr.normalScale);
-        renderer.material.pbr.emissiveIntensity = std::max(0.0F, renderer.material.pbr.emissiveIntensity);
+            float baseColor[4] = {renderer.material.pbr.baseColor.r(), renderer.material.pbr.baseColor.g(),
+                                  renderer.material.pbr.baseColor.b(), renderer.material.pbr.baseColor.a()};
+            if (ImGui::ColorEdit4("Base Color##mesh-material", baseColor,
+                                  ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_Float)) {
+                renderer.material.pbr.baseColor =
+                    Engine::Color{baseColor[0], baseColor[1], baseColor[2], baseColor[3]}.clamped();
+                changed = true;
+            }
+            changed |= Editor::Controls::sliderFloat("Metallic##mesh-material", &renderer.material.pbr.metallic, 0.0F,
+                                                     1.0F, "%.2f");
+            changed |= Editor::Controls::sliderFloat("Roughness##mesh-material", &renderer.material.pbr.roughness, 0.0F,
+                                                     1.0F, "%.2f");
+            changed |= Editor::Controls::sliderFloat("Ambient Occlusion##mesh-material",
+                                                     &renderer.material.pbr.aoStrength, 0.0F, 1.0F, "%.2f");
+            changed |= ImGui::DragFloat("Normal Scale##mesh-material", &renderer.material.pbr.normalScale, 0.01F, 0.0F,
+                                        10.0F, "%.2f");
+            ImGui::Separator();
+            ImGui::TextDisabled("Displacement");
+            changed |= ImGui::DragFloat("Scale##mesh-material", &renderer.material.pbr.displacementScale, 0.001F,
+                                        -10.0F, 10.0F, "%.4f m");
+            changed |= ImGui::DragFloat("Offset##mesh-material", &renderer.material.pbr.displacementOffset, 0.001F,
+                                        -10.0F, 10.0F, "%.4f m");
+            renderer.material.pbr.displacementScale =
+                std::clamp(renderer.material.pbr.displacementScale, -10.0F, 10.0F);
+            renderer.material.pbr.displacementOffset =
+                std::clamp(renderer.material.pbr.displacementOffset, -10.0F, 10.0F);
+            ImGui::Separator();
+            ImGui::TextDisabled("GlassThin");
+            auto& glass = renderer.material.pbr;
+            changed |=
+                Editor::Controls::sliderFloat("Transmission##mesh-material", &glass.transmission, 0.0F, 1.0F, "%.3f");
+            if (glass.transmission > 0.0F) {
+                changed |= ImGui::DragFloat("IOR##mesh-material", &glass.ior, 0.01F, 1.0F, 3.0F, "%.3f");
+                changed |=
+                    ImGui::DragFloat("Thickness##mesh-material", &glass.thickness, 0.0001F, 0.0F, 1.0F, "%.4f m");
+                float attenuation[3] = {glass.attenuationColor.r(), glass.attenuationColor.g(),
+                                        glass.attenuationColor.b()};
+                if (ImGui::ColorEdit3("Attenuation Color##mesh-material", attenuation, ImGuiColorEditFlags_Float)) {
+                    glass.attenuationColor = Engine::Color{attenuation[0], attenuation[1], attenuation[2]}.clamped();
+                    changed = true;
+                }
+                changed |= ImGui::DragFloat("Attenuation Distance##mesh-material", &glass.attenuationDistance, 0.01F,
+                                            0.0F, 1000.0F, "%.3f m");
+                ImGui::TextDisabled("Distance 0 disables volume absorption. Base Color tints transmission.");
+                changed |= Editor::Controls::sliderFloat("Dirt Intensity##mesh-material", &glass.dirtIntensity, 0.0F,
+                                                         1.0F, "%.2f");
+                glass.ior = std::clamp(glass.ior, 1.0F, 3.0F);
+                glass.thickness = std::max(glass.thickness, 0.0F);
+                glass.attenuationDistance = std::max(glass.attenuationDistance, 0.0F);
+            }
+            ImGui::Separator();
+            ImGui::TextDisabled("Emission");
+            float emissive[3] = {renderer.material.pbr.emissiveColor.r(), renderer.material.pbr.emissiveColor.g(),
+                                 renderer.material.pbr.emissiveColor.b()};
+            if (ImGui::ColorEdit3("Emissive Color##mesh-material", emissive, ImGuiColorEditFlags_Float)) {
+                renderer.material.pbr.emissiveColor = Engine::Color{emissive[0], emissive[1], emissive[2]}.clamped();
+                changed = true;
+            }
+            changed |= ImGui::DragFloat("Emissive Intensity##mesh-material", &renderer.material.pbr.emissiveIntensity,
+                                        0.1F, 0.0F, 1000.0F, "%.2f");
+            renderer.material.pbr.metallic = std::clamp(renderer.material.pbr.metallic, 0.0F, 1.0F);
+            renderer.material.pbr.roughness = std::clamp(renderer.material.pbr.roughness, 0.0F, 1.0F);
+            renderer.material.pbr.aoStrength = std::clamp(renderer.material.pbr.aoStrength, 0.0F, 1.0F);
+            renderer.material.pbr.normalScale = std::max(0.0F, renderer.material.pbr.normalScale);
+            renderer.material.pbr.emissiveIntensity = std::max(0.0F, renderer.material.pbr.emissiveIntensity);
 
-        int alphaMode = static_cast<int>(renderer.material.pbr.alphaMode);
-        constexpr const char* alphaModes[] = {"Opaque", "Mask", "Blend"};
-        if (ImGui::Combo("Alpha Mode##mesh-material", &alphaMode, alphaModes, 3)) {
-            renderer.material.pbr.alphaMode = static_cast<Engine::AlphaMode>(alphaMode);
-            changed = true;
-        }
-        changed |= ImGui::Checkbox("Double Sided##mesh-material", &renderer.material.pbr.doubleSided);
-        if (renderer.material.pbr.alphaMode == Engine::AlphaMode::Mask) {
-            changed |= Editor::Controls::sliderFloat("Alpha Cutoff##mesh-material", &renderer.material.pbr.alphaCutoff,
-                                          0.0F, 1.0F, "%.2f");
-            renderer.material.pbr.alphaCutoff = std::clamp(renderer.material.pbr.alphaCutoff, 0.0F, 1.0F);
-        }
-        renderer.material.synchronizeRenderStateFromPbr();
+            int alphaMode = static_cast<int>(renderer.material.pbr.alphaMode);
+            constexpr const char* alphaModes[] = {"Opaque", "Mask", "Blend"};
+            if (ImGui::Combo("Alpha Mode##mesh-material", &alphaMode, alphaModes, 3)) {
+                renderer.material.pbr.alphaMode = static_cast<Engine::AlphaMode>(alphaMode);
+                changed = true;
+            }
+            changed |= ImGui::Checkbox("Double Sided##mesh-material", &renderer.material.pbr.doubleSided);
+            if (renderer.material.pbr.alphaMode == Engine::AlphaMode::Mask) {
+                changed |= Editor::Controls::sliderFloat("Alpha Cutoff##mesh-material",
+                                                         &renderer.material.pbr.alphaCutoff, 0.0F, 1.0F, "%.2f");
+                renderer.material.pbr.alphaCutoff = std::clamp(renderer.material.pbr.alphaCutoff, 0.0F, 1.0F);
+            }
+            renderer.material.synchronizeRenderStateFromPbr();
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Rendering");
-        changed |= ImGui::Checkbox("Cast Shadows##mesh-renderer", &renderer.castShadow);
-        int cullingBatch = static_cast<int>(renderer.cullingBatch);
-        if (ImGui::DragInt("Culling Batch##mesh-renderer", &cullingBatch, 1.0F, 0, 0,
-                           "%d")) {
-            renderer.cullingBatch = static_cast<std::uint32_t>(std::max(0, cullingBatch));
-            changed = true;
-        }
+            ImGui::Separator();
+            ImGui::TextDisabled("Rendering");
+            changed |= ImGui::Checkbox("Cast Shadows##mesh-renderer", &renderer.castShadow);
+            int cullingBatch = static_cast<int>(renderer.cullingBatch);
+            if (ImGui::DragInt("Culling Batch##mesh-renderer", &cullingBatch, 1.0F, 0, 0, "%d")) {
+                renderer.cullingBatch = static_cast<std::uint32_t>(std::max(0, cullingBatch));
+                changed = true;
+            }
 
-        if (changed) {
-            scene.editor().patch<Engine::MeshRenderer>(selected,
-                [&](auto &component) { component = renderer; });
-        }
+            if (changed) {
+                scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& component) { component = renderer; });
+            }
         }
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::WaterBodyComponent>(selected)) {
@@ -395,8 +400,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             // submission combine a stale render snapshot with live ECS that
             // no longer contains this water body. Defer the structural change
             // until the frame has been submitted.
-            if (std::ranges::find(deferredWaterBodyRemovals, selected) ==
-                deferredWaterBodyRemovals.end()) {
+            if (std::ranges::find(deferredWaterBodyRemovals, selected) == deferredWaterBodyRemovals.end()) {
                 deferredWaterBodyRemovals.push_back(selected);
             }
         } else if (open) {
@@ -412,10 +416,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             changed |= ImGui::ColorEdit3("Deep Color##water", deep, ImGuiColorEditFlags_Float);
             changed |= Editor::Controls::sliderFloat("Roughness##water", &water.roughness, 0.0F, 1.0F, "%.2f");
             changed |= Editor::Controls::sliderFloat("IOR##water", &water.ior, 1.001F, 2.5F, "%.3f");
-            changed |= Editor::Controls::sliderFloat("Refraction Strength##water", &water.refractionStrength, 0.0F, 0.2F, "%.3f");
-            changed |= Editor::Controls::sliderFloat("Micro Normal Strength##water", &water.normalStrength, 0.0F, 1.0F, "%.2f");
-            float absorption[3] = {water.absorptionCoefficient.x(), water.absorptionCoefficient.y(), water.absorptionCoefficient.z()};
-            float scattering[3] = {water.scatteringCoefficient.x(), water.scatteringCoefficient.y(), water.scatteringCoefficient.z()};
+            changed |= Editor::Controls::sliderFloat("Refraction Strength##water", &water.refractionStrength, 0.0F,
+                                                     0.2F, "%.3f");
+            changed |= Editor::Controls::sliderFloat("Micro Normal Strength##water", &water.normalStrength, 0.0F, 1.0F,
+                                                     "%.2f");
+            float absorption[3] = {water.absorptionCoefficient.x(), water.absorptionCoefficient.y(),
+                                   water.absorptionCoefficient.z()};
+            float scattering[3] = {water.scatteringCoefficient.x(), water.scatteringCoefficient.y(),
+                                   water.scatteringCoefficient.z()};
             changed |= ImGui::DragFloat3("Absorption##water", absorption, 0.001F, 0.0F, 10.0F, "%.3f");
             changed |= ImGui::DragFloat3("Scattering##water", scattering, 0.001F, 0.0F, 10.0F, "%.3f");
             changed |= Editor::Controls::sliderFloat("Max Depth##water", &water.maxDepth, 0.01F, 200.0F, "%.2f");
@@ -450,8 +458,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 water.execution.state = static_cast<Engine::WaterStateMode>(stateMode);
                 changed = true;
             }
-            changed |= Editor::Controls::sliderFloat("Path Switch Margin##water", &water.execution.switchMargin,
-                                                     0.0F, 1.0F, "%.2f");
+            changed |= Editor::Controls::sliderFloat("Path Switch Margin##water", &water.execution.switchMargin, 0.0F,
+                                                     1.0F, "%.2f");
             int geometryHold = static_cast<int>(water.execution.minGeometryHoldFrames);
             int shadingHold = static_cast<int>(water.execution.minShadingHoldFrames);
             if (ImGui::DragInt("Geometry Hold Frames##water", &geometryHold, 1.0F, 0, 600)) {
@@ -503,50 +511,50 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         if (remove) {
             scene.editor().remove<Engine::TerrainComponent>(selected);
         } else if (open) {
-        const auto& terrain = scene.editor().read<Engine::TerrainComponent>(selected);
-        ImGui::Text("Heightmap: %u x %u", terrain.resolution, terrain.resolution);
-        ImGui::Text("Size: %.1f x %.1f", terrain.width, terrain.depth);
-        ImGui::Text("Height range: %.1f to %.1f", terrain.minimumHeight, terrain.maximumHeight);
-        ImGui::Spacing();
-        ImGui::TextWrapped("Use Sculpt in the Scene View toolbar, then drag the left mouse button over the terrain.");
-        if (scene.editor().has<Engine::TerrainGrassComponent>(selected)) {
-            const auto& grass = scene.editor().read<Engine::TerrainGrassComponent>(selected);
-            ImGui::Text("Grass instances: %zu", grass.instances.size());
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Remove##terrain-grass")) {
-                scene.editor().remove<Engine::TerrainGrassComponent>(selected);
-            } else {
-            bool castGrassShadow = grass.castShadow;
-            if (ImGui::Checkbox("Cast Shadows##terrain-grass", &castGrassShadow)) {
-                scene.editor().patch<Engine::TerrainGrassComponent>(selected,
-                    [&](auto& component) { component.castShadow = castGrassShadow; });
-            }
-            if (!grass.instances.empty() && ImGui::Button("Clear grass")) {
-                auto cleared = grass;
-                cleared.instances.clear();
-                scene.editor().remove<Engine::TerrainGrassComponent>(selected);
-                scene.editor().add<Engine::TerrainGrassComponent>(selected, std::move(cleared));
-            }
-            ImGui::SameLine();
-            ImGui::TextDisabled("GPU instanced virtual shadows");
-            if (!grass.instances.empty() && ImGui::Button("Reset trampled grass")) {
-                scene.editor().patch<Engine::TerrainGrassComponent>(selected, [](auto& component) {
-                    for (auto& instance : component.instances) {
-                        instance.bendX = 0.0F;
-                        instance.bendZ = 0.0F;
-                        instance.trampled = 0.0F;
+            const auto& terrain = scene.editor().read<Engine::TerrainComponent>(selected);
+            ImGui::Text("Heightmap: %u x %u", terrain.resolution, terrain.resolution);
+            ImGui::Text("Size: %.1f x %.1f", terrain.width, terrain.depth);
+            ImGui::Text("Height range: %.1f to %.1f", terrain.minimumHeight, terrain.maximumHeight);
+            ImGui::Spacing();
+            ImGui::TextWrapped(
+                "Use Sculpt in the Scene View toolbar, then drag the left mouse button over the terrain.");
+            if (scene.editor().has<Engine::TerrainGrassComponent>(selected)) {
+                const auto& grass = scene.editor().read<Engine::TerrainGrassComponent>(selected);
+                ImGui::Text("Grass instances: %zu", grass.instances.size());
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Remove##terrain-grass")) {
+                    scene.editor().remove<Engine::TerrainGrassComponent>(selected);
+                } else {
+                    bool castGrassShadow = grass.castShadow;
+                    if (ImGui::Checkbox("Cast Shadows##terrain-grass", &castGrassShadow)) {
+                        scene.editor().patch<Engine::TerrainGrassComponent>(
+                            selected, [&](auto& component) { component.castShadow = castGrassShadow; });
                     }
-                    component.allInstancesDirty = true;
-                });
+                    if (!grass.instances.empty() && ImGui::Button("Clear grass")) {
+                        auto cleared = grass;
+                        cleared.instances.clear();
+                        scene.editor().remove<Engine::TerrainGrassComponent>(selected);
+                        scene.editor().add<Engine::TerrainGrassComponent>(selected, std::move(cleared));
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("GPU instanced virtual shadows");
+                    if (!grass.instances.empty() && ImGui::Button("Reset trampled grass")) {
+                        scene.editor().patch<Engine::TerrainGrassComponent>(selected, [](auto& component) {
+                            for (auto& instance : component.instances) {
+                                instance.bendX = 0.0F;
+                                instance.bendZ = 0.0F;
+                                instance.trampled = 0.0F;
+                            }
+                            component.allInstancesDirty = true;
+                        });
+                    }
+                }
+            } else {
+                ImGui::TextDisabled("Grass: choose Grass in Scene View and drop a model prefab.");
             }
-            }
-        } else {
-            ImGui::TextDisabled("Grass: choose Grass in Scene View and drop a model prefab.");
-        }
         }
     }
-    if (scene.editor().valid(selected) &&
-        scene.editor().has<Engine::LightComponent>(selected)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::LightComponent>(selected)) {
         bool remove = false;
         const bool open = drawRemovableComponentHeader("Light", "light", remove);
         if (remove) {
@@ -554,7 +562,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         } else if (open) {
             const auto source = scene.editor().read<Engine::LightComponent>(selected);
             auto light = source;
-            constexpr const char *typeNames[] = {"Directional", "Point", "Spot"};
+            constexpr const char* typeNames[] = {"Directional", "Point", "Spot"};
             int type = static_cast<int>(light.type);
             bool changed = false;
 
@@ -575,8 +583,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 light.color = Engine::Color{color[0], color[1], color[2]}.clamped();
                 changed = true;
             }
-            changed |= ImGui::DragFloat("Intensity##light", &light.intensity, 0.05F,
-                                        0.0F, 1000.0F, "%.2f");
+            changed |= ImGui::DragFloat("Intensity##light", &light.intensity, 0.05F, 0.0F, 1000.0F, "%.2f");
             if (light.type == Engine::LightType::Directional) {
                 const bool wasEnabled = light.enabled;
                 if (ImGui::Checkbox("Active Directional Light##light", &light.enabled)) {
@@ -587,25 +594,22 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 }
                 ImGui::TextDisabled("Only one directional light can be active.");
             } else {
-                changed |= ImGui::DragFloat("Range##light", &light.range, 0.1F, 0.1F,
-                                            1000.0F, "%.2f");
+                changed |= ImGui::DragFloat("Range##light", &light.range, 0.1F, 0.1F, 1000.0F, "%.2f");
                 if (light.type == Engine::LightType::Spot) {
-                    changed |= ImGui::DragFloat("Inner cone##light", &light.innerConeAngle,
-                                                0.25F, 0.0F, 89.0F, "%.1f deg");
-                    changed |= ImGui::DragFloat("Outer cone##light", &light.outerConeAngle,
-                                                0.25F, light.innerConeAngle, 89.9F, "%.1f deg");
+                    changed |=
+                        ImGui::DragFloat("Inner cone##light", &light.innerConeAngle, 0.25F, 0.0F, 89.0F, "%.1f deg");
+                    changed |= ImGui::DragFloat("Outer cone##light", &light.outerConeAngle, 0.25F, light.innerConeAngle,
+                                                89.9F, "%.1f deg");
                 }
             }
             changed |= ImGui::Checkbox("Cast Shadows##light", &light.castShadows);
             light.intensity = std::max(0.0F, light.intensity);
             light.range = std::max(0.1F, light.range);
             light.innerConeAngle = std::clamp(light.innerConeAngle, 0.0F, 89.0F);
-            light.outerConeAngle = std::clamp(light.outerConeAngle, light.innerConeAngle + 0.1F,
-                                               89.9F);
+            light.outerConeAngle = std::clamp(light.outerConeAngle, light.innerConeAngle + 0.1F, 89.9F);
 
             if (changed) {
-                scene.editor().patch<Engine::LightComponent>(selected,
-                    [&](auto &component) { component = light; });
+                scene.editor().patch<Engine::LightComponent>(selected, [&](auto& component) { component = light; });
             }
         }
     }
@@ -629,110 +633,85 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 ImGui::TextDisabled("Direction must be non-zero");
             } else if (changed) {
                 wind.direction = candidate;
-                scene.editor().patch<Engine::WindComponent>(selected,
-                    [&](auto& component) { component = wind; });
+                scene.editor().patch<Engine::WindComponent>(selected, [&](auto& component) { component = wind; });
             }
         }
     }
-    if (scene.editor().valid(selected) &&
-        scene.editor().has<Engine::SmokeEmitterComponent>(selected)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::SmokeEmitterComponent>(selected)) {
         bool remove = false;
         const bool open = drawRemovableComponentHeader("Smoke Emitter", "smoke-emitter", remove);
         if (remove) {
             scene.editor().remove<Engine::SmokeEmitterComponent>(selected);
         } else if (open) {
-        // Keep the UI editing a temporary copy. The component is committed
-        // once, after all controls have been drawn, so observers receive one
-        // coherent change notification per frame.
-        const auto readScene = scene.editor();
-        const auto &source =
-                readScene.read<Engine::SmokeEmitterComponent>(selected).emitter;
-        auto emitter = source;
+            // Keep the UI editing a temporary copy. The component is committed
+            // once, after all controls have been drawn, so observers receive one
+            // coherent change notification per frame.
+            const auto readScene = scene.editor();
+            const auto& source = readScene.read<Engine::SmokeEmitterComponent>(selected).emitter;
+            auto emitter = source;
 
-        bool changed = false;
-        const auto drawParticleFloat = [](const char *label, const char *id,
-                                          float *value, const float speed,
-                                          const float min, const float max,
-                                          const char *format) {
-            ImGui::TextDisabled("%s", label);
+            bool changed = false;
+            const auto drawParticleFloat = [](const char* label, const char* id, float* value, const float speed,
+                                              const float min, const float max, const char* format) {
+                ImGui::TextDisabled("%s", label);
+                ImGui::SetNextItemWidth(-1.0F);
+                return ImGui::DragFloat(id, value, speed, min, max, format);
+            };
+
+            changed |= drawParticleFloat("Spawn Rate", "##particle-spawn-rate", &emitter.spawnRate, 1.0F, 0.0F, 5000.0F,
+                                         "%.0F particles/s");
+            changed |= drawParticleFloat("Minimum Lifetime", "##particle-min-lifetime", &emitter.minLifeTime, 0.01F,
+                                         0.0F, 60.0F, "%.2F s");
+            changed |= drawParticleFloat("Maximum Lifetime", "##particle-max-lifetime", &emitter.maxLifeTime, 0.01F,
+                                         0.0F, 60.0F, "%.2F s");
+            changed |=
+                drawParticleFloat("Minimum Size", "##particle-min-size", &emitter.minSize, 0.01F, 0.0F, 10.0F, "%.2F");
+            changed |=
+                drawParticleFloat("Maximum Size", "##particle-max-size", &emitter.maxSize, 0.01F, 0.0F, 10.0F, "%.2F");
+            changed |= drawParticleFloat("Buoyancy", "##smoke-buoyancy", &emitter.buoyancy, 0.05F, 0.0F, 30.0F, "%.2F");
+            changed |= drawParticleFloat("Air Drag", "##smoke-drag", &emitter.drag, 0.02F, 0.0F, 10.0F, "%.2F");
+            changed |=
+                drawParticleFloat("Turbulence", "##smoke-turbulence", &emitter.turbulence, 0.02F, 0.0F, 10.0F, "%.2F");
+            changed |= drawParticleFloat("Collision Radius", "##smoke-collision-radius", &emitter.collisionRadius,
+                                         0.005F, 0.0F, 2.0F, "%.3F");
+
+            float minVelocity[3] = {emitter.minVelocity.x(), emitter.minVelocity.y(), emitter.minVelocity.z()};
+            float maxVelocity[3] = {emitter.maxVelocity.x(), emitter.maxVelocity.y(), emitter.maxVelocity.z()};
+            if (ImGui::DragFloat3("Min Velocity", minVelocity, 0.05F, -100.0F, 100.0F)) {
+                emitter.minVelocity = {minVelocity[0], minVelocity[1], minVelocity[2]};
+                changed = true;
+            }
+            if (ImGui::DragFloat3("Max Velocity", maxVelocity, 0.05F, -100.0F, 100.0F)) {
+                emitter.maxVelocity = {maxVelocity[0], maxVelocity[1], maxVelocity[2]};
+                changed = true;
+            }
+
+            float color[4] = {emitter.color.r(), emitter.color.g(), emitter.color.b(), emitter.color.a()};
+            ImGui::TextDisabled("Color");
             ImGui::SetNextItemWidth(-1.0F);
-            return ImGui::DragFloat(id, value, speed, min, max, format);
-        };
+            if (ImGui::ColorEdit4("##particle-color", color, ImGuiColorEditFlags_AlphaBar)) {
+                emitter.color = Engine::Color{color[0], color[1], color[2], color[3]};
+                changed = true;
+            }
 
-        changed |= drawParticleFloat("Spawn Rate", "##particle-spawn-rate",
-                                     &emitter.spawnRate, 1.0F, 0.0F, 5000.0F,
-                                     "%.0F particles/s");
-        changed |= drawParticleFloat("Minimum Lifetime", "##particle-min-lifetime",
-                                     &emitter.minLifeTime, 0.01F, 0.0F, 60.0F,
-                                     "%.2F s");
-        changed |= drawParticleFloat("Maximum Lifetime", "##particle-max-lifetime",
-                                     &emitter.maxLifeTime, 0.01F, 0.0F, 60.0F,
-                                     "%.2F s");
-        changed |= drawParticleFloat("Minimum Size", "##particle-min-size",
-                                     &emitter.minSize, 0.01F, 0.0F, 10.0F,
-                                     "%.2F");
-        changed |= drawParticleFloat("Maximum Size", "##particle-max-size",
-                                     &emitter.maxSize, 0.01F, 0.0F, 10.0F,
-                                     "%.2F");
-        changed |= drawParticleFloat("Buoyancy", "##smoke-buoyancy",
-                                     &emitter.buoyancy, 0.05F, 0.0F, 30.0F,
-                                     "%.2F");
-        changed |= drawParticleFloat("Air Drag", "##smoke-drag",
-                                     &emitter.drag, 0.02F, 0.0F, 10.0F,
-                                     "%.2F");
-        changed |= drawParticleFloat("Turbulence", "##smoke-turbulence",
-                                     &emitter.turbulence, 0.02F, 0.0F, 10.0F,
-                                     "%.2F");
-        changed |= drawParticleFloat("Collision Radius", "##smoke-collision-radius",
-                                     &emitter.collisionRadius, 0.005F, 0.0F, 2.0F,
-                                     "%.3F");
+            // Enforce valid ranges even when values are entered from the keyboard.
+            emitter.minLifeTime = std::max(0.0F, emitter.minLifeTime);
+            emitter.maxLifeTime = std::max(emitter.minLifeTime, emitter.maxLifeTime);
+            emitter.minSize = std::max(0.0F, emitter.minSize);
+            emitter.maxSize = std::max(emitter.minSize, emitter.maxSize);
+            emitter.spawnRate = std::max(0.0F, emitter.spawnRate);
+            emitter.buoyancy = std::max(0.0F, emitter.buoyancy);
+            emitter.drag = std::max(0.0F, emitter.drag);
+            emitter.turbulence = std::max(0.0F, emitter.turbulence);
+            emitter.collisionRadius = std::max(0.0F, emitter.collisionRadius);
 
-        float minVelocity[3] = {
-            emitter.minVelocity.x(), emitter.minVelocity.y(), emitter.minVelocity.z()
-        };
-        float maxVelocity[3] = {
-            emitter.maxVelocity.x(), emitter.maxVelocity.y(), emitter.maxVelocity.z()
-        };
-        if (ImGui::DragFloat3("Min Velocity", minVelocity, 0.05F, -100.0F, 100.0F)) {
-            emitter.minVelocity = {minVelocity[0], minVelocity[1], minVelocity[2]};
-            changed = true;
-        }
-        if (ImGui::DragFloat3("Max Velocity", maxVelocity, 0.05F, -100.0F, 100.0F)) {
-            emitter.maxVelocity = {maxVelocity[0], maxVelocity[1], maxVelocity[2]};
-            changed = true;
-        }
-
-        float color[4] = {
-            emitter.color.r(), emitter.color.g(), emitter.color.b(), emitter.color.a()
-        };
-        ImGui::TextDisabled("Color");
-        ImGui::SetNextItemWidth(-1.0F);
-        if (ImGui::ColorEdit4("##particle-color", color, ImGuiColorEditFlags_AlphaBar)) {
-            emitter.color = Engine::Color{color[0], color[1], color[2], color[3]};
-            changed = true;
-        }
-
-        // Enforce valid ranges even when values are entered from the keyboard.
-        emitter.minLifeTime = std::max(0.0F, emitter.minLifeTime);
-        emitter.maxLifeTime = std::max(emitter.minLifeTime, emitter.maxLifeTime);
-        emitter.minSize = std::max(0.0F, emitter.minSize);
-        emitter.maxSize = std::max(emitter.minSize, emitter.maxSize);
-        emitter.spawnRate = std::max(0.0F, emitter.spawnRate);
-        emitter.buoyancy = std::max(0.0F, emitter.buoyancy);
-        emitter.drag = std::max(0.0F, emitter.drag);
-        emitter.turbulence = std::max(0.0F, emitter.turbulence);
-        emitter.collisionRadius = std::max(0.0F, emitter.collisionRadius);
-
-        if (changed) {
-            scene.editor().patch<Engine::SmokeEmitterComponent>(selected,
-                                                                 [&](auto &component) {
-                                                                     component.emitter = emitter;
-                                                                 });
-        }
+            if (changed) {
+                scene.editor().patch<Engine::SmokeEmitterComponent>(
+                    selected, [&](auto& component) { component.emitter = emitter; });
+            }
         }
     }
-    if (scene.editor().valid(selected) &&
-        scene.editor().has<Engine::ProceduralCloudComponent>(selected)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ProceduralCloudComponent>(selected)) {
         bool remove = false;
         const bool open = drawRemovableComponentHeader("Procedural Cloud", "procedural-cloud", remove);
         if (remove) {
@@ -762,7 +741,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                                     std::max(dimensions[2], 0.1F)};
                 cloud.puffRadius = std::max(cloud.puffRadius, 0.05F);
                 scene.editor().patch<Engine::ProceduralCloudComponent>(selected,
-                    [&](auto& component) { component = cloud; });
+                                                                       [&](auto& component) { component = cloud; });
                 scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& renderer) {
                     renderer.mesh = std::make_shared<Engine::Mesh>(Engine::ProceduralCloud::createMesh(cloud));
                 });
@@ -775,144 +754,162 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         if (remove) {
             scene.editor().remove<Engine::ScriptComponent>(selected);
         } else if (open) {
-        const auto readScene = scene.editor();
-        const auto &script = readScene.read<Engine::ScriptComponent>(selected);
-        char className[260]{};
-        std::snprintf(className, sizeof(className), "%s", script.className.c_str());
-        ImGui::TextDisabled("C++ script class");
-        ImGui::SetNextItemWidth(-1.0F);
-        if (ImGui::InputText("##script-class", className, sizeof(className))) {
-            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto &value) {
-                value.className = className;
-                value.reset();
-            });
-        }
-        bool enabled = script.enabled;
-        if (ImGui::Checkbox("Enabled##script", &enabled)) {
-            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto &value) {
-                value.enabled = enabled;
-            });
-        }
-        const auto *descriptor = Engine::ScriptRegistry::instance().descriptor(script.className);
-        if (descriptor == nullptr) {
-            ImGui::TextWrapped("Script class is not loaded. Check the Console for script build or module load errors.");
-        }
-        if (descriptor != nullptr) {
-            for (const auto &field : descriptor->fields) {
-                if (Engine::findScriptAttribute<Engine::ScriptHideInInspectorAttribute>(field) != nullptr) continue;
-                if (const auto *space = Engine::findScriptAttribute<Engine::ScriptSpaceAttribute>(field))
-                    ImGui::Dummy({0.0F, space->pixels});
-                if (const auto *header = Engine::findScriptAttribute<Engine::ScriptHeaderAttribute>(field)) {
-                    ImGui::SeparatorText(header->text.c_str());
-                }
-                const auto found = script.fields.find(field.name);
-                Engine::ScriptFieldValue value = found == script.fields.end()
-                    ? field.defaultValue : found->second;
-                Engine::ScriptFieldValue edited = value;
-                bool changed = false;
-                const bool readOnly = Engine::findScriptAttribute<Engine::ScriptReadOnlyAttribute>(field) != nullptr;
-                const auto *displayName = Engine::findScriptAttribute<Engine::ScriptDisplayNameAttribute>(field);
-                const char *label = displayName != nullptr ? displayName->text.c_str() : field.name.c_str();
-                ImGui::BeginDisabled(readOnly);
-                switch (field.type) {
-                case Engine::ScriptFieldType::Bool:
-                    if (auto *v = std::get_if<bool>(&edited)) changed = ImGui::Checkbox(label, v);
-                    break;
-                case Engine::ScriptFieldType::Int:
-                    if (auto *v = std::get_if<int>(&edited)) {
-                        if (const auto *range = Engine::findScriptAttribute<Engine::ScriptRangeAttribute>(field)) {
-                            changed = ImGui::SliderInt(label, v,
-                                static_cast<int>(range->min), static_cast<int>(range->max));
-                        } else {
-                            const auto *step = Engine::findScriptAttribute<Engine::ScriptStepAttribute>(field);
-                            const auto *minimum = Engine::findScriptAttribute<Engine::ScriptMinAttribute>(field);
-                            const auto *maximum = Engine::findScriptAttribute<Engine::ScriptMaxAttribute>(field);
-                            if (minimum != nullptr || maximum != nullptr) {
-                                changed = ImGui::DragInt(label, v, step != nullptr ? static_cast<float>(step->value) : 1.0F,
-                                    minimum != nullptr ? static_cast<int>(minimum->value) : INT_MIN,
-                                    maximum != nullptr ? static_cast<int>(maximum->value) : INT_MAX);
-                            } else changed = ImGui::DragInt(label, v, step != nullptr ? static_cast<float>(step->value) : 1.0F);
-                        }
-                    }
-                    break;
-                case Engine::ScriptFieldType::Float:
-                    if (auto *v = std::get_if<float>(&edited)) {
-                        const bool percentage = Engine::findScriptAttribute<Engine::ScriptPercentageAttribute>(field) != nullptr;
-                        const bool angle = Engine::findScriptAttribute<Engine::ScriptAngleAttribute>(field) != nullptr;
-                        float displayValue = percentage ? *v * 100.0F : *v;
-                        const float displayScale = percentage ? 100.0F : 1.0F;
-                        const char *format = percentage ? "%.1f%%" : (angle ? "%.1f deg" : "%.3f");
-                        if (const auto *range = Engine::findScriptAttribute<Engine::ScriptRangeAttribute>(field)) {
-                            changed = ImGui::SliderFloat(label, &displayValue,
-                                static_cast<float>(range->min) * displayScale, static_cast<float>(range->max) * displayScale,
-                                format);
-                        } else {
-                            const auto *step = Engine::findScriptAttribute<Engine::ScriptStepAttribute>(field);
-                            const auto *minimum = Engine::findScriptAttribute<Engine::ScriptMinAttribute>(field);
-                            const auto *maximum = Engine::findScriptAttribute<Engine::ScriptMaxAttribute>(field);
-                            if (minimum != nullptr || maximum != nullptr) {
-                                changed = ImGui::DragFloat(label, &displayValue,
-                                    (step != nullptr ? static_cast<float>(step->value) : 0.05F) * displayScale,
-                                    minimum != nullptr ? static_cast<float>(minimum->value) * displayScale : -FLT_MAX,
-                                    maximum != nullptr ? static_cast<float>(maximum->value) * displayScale : FLT_MAX,
-                                    format);
-                            } else changed = ImGui::DragFloat(label, &displayValue,
-                                (step != nullptr ? static_cast<float>(step->value) : 0.05F) * displayScale,
-                                0.0F, 0.0F, format);
-                        }
-                        *v = percentage ? displayValue / 100.0F : displayValue;
-                    }
-                    break;
-                case Engine::ScriptFieldType::Double: {
-                    if (auto *v = std::get_if<double>(&edited)) {
-                        float converted = static_cast<float>(*v);
-                        changed = ImGui::DragFloat(label, &converted, 0.05F);
-                        *v = converted;
-                    }
-                    break;
-                }
-                case Engine::ScriptFieldType::Vec3:
-                    if (auto *v = std::get_if<Engine::Vec3>(&edited)) {
-                        float values[3] = {v->x(), v->y(), v->z()};
-                        if (ImGui::DragFloat3(label, values, 0.05F)) {
-                            *v = {values[0], values[1], values[2]}; changed = true;
-                        }
-                    }
-                    break;
-                case Engine::ScriptFieldType::Color:
-                    if (auto *v = std::get_if<Engine::Color>(&edited)) {
-                        float values[4] = {v->r(), v->g(), v->b(), v->a()};
-                        if (ImGui::ColorEdit4(label, values)) {
-                            *v = {values[0], values[1], values[2], values[3]}; changed = true;
-                        }
-                    }
-                    break;
-                case Engine::ScriptFieldType::String: {
-                    auto *v = std::get_if<std::string>(&edited);
-                    char buffer[512]{};
-                    if (v != nullptr) {
-                        std::snprintf(buffer, sizeof(buffer), "%s", v->c_str());
-                        const auto *multiline = Engine::findScriptAttribute<Engine::ScriptMultilineAttribute>(field);
-                        if (multiline != nullptr) {
-                            if (ImGui::InputTextMultiline(label, buffer, sizeof(buffer), {0.0F, ImGui::GetTextLineHeight() * multiline->lines})) {
-                                *v = buffer; changed = true;
-                            }
-                        } else if (ImGui::InputText(label, buffer, sizeof(buffer))) {
-                            *v = buffer; changed = true;
-                        }
-                    }
-                    break;
-                }
-                }
-                ImGui::EndDisabled();
-                if (const auto *tooltip = Engine::findScriptAttribute<Engine::ScriptTooltipAttribute>(field);
-                    tooltip != nullptr && ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", tooltip->text.c_str());
-                }
-                if (changed) scene.editor().patch<Engine::ScriptComponent>(selected,
-                    [&](auto &component) { component.fields[field.name] = edited; });
+            const auto readScene = scene.editor();
+            const auto& script = readScene.read<Engine::ScriptComponent>(selected);
+            char className[260]{};
+            std::snprintf(className, sizeof(className), "%s", script.className.c_str());
+            ImGui::TextDisabled("C++ script class");
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::InputText("##script-class", className, sizeof(className))) {
+                scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto& value) {
+                    value.className = className;
+                    value.reset();
+                });
             }
-        }
+            bool enabled = script.enabled;
+            if (ImGui::Checkbox("Enabled##script", &enabled)) {
+                scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto& value) { value.enabled = enabled; });
+            }
+            const auto* descriptor = Engine::ScriptRegistry::instance().descriptor(script.className);
+            if (descriptor == nullptr) {
+                ImGui::TextWrapped(
+                    "Script class is not loaded. Check the Console for script build or module load errors.");
+            }
+            if (descriptor != nullptr) {
+                for (const auto& field : descriptor->fields) {
+                    if (Engine::findScriptAttribute<Engine::ScriptHideInInspectorAttribute>(field) != nullptr)
+                        continue;
+                    if (const auto* space = Engine::findScriptAttribute<Engine::ScriptSpaceAttribute>(field))
+                        ImGui::Dummy({0.0F, space->pixels});
+                    if (const auto* header = Engine::findScriptAttribute<Engine::ScriptHeaderAttribute>(field)) {
+                        ImGui::SeparatorText(header->text.c_str());
+                    }
+                    const auto found = script.fields.find(field.name);
+                    Engine::ScriptFieldValue value = found == script.fields.end() ? field.defaultValue : found->second;
+                    Engine::ScriptFieldValue edited = value;
+                    bool changed = false;
+                    const bool readOnly =
+                        Engine::findScriptAttribute<Engine::ScriptReadOnlyAttribute>(field) != nullptr;
+                    const auto* displayName = Engine::findScriptAttribute<Engine::ScriptDisplayNameAttribute>(field);
+                    const char* label = displayName != nullptr ? displayName->text.c_str() : field.name.c_str();
+                    ImGui::BeginDisabled(readOnly);
+                    switch (field.type) {
+                    case Engine::ScriptFieldType::Bool:
+                        if (auto* v = std::get_if<bool>(&edited))
+                            changed = ImGui::Checkbox(label, v);
+                        break;
+                    case Engine::ScriptFieldType::Int:
+                        if (auto* v = std::get_if<int>(&edited)) {
+                            if (const auto* range = Engine::findScriptAttribute<Engine::ScriptRangeAttribute>(field)) {
+                                changed = ImGui::SliderInt(label, v, static_cast<int>(range->min),
+                                                           static_cast<int>(range->max));
+                            } else {
+                                const auto* step = Engine::findScriptAttribute<Engine::ScriptStepAttribute>(field);
+                                const auto* minimum = Engine::findScriptAttribute<Engine::ScriptMinAttribute>(field);
+                                const auto* maximum = Engine::findScriptAttribute<Engine::ScriptMaxAttribute>(field);
+                                if (minimum != nullptr || maximum != nullptr) {
+                                    changed = ImGui::DragInt(
+                                        label, v, step != nullptr ? static_cast<float>(step->value) : 1.0F,
+                                        minimum != nullptr ? static_cast<int>(minimum->value) : INT_MIN,
+                                        maximum != nullptr ? static_cast<int>(maximum->value) : INT_MAX);
+                                } else
+                                    changed = ImGui::DragInt(label, v,
+                                                             step != nullptr ? static_cast<float>(step->value) : 1.0F);
+                            }
+                        }
+                        break;
+                    case Engine::ScriptFieldType::Float:
+                        if (auto* v = std::get_if<float>(&edited)) {
+                            const bool percentage =
+                                Engine::findScriptAttribute<Engine::ScriptPercentageAttribute>(field) != nullptr;
+                            const bool angle =
+                                Engine::findScriptAttribute<Engine::ScriptAngleAttribute>(field) != nullptr;
+                            float displayValue = percentage ? *v * 100.0F : *v;
+                            const float displayScale = percentage ? 100.0F : 1.0F;
+                            const char* format = percentage ? "%.1f%%" : (angle ? "%.1f deg" : "%.3f");
+                            if (const auto* range = Engine::findScriptAttribute<Engine::ScriptRangeAttribute>(field)) {
+                                changed = ImGui::SliderFloat(label, &displayValue,
+                                                             static_cast<float>(range->min) * displayScale,
+                                                             static_cast<float>(range->max) * displayScale, format);
+                            } else {
+                                const auto* step = Engine::findScriptAttribute<Engine::ScriptStepAttribute>(field);
+                                const auto* minimum = Engine::findScriptAttribute<Engine::ScriptMinAttribute>(field);
+                                const auto* maximum = Engine::findScriptAttribute<Engine::ScriptMaxAttribute>(field);
+                                if (minimum != nullptr || maximum != nullptr) {
+                                    changed = ImGui::DragFloat(
+                                        label, &displayValue,
+                                        (step != nullptr ? static_cast<float>(step->value) : 0.05F) * displayScale,
+                                        minimum != nullptr ? static_cast<float>(minimum->value) * displayScale
+                                                           : -FLT_MAX,
+                                        maximum != nullptr ? static_cast<float>(maximum->value) * displayScale
+                                                           : FLT_MAX,
+                                        format);
+                                } else
+                                    changed = ImGui::DragFloat(
+                                        label, &displayValue,
+                                        (step != nullptr ? static_cast<float>(step->value) : 0.05F) * displayScale,
+                                        0.0F, 0.0F, format);
+                            }
+                            *v = percentage ? displayValue / 100.0F : displayValue;
+                        }
+                        break;
+                    case Engine::ScriptFieldType::Double: {
+                        if (auto* v = std::get_if<double>(&edited)) {
+                            float converted = static_cast<float>(*v);
+                            changed = ImGui::DragFloat(label, &converted, 0.05F);
+                            *v = converted;
+                        }
+                        break;
+                    }
+                    case Engine::ScriptFieldType::Vec3:
+                        if (auto* v = std::get_if<Engine::Vec3>(&edited)) {
+                            float values[3] = {v->x(), v->y(), v->z()};
+                            if (ImGui::DragFloat3(label, values, 0.05F)) {
+                                *v = {values[0], values[1], values[2]};
+                                changed = true;
+                            }
+                        }
+                        break;
+                    case Engine::ScriptFieldType::Color:
+                        if (auto* v = std::get_if<Engine::Color>(&edited)) {
+                            float values[4] = {v->r(), v->g(), v->b(), v->a()};
+                            if (ImGui::ColorEdit4(label, values)) {
+                                *v = {values[0], values[1], values[2], values[3]};
+                                changed = true;
+                            }
+                        }
+                        break;
+                    case Engine::ScriptFieldType::String: {
+                        auto* v = std::get_if<std::string>(&edited);
+                        char buffer[512]{};
+                        if (v != nullptr) {
+                            std::snprintf(buffer, sizeof(buffer), "%s", v->c_str());
+                            const auto* multiline =
+                                Engine::findScriptAttribute<Engine::ScriptMultilineAttribute>(field);
+                            if (multiline != nullptr) {
+                                if (ImGui::InputTextMultiline(label, buffer, sizeof(buffer),
+                                                              {0.0F, ImGui::GetTextLineHeight() * multiline->lines})) {
+                                    *v = buffer;
+                                    changed = true;
+                                }
+                            } else if (ImGui::InputText(label, buffer, sizeof(buffer))) {
+                                *v = buffer;
+                                changed = true;
+                            }
+                        }
+                        break;
+                    }
+                    }
+                    ImGui::EndDisabled();
+                    if (const auto* tooltip = Engine::findScriptAttribute<Engine::ScriptTooltipAttribute>(field);
+                        tooltip != nullptr && ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", tooltip->text.c_str());
+                    }
+                    if (changed)
+                        scene.editor().patch<Engine::ScriptComponent>(
+                            selected, [&](auto& component) { component.fields[field.name] = edited; });
+                }
+            }
         }
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColliderComponent>(selected)) {
@@ -923,13 +920,13 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         } else if (open) {
             const auto collider = scene.editor().read<Engine::ColliderComponent>(selected);
             int shape = static_cast<int>(collider.shape.index());
-            const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp", "Mesh"};
+            const char* shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp", "Mesh"};
             const bool hasMesh = scene.editor().has<Engine::MeshRenderer>(selected) &&
-                scene.editor().read<Engine::MeshRenderer>(selected).hasMesh();
+                                 scene.editor().read<Engine::MeshRenderer>(selected).hasMesh();
             const bool hasBody = scene.editor().has<Engine::RigidbodyComponent>(selected);
             const Engine::RigidbodyType bodyType = hasBody
-                ? scene.editor().read<Engine::RigidbodyComponent>(selected).type
-                : Engine::RigidbodyType::Static;
+                                                       ? scene.editor().read<Engine::RigidbodyComponent>(selected).type
+                                                       : Engine::RigidbodyType::Static;
             bool changed = false;
 
             ImGui::TextDisabled("Geometry");
@@ -937,28 +934,26 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             if (ImGui::BeginCombo("Shape##collider", shapeNames[shape])) {
                 for (int index = 0; index < 5; ++index) {
                     const bool unavailable = index == 4 && !hasMesh;
-                    if (unavailable) ImGui::BeginDisabled();
+                    if (unavailable)
+                        ImGui::BeginDisabled();
                     if (ImGui::Selectable(shapeNames[index], shape == index)) {
                         shape = index;
                         changed = true;
                     }
-                    if (unavailable) ImGui::EndDisabled();
+                    if (unavailable)
+                        ImGui::EndDisabled();
                 }
                 ImGui::EndCombo();
             }
 
             auto value = collider;
             if (shape != static_cast<int>(value.shape.index())) {
-                value.shape = shape == 0
-                                  ? Engine::ColliderShape{Engine::BoxCollider{}}
-                                  : shape == 1
-                                        ? Engine::ColliderShape{Engine::SphereCollider{}}
-                                        : shape == 2
-                                              ? Engine::ColliderShape{Engine::CapsuleCollider{}}
-                                              : shape == 3
-                                                     ? Engine::ColliderShape{Engine::RampCollider{}}
-                                                     : Engine::ColliderShape{Engine::MeshCollider{
-                                                         scene.editor().read<Engine::MeshRenderer>(selected).mesh.source()}};
+                value.shape = shape == 0   ? Engine::ColliderShape{Engine::BoxCollider{}}
+                              : shape == 1 ? Engine::ColliderShape{Engine::SphereCollider{}}
+                              : shape == 2 ? Engine::ColliderShape{Engine::CapsuleCollider{}}
+                              : shape == 3 ? Engine::ColliderShape{Engine::RampCollider{}}
+                                           : Engine::ColliderShape{Engine::MeshCollider{
+                                                 scene.editor().read<Engine::MeshRenderer>(selected).mesh.source()}};
             }
 
             ImGui::TextDisabled("Local offset");
@@ -968,44 +963,40 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 value.offset = {offset[0], offset[1], offset[2]};
                 changed = true;
             }
-            std::visit([&]<typename T>(T &colliderShape) {
-                using Shape = std::decay_t<T>;
-                if constexpr (std::is_same_v<Shape, Engine::BoxCollider> ||
-                              std::is_same_v<Shape, Engine::RampCollider>) {
-                    float extents[3] = {
-                        colliderShape.halfExtents.x(), colliderShape.halfExtents.y(),
-                        colliderShape.halfExtents.z()};
-                    ImGui::TextDisabled("Half extents");
-                    ImGui::SetNextItemWidth(-1.0F);
-                    if (ImGui::DragFloat3("##collider-half-extents", extents, 0.05F,
-                                          0.001F, 1000.0F)) {
-                        colliderShape.halfExtents = {
-                            std::max(0.001F, extents[0]), std::max(0.001F, extents[1]),
-                            std::max(0.001F, extents[2])};
-                        changed = true;
+            std::visit(
+                [&]<typename T>(T& colliderShape) {
+                    using Shape = std::decay_t<T>;
+                    if constexpr (std::is_same_v<Shape, Engine::BoxCollider> ||
+                                  std::is_same_v<Shape, Engine::RampCollider>) {
+                        float extents[3] = {colliderShape.halfExtents.x(), colliderShape.halfExtents.y(),
+                                            colliderShape.halfExtents.z()};
+                        ImGui::TextDisabled("Half extents");
+                        ImGui::SetNextItemWidth(-1.0F);
+                        if (ImGui::DragFloat3("##collider-half-extents", extents, 0.05F, 0.001F, 1000.0F)) {
+                            colliderShape.halfExtents = {std::max(0.001F, extents[0]), std::max(0.001F, extents[1]),
+                                                         std::max(0.001F, extents[2])};
+                            changed = true;
+                        }
+                        if constexpr (std::is_same_v<Shape, Engine::RampCollider>) {
+                            ImGui::TextDisabled("Slope rises along local +Z.");
+                        }
+                    } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
+                        changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05F, 0.001F, 1000.0F);
+                        colliderShape.radius = std::max(0.001F, colliderShape.radius);
+                    } else if constexpr (std::is_same_v<Shape, Engine::CapsuleCollider>) {
+                        changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05F, 0.001F, 1000.0F);
+                        changed |=
+                            ImGui::DragFloat("Total Height##collider", &colliderShape.height, 0.05F, 0.001F, 1000.0F);
+                        colliderShape.radius = std::max(0.001F, colliderShape.radius);
+                        colliderShape.height = std::max(colliderShape.radius * 2.0F, colliderShape.height);
+                    } else if constexpr (std::is_same_v<Shape, Engine::MeshCollider>) {
+                        const char* mode = bodyType == Engine::RigidbodyType::Dynamic
+                                               ? "Dynamic body: convex hull (bounds fallback)."
+                                               : "Static body: exact triangle mesh.";
+                        ImGui::TextDisabled("%s", mode);
                     }
-                    if constexpr (std::is_same_v<Shape, Engine::RampCollider>) {
-                        ImGui::TextDisabled("Slope rises along local +Z.");
-                    }
-                } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
-                    changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius,
-                                                0.05F, 0.001F, 1000.0F);
-                    colliderShape.radius = std::max(0.001F, colliderShape.radius);
-                } else if constexpr (std::is_same_v<Shape, Engine::CapsuleCollider>) {
-                    changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius,
-                                                0.05F, 0.001F, 1000.0F);
-                    changed |= ImGui::DragFloat("Total Height##collider", &colliderShape.height,
-                                                0.05F, 0.001F, 1000.0F);
-                    colliderShape.radius = std::max(0.001F, colliderShape.radius);
-                    colliderShape.height = std::max(colliderShape.radius * 2.0F,
-                                                    colliderShape.height);
-                } else if constexpr (std::is_same_v<Shape, Engine::MeshCollider>) {
-                    const char *mode = bodyType == Engine::RigidbodyType::Dynamic
-                        ? "Dynamic body: convex hull (bounds fallback)."
-                        : "Static body: exact triangle mesh.";
-                    ImGui::TextDisabled("%s", mode);
-                }
-            }, value.shape);
+                },
+                value.shape);
 
             ImGui::Separator();
             ImGui::TextDisabled("Simulation");
@@ -1016,15 +1007,13 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
 
             ImGui::Separator();
             ImGui::TextDisabled("Material");
-            changed |= ImGui::DragFloat("Static / dynamic friction##collider", &value.friction,
-                                        0.01F, 0.0F, 10.0F, "%.2f");
-            changed |= Editor::Controls::sliderFloat("Restitution##collider", &value.restitution,
-                                          0.0F, 1.0F, "%.2f");
+            changed |=
+                ImGui::DragFloat("Static / dynamic friction##collider", &value.friction, 0.01F, 0.0F, 10.0F, "%.2f");
+            changed |= Editor::Controls::sliderFloat("Restitution##collider", &value.restitution, 0.0F, 1.0F, "%.2f");
             value.friction = std::max(0.0F, value.friction);
             value.restitution = std::clamp(value.restitution, 0.0F, 1.0F);
             if (changed) {
-                scene.editor().patch<Engine::ColliderComponent>(selected,
-                    [&](auto &component) { component = value; });
+                scene.editor().patch<Engine::ColliderComponent>(selected, [&](auto& component) { component = value; });
             }
         }
     }
@@ -1037,12 +1026,13 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             const auto rigidbody = scene.editor().read<Engine::RigidbodyComponent>(selected);
             auto value = rigidbody;
             int type = static_cast<int>(value.type);
-            const char *typeNames[] = {"Static", "Dynamic", "Kinematic"};
+            const char* typeNames[] = {"Static", "Dynamic", "Kinematic"};
             ImGui::TextDisabled("Body type");
             ImGui::SetNextItemWidth(-1.0F);
             if (ImGui::BeginCombo("Type##rigidbody", typeNames[type])) {
                 for (int index = 0; index < 3; ++index) {
-                    if (ImGui::Selectable(typeNames[index], type == index)) type = index;
+                    if (ImGui::Selectable(typeNames[index], type == index))
+                        type = index;
                 }
                 ImGui::EndCombo();
             }
@@ -1050,29 +1040,28 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             bool changed = value.type != rigidbody.type;
             const bool dynamic = value.type == Engine::RigidbodyType::Dynamic;
             const bool kinematic = value.type == Engine::RigidbodyType::Kinematic;
-            ImGui::TextDisabled(dynamic ? "Simulated by the physics system." :
-                                kinematic ? "Driven by Transform; pushes dynamic bodies." :
-                                            "Fixed collision geometry.");
+            ImGui::TextDisabled(dynamic     ? "Simulated by the physics system."
+                                : kinematic ? "Driven by Transform; pushes dynamic bodies."
+                                            : "Fixed collision geometry.");
 
             ImGui::Separator();
             ImGui::TextDisabled("Motion");
-            if (!dynamic) ImGui::BeginDisabled();
+            if (!dynamic)
+                ImGui::BeginDisabled();
             changed |= ImGui::Checkbox("Use Gravity##rigidbody", &value.useGravity);
-            changed |= ImGui::DragFloat("Mass##rigidbody", &value.mass, 0.05F, 0.001F,
-                                        100000.0F, "%.3f kg");
-            changed |= ImGui::DragFloat("Linear Damping##rigidbody", &value.linearDamping,
-                                        0.01F, 0.0F, 100.0F, "%.3f");
-            changed |= ImGui::DragFloat("Angular Damping##rigidbody", &value.angularDamping,
-                                        0.01F, 0.0F, 100.0F, "%.3f");
+            changed |= ImGui::DragFloat("Mass##rigidbody", &value.mass, 0.05F, 0.001F, 100000.0F, "%.3f kg");
+            changed |= ImGui::DragFloat("Linear Damping##rigidbody", &value.linearDamping, 0.01F, 0.0F, 100.0F, "%.3f");
+            changed |=
+                ImGui::DragFloat("Angular Damping##rigidbody", &value.angularDamping, 0.01F, 0.0F, 100.0F, "%.3f");
             changed |= ImGui::Checkbox("Lock Rotation##rigidbody", &value.fixedRotation);
-            if (!dynamic) ImGui::EndDisabled();
+            if (!dynamic)
+                ImGui::EndDisabled();
 
             value.mass = std::max(0.001F, value.mass);
             value.linearDamping = std::max(0.0F, value.linearDamping);
             value.angularDamping = std::max(0.0F, value.angularDamping);
             if (changed) {
-                scene.editor().patch<Engine::RigidbodyComponent>(selected,
-                    [&](auto &component) { component = value; });
+                scene.editor().patch<Engine::RigidbodyComponent>(selected, [&](auto& component) { component = value; });
             }
         }
     }
@@ -1102,15 +1091,15 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
 
         std::string_view previousCategory;
         bool found = false;
-        for (const Editor::ComponentDescriptor& descriptor :
-             Editor::ComponentRegistry::instance().components()) {
+        for (const Editor::ComponentDescriptor& descriptor : Editor::ComponentRegistry::instance().components()) {
             if (!containsCaseInsensitive(descriptor.name.data(), componentSearch) &&
                 !containsCaseInsensitive(descriptor.category.data(), componentSearch)) {
                 continue;
             }
             found = true;
             if (previousCategory != descriptor.category) {
-                if (!previousCategory.empty()) ImGui::Spacing();
+                if (!previousCategory.empty())
+                    ImGui::Spacing();
                 ImGui::TextDisabled("%.*s", static_cast<int>(descriptor.category.size()), descriptor.category.data());
                 previousCategory = descriptor.category;
             }
@@ -1121,9 +1110,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 ImGui::CloseCurrentPopup();
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("%.*s%s", static_cast<int>(descriptor.description.size()), descriptor.description.data(),
-                                  available ? "" : descriptor.singleton ? "\nOnly one instance is allowed in a scene."
-                                                                     : "\nAlready added to this object.");
+                ImGui::SetTooltip("%.*s%s", static_cast<int>(descriptor.description.size()),
+                                  descriptor.description.data(),
+                                  available              ? ""
+                                  : descriptor.singleton ? "\nOnly one instance is allowed in a scene."
+                                                         : "\nAlready added to this object.");
             }
         }
 
@@ -1131,10 +1122,12 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         const bool alreadyHasScript = scene.editor().has<Engine::ScriptComponent>(selected);
         bool scriptsHeaderDrawn = false;
         for (const std::string& className : scriptRegistry.classNames()) {
-            if (!containsCaseInsensitive(className.c_str(), componentSearch)) continue;
+            if (!containsCaseInsensitive(className.c_str(), componentSearch))
+                continue;
 
             if (!scriptsHeaderDrawn) {
-                if (found) ImGui::Spacing();
+                if (found)
+                    ImGui::Spacing();
                 ImGui::TextDisabled("Scripts");
                 scriptsHeaderDrawn = true;
             }
@@ -1150,22 +1143,24 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 ImGui::SetTooltip("Only one script can be attached to an object.");
             }
         }
-        if (!found) ImGui::TextDisabled("No matching components.");
+        if (!found)
+            ImGui::TextDisabled("No matching components.");
         ImGui::EndChild();
         ImGui::EndPopup();
     }
-    if (EditorButton("New C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Create C++ Script");
+    if (EditorButton("New C++ Script", {-1.0F, 0.0F}).draw())
+        ImGui::OpenPopup("Create C++ Script");
     if (ImGui::BeginPopupModal("Create C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static char name[128]{};
         static std::string error;
         ImGui::TextUnformatted("Creates Assets/Scripts/<Name>.h and .cpp in the current project");
         ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
-        if (!error.empty()) ImGui::TextColored(EditorUI::colors().error, "%s", error.c_str());
+        if (!error.empty())
+            ImGui::TextColored(EditorUI::colors().error, "%s", error.c_str());
         if (EditorButton("Create").draw() && EditorSceneSession::createCppScript(name, error)) {
             if (!scene.editor().has<Engine::ScriptComponent>(selected))
-                scene.editor().add<
-                    Engine::ScriptComponent>(selected);
-            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto &script) {
+                scene.editor().add<Engine::ScriptComponent>(selected);
+            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto& script) {
                 script.className = name;
                 script.reset();
             });
@@ -1182,9 +1177,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         ImGui::EndPopup();
     }
     ImGui::PopID();
-    const bool consumesMouseWheel = ImGui::IsWindowHovered(
-                                        ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel !=
-                                    0.0F;
+    const bool consumesMouseWheel =
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0F;
     ImGui::End();
     return consumesMouseWheel;
 }

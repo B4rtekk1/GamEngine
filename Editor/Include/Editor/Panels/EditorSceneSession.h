@@ -9,10 +9,12 @@
 #include <string>
 #include <string_view>
 
-namespace Engine { class Renderer; }
+namespace Engine {
+class Renderer;
+}
 
 class EditorSceneSession final {
-public:
+  public:
     /** Sets the root directory used for generated project files. */
     static void setProjectRoot(std::filesystem::path path, std::filesystem::path assetRoot = {});
     /** Selects the scene used by Save and Load actions. An empty path clears the selection. */
@@ -35,7 +37,7 @@ public:
     static void clearSavedScene();
     [[nodiscard]] static Engine::AntialiasingLevel antialiasingLevel(const Engine::Renderer& renderer);
 
-    static bool setPlayMode(bool play, Engine::ScenePreset& scene, std::string& snapshot,
-                            std::string& error, Engine::AntialiasingLevel antialiasing);
+    static bool setPlayMode(bool play, Engine::ScenePreset& scene, std::string& snapshot, std::string& error,
+                            Engine::AntialiasingLevel antialiasing);
     static bool createCppScript(std::string_view name, std::string& error);
 };

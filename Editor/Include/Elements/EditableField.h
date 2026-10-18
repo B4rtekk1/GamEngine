@@ -1,10 +1,9 @@
 #pragma once
 
-#include "imgui.h"
-#include "NumericControl.h"
-
 #include "Engine/ECS/GameObject.h"
 #include "Engine/Math/Vec3.h"
+#include "NumericControl.h"
+#include "imgui.h"
 
 #include <cstdio>
 #include <functional>
@@ -34,7 +33,7 @@ class EditableField {
     static constexpr float AxisBadgeWidth = 18.0F;
     static constexpr float AxisFieldGap = 4.0F;
 
-public:
+  public:
     /**
      * @brief Constructs an editable field associated with a game object.
      *
@@ -48,7 +47,7 @@ public:
         drawVec3Field(label, widgetId, current, speed, format, update);
     }
 
-protected:
+  protected:
     /**
      * @brief Destroys the editable field.
      */
@@ -65,9 +64,8 @@ protected:
      * @param update Callback invoked with the updated vector after a change.
      */
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): label and widget ID are intentionally paired UI inputs.
-    static void drawVec3Field(const char* label, const char* widgetId, const Engine::Vec3& current,
-                              const float speed, const char* format,
-                              const std::function<void(const Engine::Vec3&)>& update) {
+    static void drawVec3Field(const char* label, const char* widgetId, const Engine::Vec3& current, const float speed,
+                              const char* format, const std::function<void(const Engine::Vec3&)>& update) {
         float values[ComponentCount] = {current.x(), current.y(), current.z()};
         // A hidden label means that the field is hosted by a PropertyGrid.
         // Keep the compact row layout; discoverability is retained in a tooltip.
@@ -86,11 +84,10 @@ protected:
         constexpr const char* axisLabels[ComponentCount] = {"X", "Y", "Z"};
 
         const float available = ImGui::GetContentRegionAvail().x;
-        const float fieldWidth =
-            (available - AxisBadgeWidth * static_cast<float>(ComponentCount) -
-             AxisFieldGap * static_cast<float>(ComponentCount - 1) -
-             ImGui::GetStyle().ItemInnerSpacing.x * static_cast<float>(ComponentCount)) /
-            static_cast<float>(ComponentCount);
+        const float fieldWidth = (available - AxisBadgeWidth * static_cast<float>(ComponentCount) -
+                                  AxisFieldGap * static_cast<float>(ComponentCount - 1) -
+                                  ImGui::GetStyle().ItemInnerSpacing.x * static_cast<float>(ComponentCount)) /
+                                 static_cast<float>(ComponentCount);
 
         bool changed = false;
         for (int index = FirstComponent; index < ComponentCount; ++index) {
@@ -128,8 +125,10 @@ protected:
      *
      * @return Reference to the associated game object.
      */
-    [[nodiscard]] Engine::GameObject& object() const noexcept { return *object_; }
+    [[nodiscard]] Engine::GameObject& object() const noexcept {
+        return *object_;
+    }
 
-private:
+  private:
     Engine::GameObject* object_; ///< Non-owning pointer to the associated game object.
 };

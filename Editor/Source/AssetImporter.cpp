@@ -1,24 +1,23 @@
 #include "Editor/AssetImporter.h"
 
-#include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <miniz.h>
 #include <stdexcept>
 #include <system_error>
 #include <vector>
-#include <miniz.h>
 
 namespace Editor::AssetImporter {
 namespace {
 
-std::filesystem::path uniqueDestination(const std::filesystem::path& directory,
-                                        const std::filesystem::path& filename) {
+std::filesystem::path uniqueDestination(const std::filesystem::path& directory, const std::filesystem::path& filename) {
     auto result = directory / filename;
     for (std::uint32_t number = 1; std::filesystem::exists(result); ++number) {
-        result = directory / (filename.stem().string() + " (" + std::to_string(number) + ")" +
-                              filename.extension().string());
+        result = directory /
+                 (filename.stem().string() + " (" + std::to_string(number) + ")" + filename.extension().string());
     }
     return result;
 }
@@ -27,20 +26,22 @@ void copyTree(const std::filesystem::path& source, const std::filesystem::path& 
     std::error_code error;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(source)) {
         const auto relative = entry.path().lexically_relative(source);
-        if (relative.empty() || relative.is_absolute() ||
-            std::ranges::find(relative, "..") != relative.end()) {
+        if (relative.empty() || relative.is_absolute() || std::ranges::find(relative, "..") != relative.end()) {
             throw std::runtime_error("Archive entry would leave the destination directory");
         }
-        if (entry.is_symlink()) throw std::runtime_error("Cannot import symbolic links: " + entry.path().string());
+        if (entry.is_symlink())
+            throw std::runtime_error("Cannot import symbolic links: " + entry.path().string());
         const auto target = destination / relative;
         if (entry.is_directory()) {
             std::filesystem::create_directories(target, error);
         } else if (entry.is_regular_file()) {
             std::filesystem::create_directories(target.parent_path(), error);
-            if (!error) std::filesystem::copy_file(entry.path(), uniqueDestination(target.parent_path(), target.filename()),
-                                                    std::filesystem::copy_options::none, error);
+            if (!error)
+                std::filesystem::copy_file(entry.path(), uniqueDestination(target.parent_path(), target.filename()),
+                                           std::filesystem::copy_options::none, error);
         }
-        if (error) throw std::runtime_error("Could not import asset: " + error.message());
+        if (error)
+            throw std::runtime_error("Could not import asset: " + error.message());
     }
 }
 
@@ -51,7 +52,8 @@ void extractZip(const std::filesystem::path& source, const std::filesystem::path
 #else
     FILE* file = std::fopen(source.c_str(), "rb");
 #endif
-    if (!file) throw std::runtime_error("Could not open ZIP archive");
+    if (!file)
+        throw std::runtime_error("Could not open ZIP archive");
     mz_zip_archive zip{};
     if (!mz_zip_reader_init_cfile(&zip, file, 0, 0)) {
         std::fclose(file);
@@ -72,12 +74,10 @@ void extractZip(const std::filesystem::path& source, const std::filesystem::path
                 throw std::runtime_error("Invalid ZIP entry name");
             std::string portableName{name.data()};
             std::ranges::replace(portableName, '\\', '/');
-            const auto relative = std::filesystem::path{
-                std::u8string{portableName.begin(), portableName.end()}};
+            const auto relative = std::filesystem::path{std::u8string{portableName.begin(), portableName.end()}};
             const auto type = (stat.m_external_attr >> 16) & 0170000;
             if (relative.empty() || relative.is_absolute() || relative.has_root_name() ||
-                portableName.find(':') != std::string::npos ||
-                std::ranges::find(relative, "..") != relative.end() ||
+                portableName.find(':') != std::string::npos || std::ranges::find(relative, "..") != relative.end() ||
                 (type != 0 && type != 0100000 && type != 0040000))
                 throw std::runtime_error("Unsafe ZIP entry: " + portableName);
             paths.push_back(relative);
@@ -95,10 +95,12 @@ void extractZip(const std::filesystem::path& source, const std::filesystem::path
 #else
             FILE* output = std::fopen(target.c_str(), "wb");
 #endif
-            if (!output) throw std::runtime_error("Could not create extracted file");
+            if (!output)
+                throw std::runtime_error("Could not create extracted file");
             const bool extracted = mz_zip_reader_extract_to_cfile(&zip, index, output, 0) != 0;
             const bool closed = std::fclose(output) == 0;
-            if (!extracted || !closed) throw std::runtime_error("Could not extract ZIP entry: " + paths[index].string());
+            if (!extracted || !closed)
+                throw std::runtime_error("Could not extract ZIP entry: " + paths[index].string());
         }
     } catch (...) {
         mz_zip_reader_end(&zip);
@@ -111,22 +113,22 @@ void extractZip(const std::filesystem::path& source, const std::filesystem::path
 
 } // namespace
 
-bool import(const std::filesystem::path& source, const std::filesystem::path& destination,
-            std::string& error) {
+bool import(const std::filesystem::path& source, const std::filesystem::path& destination, std::string& error) {
     try {
-        if (!std::filesystem::exists(source)) throw std::runtime_error("Selected asset does not exist");
-        if (std::filesystem::is_symlink(source)) throw std::runtime_error("Cannot import symbolic links");
+        if (!std::filesystem::exists(source))
+            throw std::runtime_error("Selected asset does not exist");
+        if (std::filesystem::is_symlink(source))
+            throw std::runtime_error("Cannot import symbolic links");
         if (std::filesystem::is_directory(source)) {
-            const auto relative = std::filesystem::weakly_canonical(destination).lexically_relative(
-                std::filesystem::canonical(source));
+            const auto relative =
+                std::filesystem::weakly_canonical(destination).lexically_relative(std::filesystem::canonical(source));
             if (!relative.empty() && *relative.begin() != "..")
                 throw std::runtime_error("Cannot import a folder into itself or one of its subfolders");
         }
         std::filesystem::create_directories(destination);
         auto extension = source.extension().string();
-        std::ranges::transform(extension, extension.begin(), [](const unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
+        std::ranges::transform(extension, extension.begin(),
+                               [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
         if (std::filesystem::is_regular_file(source) && extension != ".zip") {
             std::filesystem::copy_file(source, uniqueDestination(destination, source.filename()));
         } else if (std::filesystem::is_directory(source)) {
@@ -134,8 +136,9 @@ bool import(const std::filesystem::path& source, const std::filesystem::path& de
             std::filesystem::create_directories(target);
             copyTree(source, target);
         } else if (std::filesystem::is_regular_file(source)) {
-            const auto temporary = destination / (".import-" + std::to_string(
-                std::chrono::steady_clock::now().time_since_epoch().count()));
+            const auto temporary =
+                destination /
+                (".import-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
             std::filesystem::create_directories(temporary);
             try {
                 extractZip(source, temporary);

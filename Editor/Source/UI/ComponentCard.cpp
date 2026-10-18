@@ -23,14 +23,16 @@ bool ComponentCard::begin() {
         ImGui::TableSetColumnIndex(0);
         open_ = ImGui::CollapsingHeader(name_, ImGuiTreeNodeFlags_DefaultOpen);
         ImGui::TableSetColumnIndex(1);
-        if (ImGui::SmallButton("...")) ImGui::OpenPopup("component-actions");
+        if (ImGui::SmallButton("..."))
+            ImGui::OpenPopup("component-actions");
         if (ImGui::BeginPopup("component-actions")) {
             ImGui::TextDisabled("%s", name_);
             ImGui::Separator();
             ImGui::MenuItem("Reset", nullptr, false, false);
             ImGui::MenuItem("Copy Component", nullptr, false, false);
             ImGui::MenuItem("Paste Component Values", nullptr, false, false);
-            if (ImGui::MenuItem("Remove Component")) removeRequested_ = true;
+            if (ImGui::MenuItem("Remove Component"))
+                removeRequested_ = true;
             ImGui::EndPopup();
         }
         ImGui::EndTable();

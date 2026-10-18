@@ -9,15 +9,14 @@
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Scene/SceneSerializer.h"
 
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <fstream>
-#include <sstream>
-
-#include <SDL3/SDL.h>
 #include <memory>
 #include <mutex>
+#include <sstream>
 
 namespace {
 std::filesystem::path activeScenePath;
@@ -42,13 +41,15 @@ void SDLCALL sceneDialogFinished(void* userdata, const char* const* files, int) 
     const auto& state = *owner;
     std::lock_guard lock(state->mutex);
     try {
-        if (!files) state->result.error = SDL_GetError();
+        if (!files)
+            state->result.error = SDL_GetError();
         else if (*files) {
             const std::string_view utf8{*files};
             state->result.path = std::filesystem::path{std::u8string{utf8.begin(), utf8.end()}};
             if ((state->result.action == EditorSceneSession::FileDialogAction::SaveScene ||
                  state->result.action == EditorSceneSession::FileDialogAction::NewScene) &&
-                state->result.path->extension().empty()) *state->result.path += ".scene";
+                state->result.path->extension().empty())
+                *state->result.path += ".scene";
         }
     } catch (const std::exception& error) {
         state->result.error = error.what();
@@ -56,7 +57,7 @@ void SDLCALL sceneDialogFinished(void* userdata, const char* const* files, int) 
     state->ready = true;
 }
 
-}
+} // namespace
 
 void EditorSceneSession::setProjectRoot(std::filesystem::path path, std::filesystem::path assetRoot) {
     activeProjectRoot = std::filesystem::absolute(std::move(path)).lexically_normal();
@@ -85,32 +86,39 @@ bool EditorSceneSession::hasSavedScene() {
 }
 
 void EditorSceneSession::requestFileDialog(const FileDialogAction action) {
-    if (activeDialog) return;
+    if (activeDialog)
+        return;
     static constexpr SDL_DialogFileFilter sceneFilter{"GamEngine scenes", "scene"};
     static constexpr SDL_DialogFileFilter projectFilter{"GamEngine projects", "project"};
     activeDialog = std::make_shared<SceneDialogState>();
     activeDialog->result.action = action;
     activeDialog->result.projectRoot = activeProjectRoot;
     const bool saving = action == FileDialogAction::SaveScene || action == FileDialogAction::NewScene;
-    const auto initial = action == FileDialogAction::LoadProject ? activeProjectRoot :
-        saving ? (action == FileDialogAction::NewScene || activeScenePath.empty()
-                    ? defaultSceneDirectory() / "Untitled.scene" : activeScenePath) : defaultSceneDirectory();
+    const auto initial = action == FileDialogAction::LoadProject ? activeProjectRoot
+                         : saving ? (action == FileDialogAction::NewScene || activeScenePath.empty()
+                                         ? defaultSceneDirectory() / "Untitled.scene"
+                                         : activeScenePath)
+                                  : defaultSceneDirectory();
     const auto utf8 = initial.u8string();
     activeDialog->initialPath.assign(utf8.begin(), utf8.end());
     auto* userdata = new std::shared_ptr<SceneDialogState>{activeDialog};
     const auto* filter = action == FileDialogAction::LoadProject ? &projectFilter : &sceneFilter;
-    if (saving) SDL_ShowSaveFileDialog(sceneDialogFinished, userdata, SDL_GetKeyboardFocus(),
-                                     filter, 1, activeDialog->initialPath.c_str());
-    else SDL_ShowOpenFileDialog(sceneDialogFinished, userdata, SDL_GetKeyboardFocus(),
-                               filter, 1, activeDialog->initialPath.c_str(), false);
+    if (saving)
+        SDL_ShowSaveFileDialog(sceneDialogFinished, userdata, SDL_GetKeyboardFocus(), filter, 1,
+                               activeDialog->initialPath.c_str());
+    else
+        SDL_ShowOpenFileDialog(sceneDialogFinished, userdata, SDL_GetKeyboardFocus(), filter, 1,
+                               activeDialog->initialPath.c_str(), false);
 }
 
 std::optional<EditorSceneSession::FileDialogResult> EditorSceneSession::pollFileDialog() {
-    if (!activeDialog) return std::nullopt;
+    if (!activeDialog)
+        return std::nullopt;
     std::optional<FileDialogResult> result;
     {
         std::lock_guard lock(activeDialog->mutex);
-        if (!activeDialog->ready) return std::nullopt;
+        if (!activeDialog->ready)
+            return std::nullopt;
         result = std::move(activeDialog->result);
     }
     activeDialog.reset();
@@ -134,7 +142,7 @@ void EditorSceneSession::clearSavedScene() {
  *
  * @return The active antialiasing mode.
  */
-Engine::AntialiasingLevel EditorSceneSession::antialiasingLevel(const Engine::Renderer &renderer) {
+Engine::AntialiasingLevel EditorSceneSession::antialiasingLevel(const Engine::Renderer& renderer) {
     return renderer.antialiasingLevel();
 }
 
@@ -158,9 +166,8 @@ Engine::AntialiasingLevel EditorSceneSession::antialiasingLevel(const Engine::Re
  */
 // NOLINTBEGIN(readability-identifier-length)
 
-bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset &scene,
-                                     std::string &snapshot, std::string &error,
-                                     const Engine::AntialiasingLevel antialiasing) {
+bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset& scene, std::string& snapshot,
+                                     std::string& error, const Engine::AntialiasingLevel antialiasing) {
     try {
         if (play) {
             std::ostringstream output;
@@ -173,7 +180,7 @@ bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset &scene
         }
         error.clear();
         return true;
-    } catch (const std::exception &exception) {
+    } catch (const std::exception& exception) {
         error = exception.what();
         return false;
     }
@@ -193,11 +200,10 @@ bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset &scene
  * @retval false The class name is invalid, either output file already exists,
  *               or the files could not be created or written.
  */
-bool EditorSceneSession::createCppScript(const std::string_view name, std::string &error) {
+bool EditorSceneSession::createCppScript(const std::string_view name, std::string& error) {
     if (name.empty() || !std::isalpha(static_cast<unsigned char>(name.front())) ||
-        !std::ranges::all_of(name, [](const char c) {
-            return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
-        })) {
+        !std::ranges::all_of(name,
+                             [](const char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; })) {
         error = "Use a valid C++ class name.";
         return false;
     }
@@ -219,12 +225,11 @@ bool EditorSceneSession::createCppScript(const std::string_view name, std::strin
         return false;
     }
     h << "// Generated by GamEngine. You can safely edit this script.\n"
-            << "#pragma once\n#include <Engine/Scripting/Script.h>\n#include <Engine/Scripting/ScriptAttributes.h>\n\nclass " << name
-            << " final : public Engine::Script {\npublic:\n    void onCreate() override {}\n"
-            << "    void onEnable() override {}\n    void onUpdate(float deltaTime) override { (void)deltaTime; }\n"
-            << "    void onDisable() override {}\n    void onDestroy() override {}\n};\n";
-    cpp << "// Generated by GamEngine. You can safely edit this script.\n#include \""
-            << name << ".h\"\n";
+      << "#pragma once\n#include <Engine/Scripting/Script.h>\n#include <Engine/Scripting/ScriptAttributes.h>\n\nclass "
+      << name << " final : public Engine::Script {\npublic:\n    void onCreate() override {}\n"
+      << "    void onEnable() override {}\n    void onUpdate(float deltaTime) override { (void)deltaTime; }\n"
+      << "    void onDisable() override {}\n    void onDestroy() override {}\n};\n";
+    cpp << "// Generated by GamEngine. You can safely edit this script.\n#include \"" << name << ".h\"\n";
     return static_cast<bool>(h) && static_cast<bool>(cpp);
 }
 

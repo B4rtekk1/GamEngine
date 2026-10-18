@@ -12,7 +12,7 @@
  *       lifetime of the EditorButton instance.
  */
 class EditorButton final {
-public:
+  public:
     /**
      * @brief Constructs an editor button.
      *
@@ -20,8 +20,7 @@ public:
      * @param size Desired button size in pixels. A zero component lets ImGui
      *             calculate that dimension automatically.
      */
-    explicit EditorButton(const char* label, const ImVec2 size = {}) noexcept
-        : label_(label), size_(size) {}
+    explicit EditorButton(const char* label, const ImVec2 size = {}) noexcept : label_(label), size_(size) {}
 
     /**
      * @brief Draws a regular ImGui button.
@@ -43,7 +42,7 @@ public:
         return ImGui::SmallButton(label_);
     }
 
-private:
+  private:
     const char* label_; ///< Null-terminated label displayed by the button.
     ImVec2 size_;       ///< Requested size of the regular button in pixels.
 };

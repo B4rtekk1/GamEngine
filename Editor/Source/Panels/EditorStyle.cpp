@@ -4,48 +4,48 @@
  */
 
 #include "Editor/Panels/EditorStyle.h"
-#include "Editor/UI/EditorTheme.h"
 
+#include "Editor/UI/EditorTheme.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
 // NOLINTBEGIN(readability-magic-numbers)
 
 namespace {
-    /** @name Editor geometry and spacing
-     *  Constants controlling padding, spacing, border thickness and rounding.
-     *  @{
-     */
-    constexpr float kWindowPaddingX = 10.0F;
-    constexpr float kWindowPaddingY = 8.0F;
-    constexpr float kFramePaddingX = 8.0F;
-    constexpr float kFramePaddingY = 6.0F;
-    constexpr float kItemSpacingX = 7.0F;
-    constexpr float kItemSpacingY = 7.0F;
-    constexpr float kItemInnerSpacingX = 6.0F;
-    constexpr float kItemInnerSpacingY = 5.0F;
-    constexpr float kIndentSpacing = 18.0F;
-    constexpr float kScrollbarSize = 11.0F;
-    constexpr float kGrabMinSize = 10.0F;
-    constexpr float kBorderSize = 1.0F;
-    constexpr float kFrameBorderSize = 0.0F;
-    constexpr float kWindowRounding = 5.0F;
-    constexpr float kChildRounding = 5.0F;
-    constexpr float kFrameRounding = 4.0F;
-    constexpr float kPopupRounding = 5.0F;
-    constexpr float kScrollbarRounding = 5.0F;
-    constexpr float kGrabRounding = 4.0F;
-    constexpr float kTabRounding = 5.0F;
-    /** @} */
+/** @name Editor geometry and spacing
+ *  Constants controlling padding, spacing, border thickness and rounding.
+ *  @{
+ */
+constexpr float kWindowPaddingX = 10.0F;
+constexpr float kWindowPaddingY = 8.0F;
+constexpr float kFramePaddingX = 8.0F;
+constexpr float kFramePaddingY = 6.0F;
+constexpr float kItemSpacingX = 7.0F;
+constexpr float kItemSpacingY = 7.0F;
+constexpr float kItemInnerSpacingX = 6.0F;
+constexpr float kItemInnerSpacingY = 5.0F;
+constexpr float kIndentSpacing = 18.0F;
+constexpr float kScrollbarSize = 11.0F;
+constexpr float kGrabMinSize = 10.0F;
+constexpr float kBorderSize = 1.0F;
+constexpr float kFrameBorderSize = 0.0F;
+constexpr float kWindowRounding = 5.0F;
+constexpr float kChildRounding = 5.0F;
+constexpr float kFrameRounding = 4.0F;
+constexpr float kPopupRounding = 5.0F;
+constexpr float kScrollbarRounding = 5.0F;
+constexpr float kGrabRounding = 4.0F;
+constexpr float kTabRounding = 5.0F;
+/** @} */
 
-    /** @name Default docking layout
-     *  @{
-     */
-    constexpr ImGuiID kEmptyDockNodeId = 0;
-    constexpr float kHierarchyWidthRatio = 0.23F;
-    constexpr float kInspectorWidthRatio = 0.27F;
-    /** @} */
-}
+/** @name Default docking layout
+ *  @{
+ */
+constexpr ImGuiID kEmptyDockNodeId = 0;
+constexpr float kHierarchyWidthRatio = 0.23F;
+constexpr float kInspectorWidthRatio = 0.27F;
+/** @} */
+} // namespace
 
 /**
  * @brief Applies the editor's global ImGui visual style.
@@ -96,7 +96,7 @@ void EditorStyle::apply() {
     const ImVec4 kScrollbarGrabActive = palette.accent;
 
     ImGui::StyleColorsDark();
-    ImGuiStyle &style = ImGui::GetStyle();
+    ImGuiStyle& style = ImGui::GetStyle();
     style.WindowPadding = {kWindowPaddingX, kWindowPaddingY};
     style.FramePadding = {kFramePaddingX, kFramePaddingY};
     style.ItemSpacing = {kItemSpacingX, kItemSpacingY};
@@ -122,7 +122,7 @@ void EditorStyle::apply() {
     style.ButtonTextAlign = {0.5F, 0.5F};
     style.SelectableTextAlign = {0.0F, 0.5F};
 
-    ImVec4 *colors = style.Colors;
+    ImVec4* colors = style.Colors;
     colors[ImGuiCol_WindowBg] = kWindowBackground;
     colors[ImGuiCol_ChildBg] = kChildBackground;
     colors[ImGuiCol_PopupBg] = kPopupBackground;
@@ -166,7 +166,8 @@ void EditorStyle::apply() {
     colors[ImGuiCol_PlotHistogram] = kSliderGrab;
     colors[ImGuiCol_PlotLines] = kCheckMark;
     colors[ImGuiCol_NavHighlight] = kActiveHeader;
-    colors[ImGuiCol_ModalWindowDimBg] = {palette.appBackground.x, palette.appBackground.y, palette.appBackground.z, 0.55F};
+    colors[ImGuiCol_ModalWindowDimBg] = {palette.appBackground.x, palette.appBackground.y, palette.appBackground.z,
+                                         0.55F};
     colors[ImGuiCol_TableHeaderBg] = palette.surfaceRaised;
     colors[ImGuiCol_TableBorderStrong] = palette.border;
     colors[ImGuiCol_TableBorderLight] = palette.border;
