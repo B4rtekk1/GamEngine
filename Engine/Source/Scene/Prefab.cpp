@@ -6,15 +6,15 @@
 #include <stdexcept>
 
 namespace Engine {
-    Prefab Prefab::model(const Assets::Content &content, std::filesystem::path path,
-                         const PBRMaterial &material) {
-        auto mesh = content.mesh(std::move(path));
-        if (!mesh) { throw std::runtime_error("Could not create prefab: model could not be loaded");
+Prefab Prefab::model(const Assets::Content& content, std::filesystem::path path, const PBRMaterial& material) {
+    auto mesh = content.mesh(std::move(path));
+    if (!mesh) {
+        throw std::runtime_error("Could not create prefab: model could not be loaded");
+    }
+    return Prefab{std::move(mesh), material};
 }
-        return Prefab{std::move(mesh), material};
-    }
 
-    Prefab Prefab::cube(const PBRMaterial &material) {
-        return Prefab{std::make_shared<Mesh>(Cube::createMesh()), material};
-    }
+Prefab Prefab::cube(const PBRMaterial& material) {
+    return Prefab{std::make_shared<Mesh>(Cube::createMesh()), material};
+}
 } // namespace Engine

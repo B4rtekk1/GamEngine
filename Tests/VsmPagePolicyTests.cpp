@@ -1,8 +1,8 @@
 #include "Engine/Renderer/Lighting/VsmPagePolicy.h"
-#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
+#include <gtest/gtest.h>
 #include <limits>
 
 namespace Engine {
@@ -44,8 +44,8 @@ TEST(VsmPagePolicyTests, EvenSmallDepthOrBasisChangesInvalidatePages) {
 TEST(VsmPagePolicyTests, InvalidAndOutOfRangeMatricesCannotOverflowShift) {
     const glm::mat4 oldMatrix{1.0F};
     std::int32_t x{}, y{};
-    for (const float value : {std::numeric_limits<float>::infinity(),
-                             std::numeric_limits<float>::quiet_NaN(), 1e30F, 2.0F}) {
+    for (const float value :
+         {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN(), 1e30F, 2.0F}) {
         auto next = oldMatrix;
         next[3][0] = value;
         EXPECT_FALSE(vsmClipPageShift(oldMatrix, next, 32, x, y));
@@ -58,7 +58,8 @@ TEST(VsmPagePolicyTests, InvalidAndOutOfRangeMatricesCannotOverflowShift) {
 TEST(VsmPagePolicyTests, StationaryOversubscribedWorkingSetDoesNotChurn) {
     std::array<bool, 1024> resident{};
     std::array<std::uint32_t, 128> keys{};
-    for (std::uint32_t i = 0; i < keys.size(); ++i) keys[i] = i;
+    for (std::uint32_t i = 0; i < keys.size(); ++i)
+        keys[i] = i;
     for (std::uint32_t frame = 0; frame < 120; ++frame) {
         std::reverse(keys.begin(), keys.end()); // Unspecified GPU compaction order.
         std::ranges::sort(keys, [&](auto a, auto b) {
@@ -82,15 +83,19 @@ TEST(VsmPagePolicyTests, LeavingRequestsAllowsNewPagesIntoTheWorkingSet) {
 TEST(VsmPagePolicyTests, ContinuousAnimationRefreshesEveryTileWithSmallBudget) {
     std::array<std::uint64_t, 256> rendered{};
     std::array<std::uint32_t, 256> pages{};
-    for (std::uint32_t i = 0; i < pages.size(); ++i) pages[i] = i;
+    for (std::uint32_t i = 0; i < pages.size(); ++i)
+        pages[i] = i;
     for (std::uint32_t frame = 1; frame <= 16; ++frame) {
         std::ranges::sort(pages, [&](auto a, auto b) {
             return vsmRefreshBefore(a, b, rendered[a], rendered[b], a < 100 ? 6 : 0, b < 100 ? 6 : 0);
         });
-        for (std::uint32_t i = 0; i < 32; ++i) rendered[pages[i]] = frame;
+        for (std::uint32_t i = 0; i < 32; ++i)
+            rendered[pages[i]] = frame;
         if (frame % 8 == 0) {
-            for (auto last : rendered) { EXPECT_GT(last, frame - 8); }
+            for (auto last : rendered) {
+                EXPECT_GT(last, frame - 8);
+            }
         }
     }
 }
-}
+} // namespace Engine

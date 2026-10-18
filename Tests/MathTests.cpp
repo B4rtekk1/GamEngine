@@ -1,7 +1,7 @@
-#include <gtest/gtest.h>
-
 #include "Engine/Core/Transform.h"
 #include "Engine/Math/Math.h"
+
+#include <gtest/gtest.h>
 
 namespace {
 
@@ -128,8 +128,7 @@ TEST(Mat4AndQuat, BuildAndApplyTransforms) {
 }
 
 TEST(Mat4, UsesVulkanZeroToOneDepthRange) {
-    const auto projection = Engine::Mat4::ortho(-1.0F, 1.0F, -1.0F, 1.0F,
-                                                 1.0F, 11.0F);
+    const auto projection = Engine::Mat4::ortho(-1.0F, 1.0F, -1.0F, 1.0F, 1.0F, 11.0F);
     const auto nearPoint = projection * Engine::Vec4{0.0F, 0.0F, -1.0F, 1.0F};
     const auto farPoint = projection * Engine::Vec4{0.0F, 0.0F, -11.0F, 1.0F};
     EXPECT_NEAR(nearPoint.z() / nearPoint.w(), 0.0F, 1.0e-5F);

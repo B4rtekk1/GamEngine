@@ -33,12 +33,18 @@ Vec3 importanceSampleGgx(const float xi1, const float xi2, const float roughness
 
 Vec3 faceDirection(const std::uint32_t face, const float u, const float v) {
     switch (face) {
-        case 0: return Vec3{1.0F, -v, -u}.normalized();
-        case 1: return Vec3{-1.0F, -v, u}.normalized();
-        case 2: return Vec3{u, 1.0F, v}.normalized();
-        case 3: return Vec3{u, -1.0F, -v}.normalized();
-        case 4: return Vec3{u, -v, 1.0F}.normalized();
-        default: return Vec3{-u, -v, -1.0F}.normalized();
+    case 0:
+        return Vec3{1.0F, -v, -u}.normalized();
+    case 1:
+        return Vec3{-1.0F, -v, u}.normalized();
+    case 2:
+        return Vec3{u, 1.0F, v}.normalized();
+    case 3:
+        return Vec3{u, -1.0F, -v}.normalized();
+    case 4:
+        return Vec3{u, -v, 1.0F}.normalized();
+    default:
+        return Vec3{-u, -v, -1.0F}.normalized();
     }
 }
 
@@ -48,11 +54,13 @@ std::uint16_t floatToHalf(const float value) noexcept {
     const int exponent = static_cast<int>((bits >> 23U) & 0xFFU) - 127 + 15;
     std::uint32_t mantissa = bits & 0x007FFFFFU;
     if (exponent <= 0) {
-        if (exponent < -10) return static_cast<std::uint16_t>(sign);
+        if (exponent < -10)
+            return static_cast<std::uint16_t>(sign);
         mantissa = (mantissa | 0x00800000U) >> static_cast<std::uint32_t>(1 - exponent);
         return static_cast<std::uint16_t>(sign | ((mantissa + 0x1000U) >> 13U));
     }
-    if (exponent >= 31) return static_cast<std::uint16_t>(sign | 0x7C00U);
+    if (exponent >= 31)
+        return static_cast<std::uint16_t>(sign | 0x7C00U);
     return static_cast<std::uint16_t>(sign | (static_cast<std::uint32_t>(exponent) << 10U) |
                                       ((mantissa + 0x1000U) >> 13U));
 }
@@ -68,11 +76,11 @@ Vec2 integrateBrdf(const float nDotV, const float roughness, const std::uint32_t
         const float nDotL = std::max(light.z(), 0.0F);
         const float nDotH = std::max(halfVector.z(), 0.0F);
         const float vDotH = std::max(dot(view, halfVector), 0.0F);
-        if (nDotL <= 0.0F) continue;
+        if (nDotL <= 0.0F)
+            continue;
         const float k = roughness * roughness * 0.5F;
         const auto geometry = [k](const float nDotX) { return nDotX / (nDotX * (1.0F - k) + k); };
-        const float visibility = geometry(nDotV) * geometry(nDotL) * vDotH /
-                                 std::max(nDotH * nDotV, 1.0e-5F);
+        const float visibility = geometry(nDotV) * geometry(nDotL) * vDotH / std::max(nDotH * nDotV, 1.0e-5F);
         const float fresnel = std::pow(1.0F - vDotH, 5.0F);
         a += (1.0F - fresnel) * visibility;
         b += fresnel * visibility;
@@ -88,8 +96,7 @@ Vec3 EnvironmentBaker::diffuseIrradiance(const Vec3& normal, const RadianceSampl
         const float xi1 = static_cast<float>(i) / Samples;
         const float xi2 = radicalInverseVdC(i);
         const float radius = std::sqrt(xi1);
-        const Vec3 local{radius * std::cos(Tau * xi2), radius * std::sin(Tau * xi2),
-                         std::sqrt(1.0F - xi1)};
+        const Vec3 local{radius * std::cos(Tau * xi2), radius * std::sin(Tau * xi2), std::sqrt(1.0F - xi1)};
         result += source(tangentToWorld(local, normal));
     }
     // Cosine-weighted sampling estimates irradiance as pi * average(radiance).
@@ -98,18 +105,18 @@ Vec3 EnvironmentBaker::diffuseIrradiance(const Vec3& normal, const RadianceSampl
     return result * (1.0F / static_cast<float>(Samples));
 }
 
-Vec3 EnvironmentBaker::prefilter(const Vec3& reflection, const float roughness,
-                                  const std::uint32_t sourceFaceSize, const std::uint32_t sourceMipLevels,
-                                  const MipRadianceSampler& source) {
-    if (roughness <= 0.001F) return source(reflection, 0.0F);
+Vec3 EnvironmentBaker::prefilter(const Vec3& reflection, const float roughness, const std::uint32_t sourceFaceSize,
+                                 const std::uint32_t sourceMipLevels, const MipRadianceSampler& source) {
+    if (roughness <= 0.001F)
+        return source(reflection, 0.0F);
     constexpr std::uint32_t Samples = 128;
-    const float sourceTexelSolidAngle = 4.0F * Pi /
-        (6.0F * static_cast<float>(sourceFaceSize) * static_cast<float>(sourceFaceSize));
+    const float sourceTexelSolidAngle =
+        4.0F * Pi / (6.0F * static_cast<float>(sourceFaceSize) * static_cast<float>(sourceFaceSize));
     Vec3 result{};
     float weight = 0.0F;
     for (std::uint32_t i = 0; i < Samples; ++i) {
-        const Vec3 halfVector = importanceSampleGgx(static_cast<float>(i) / Samples,
-                                                     radicalInverseVdC(i), roughness, reflection);
+        const Vec3 halfVector =
+            importanceSampleGgx(static_cast<float>(i) / Samples, radicalInverseVdC(i), roughness, reflection);
         const Vec3 light = (-reflection + halfVector * (2.0F * dot(reflection, halfVector))).normalized();
         const float nDotL = std::max(dot(reflection, light), 0.0F);
         if (nDotL > 0.0F) {
@@ -118,13 +125,11 @@ Vec3 EnvironmentBaker::prefilter(const Vec3& reflection, const float roughness,
             const float alpha = roughness * roughness;
             const float alphaSquared = alpha * alpha;
             const float denominator = nDotH * nDotH * (alphaSquared - 1.0F) + 1.0F;
-            const float distribution = alphaSquared /
-                std::max(Pi * denominator * denominator, 1.0e-7F);
-            const float pdf = std::max(distribution * nDotH /
-                                       std::max(4.0F * vDotH, 1.0e-7F), 1.0e-7F);
+            const float distribution = alphaSquared / std::max(Pi * denominator * denominator, 1.0e-7F);
+            const float pdf = std::max(distribution * nDotH / std::max(4.0F * vDotH, 1.0e-7F), 1.0e-7F);
             const float sampleSolidAngle = 1.0F / (static_cast<float>(Samples) * pdf);
-            const float sourceMip = std::clamp(0.5F * std::log2(sampleSolidAngle / sourceTexelSolidAngle),
-                                               0.0F, static_cast<float>(sourceMipLevels - 1));
+            const float sourceMip = std::clamp(0.5F * std::log2(sampleSolidAngle / sourceTexelSolidAngle), 0.0F,
+                                               static_cast<float>(sourceMipLevels - 1));
             result += source(light, sourceMip) * nDotL;
             weight += nDotL;
         }
@@ -132,10 +137,11 @@ Vec3 EnvironmentBaker::prefilter(const Vec3& reflection, const float roughness,
     return weight > 0.0F ? result * (1.0F / weight) : source(reflection, 0.0F);
 }
 
-std::vector<float> EnvironmentBaker::bakeCubemap(
-    const std::uint32_t faceSize, const std::uint32_t mipLevels,
-    const std::function<Vec3(const Vec3&, std::uint32_t, std::uint32_t)>& evaluator) {
-    if (faceSize == 0 || mipLevels == 0) throw std::invalid_argument("Environment baker requires at least one mip");
+std::vector<float>
+EnvironmentBaker::bakeCubemap(const std::uint32_t faceSize, const std::uint32_t mipLevels,
+                              const std::function<Vec3(const Vec3&, std::uint32_t, std::uint32_t)>& evaluator) {
+    if (faceSize == 0 || mipLevels == 0)
+        throw std::invalid_argument("Environment baker requires at least one mip");
     std::size_t texels = 0;
     for (std::uint32_t mip = 0; mip < mipLevels; ++mip) {
         const auto side = std::max(1U, faceSize >> mip);
@@ -149,31 +155,34 @@ std::vector<float> EnvironmentBaker::bakeCubemap(
             for (std::uint32_t y = 0; y < side; ++y)
                 for (std::uint32_t x = 0; x < side; ++x) {
                     const Vec3 direction = faceDirection(face, 2.0F * (static_cast<float>(x) + 0.5F) / side - 1.0F,
-                                                          2.0F * (static_cast<float>(y) + 0.5F) / side - 1.0F);
+                                                         2.0F * (static_cast<float>(y) + 0.5F) / side - 1.0F);
                     const Vec3 color = evaluator(direction, mip, mipLevels);
-                    pixels[index++] = color.x(); pixels[index++] = color.y(); pixels[index++] = color.z(); pixels[index++] = 1.0F;
+                    pixels[index++] = color.x();
+                    pixels[index++] = color.y();
+                    pixels[index++] = color.z();
+                    pixels[index++] = 1.0F;
                 }
     }
     return pixels;
 }
 
-std::vector<float> EnvironmentBaker::bakePrefilteredCubemap(
-    const std::uint32_t faceSize, const std::uint32_t mipLevels, const std::uint32_t sourceFaceSize,
-    const std::uint32_t sourceMipLevels, const MipRadianceSampler& source) {
+std::vector<float> EnvironmentBaker::bakePrefilteredCubemap(const std::uint32_t faceSize, const std::uint32_t mipLevels,
+                                                            const std::uint32_t sourceFaceSize,
+                                                            const std::uint32_t sourceMipLevels,
+                                                            const MipRadianceSampler& source) {
     if (sourceFaceSize == 0 || sourceMipLevels == 0)
         throw std::invalid_argument("Environment prefilter requires a source mip chain");
     return bakeCubemap(faceSize, mipLevels,
-                        [&source, sourceFaceSize, sourceMipLevels](const Vec3& direction,
-                                                                      const std::uint32_t mip,
-                                                                      const std::uint32_t count) {
-        const float roughness = roughnessForMip(mip, count);
-        return prefilter(direction, roughness, sourceFaceSize, sourceMipLevels, source);
-    });
+                       [&source, sourceFaceSize, sourceMipLevels](const Vec3& direction, const std::uint32_t mip,
+                                                                  const std::uint32_t count) {
+                           const float roughness = roughnessForMip(mip, count);
+                           return prefilter(direction, roughness, sourceFaceSize, sourceMipLevels, source);
+                       });
 }
 
-std::vector<std::uint16_t> EnvironmentBaker::generateBrdfLut(const std::uint32_t size,
-                                                              const std::uint32_t samples) {
-    if (size == 0 || samples == 0) throw std::invalid_argument("BRDF LUT requires non-zero dimensions and samples");
+std::vector<std::uint16_t> EnvironmentBaker::generateBrdfLut(const std::uint32_t size, const std::uint32_t samples) {
+    if (size == 0 || samples == 0)
+        throw std::invalid_argument("BRDF LUT requires non-zero dimensions and samples");
     std::vector<std::uint16_t> pixels(static_cast<std::size_t>(size) * size * 2);
     for (std::uint32_t y = 0; y < size; ++y) {
         const float roughness = (static_cast<float>(y) + 0.5F) / static_cast<float>(size);

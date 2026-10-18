@@ -34,19 +34,20 @@ struct SpectrumCacheKeyHash final {
     }
 };
 
-[[nodiscard]] bool pointInPolygon(const std::span<const Vec3> polygon,
-                                  const float x,
-                                  const float z) noexcept {
-    if (polygon.size() < 3U) return false;
+[[nodiscard]] bool pointInPolygon(const std::span<const Vec3> polygon, const float x, const float z) noexcept {
+    if (polygon.size() < 3U)
+        return false;
     bool inside = false;
     for (std::size_t i = 0, j = polygon.size() - 1U; i < polygon.size(); j = i++) {
         const Vec3& a = polygon[i];
         const Vec3& b = polygon[j];
         const float dz = b.z() - a.z();
-        const bool crosses = ((a.z() > z) != (b.z() > z)) &&
-            (x < (b.x() - a.x()) * (z - a.z()) /
-                 (std::abs(dz) > 1.0e-7F ? dz : (dz >= 0.0F ? 1.0e-7F : -1.0e-7F)) + a.x());
-        if (crosses) inside = !inside;
+        const bool crosses =
+            ((a.z() > z) != (b.z() > z)) &&
+            (x <
+             (b.x() - a.x()) * (z - a.z()) / (std::abs(dz) > 1.0e-7F ? dz : (dz >= 0.0F ? 1.0e-7F : -1.0e-7F)) + a.x());
+        if (crosses)
+            inside = !inside;
     }
     return inside;
 }
@@ -63,18 +64,18 @@ void applySpectrumMetadata(GPUVirtualWaterPage& page, const SpectrumLODEntry& en
 }
 
 void linkNeighbours(std::vector<GPUVirtualWaterPage>& pages, const std::uint32_t pageBaseIndex) {
-    const auto findNeighbour = [&](const GPUVirtualWaterPage& source,
-                                   const float sampleX,
+    const auto findNeighbour = [&](const GPUVirtualWaterPage& source, const float sampleX,
                                    const float sampleZ) -> std::uint32_t {
         std::uint32_t best = InvalidPhysicalPage;
         float bestCell = std::numeric_limits<float>::max();
         for (std::uint32_t i = 0; i < pages.size(); ++i) {
             const GPUVirtualWaterPage& candidate = pages[i];
-            if (&candidate == &source ||
-                candidate.coverageClass == static_cast<std::uint32_t>(WaterCoverageClass::Dry)) continue;
+            if (&candidate == &source || candidate.coverageClass == static_cast<std::uint32_t>(WaterCoverageClass::Dry))
+                continue;
             const float epsilon = std::max(candidate.cellSize * 0.02F, 1.0e-3F);
             if (sampleX < candidate.minX - epsilon || sampleX > candidate.maxX + epsilon ||
-                sampleZ < candidate.minZ - epsilon || sampleZ > candidate.maxZ + epsilon) continue;
+                sampleZ < candidate.minZ - epsilon || sampleZ > candidate.maxZ + epsilon)
+                continue;
             if (candidate.cellSize < bestCell) {
                 bestCell = candidate.cellSize;
                 best = pageBaseIndex + i;
@@ -84,7 +85,8 @@ void linkNeighbours(std::vector<GPUVirtualWaterPage>& pages, const std::uint32_t
     };
 
     for (GPUVirtualWaterPage& page : pages) {
-        if ((page.flags & PageSpline) != 0U) continue;
+        if ((page.flags & PageSpline) != 0U)
+            continue;
         const float spanX = page.maxX - page.minX;
         const float spanZ = page.maxZ - page.minZ;
         const float edgeEpsilon = std::max(page.cellSize * 0.05F, 1.0e-3F);
@@ -101,67 +103,63 @@ void linkNeighbours(std::vector<GPUVirtualWaterPage>& pages, const std::uint32_t
 
 enum class StitchEdge : std::uint8_t { Bottom, Right, Top, Left };
 
-void addStitchedCellIndices(Mesh& mesh,
-                            const std::uint32_t a,
-                            const std::uint32_t b,
-                            const std::uint32_t c,
-                            const std::uint32_t d,
-                            const std::uint32_t midpoint,
-                            const StitchEdge edge) {
+void addStitchedCellIndices(Mesh& mesh, const std::uint32_t a, const std::uint32_t b, const std::uint32_t c,
+                            const std::uint32_t d, const std::uint32_t midpoint, const StitchEdge edge) {
     switch (edge) {
-        case StitchEdge::Bottom:
-            mesh.indices.insert(mesh.indices.end(), {a, midpoint, d, midpoint, c, d, midpoint, b, c});
-            break;
-        case StitchEdge::Right:
-            mesh.indices.insert(mesh.indices.end(), {b, midpoint, a, midpoint, d, a, midpoint, c, d});
-            break;
-        case StitchEdge::Top:
-            mesh.indices.insert(mesh.indices.end(), {d, midpoint, a, midpoint, b, a, midpoint, c, b});
-            break;
-        case StitchEdge::Left:
-            mesh.indices.insert(mesh.indices.end(), {a, midpoint, b, midpoint, c, b, midpoint, d, c});
-            break;
+    case StitchEdge::Bottom:
+        mesh.indices.insert(mesh.indices.end(), {a, midpoint, d, midpoint, c, d, midpoint, b, c});
+        break;
+    case StitchEdge::Right:
+        mesh.indices.insert(mesh.indices.end(), {b, midpoint, a, midpoint, d, a, midpoint, c, d});
+        break;
+    case StitchEdge::Top:
+        mesh.indices.insert(mesh.indices.end(), {d, midpoint, a, midpoint, b, a, midpoint, c, b});
+        break;
+    case StitchEdge::Left:
+        mesh.indices.insert(mesh.indices.end(), {a, midpoint, b, midpoint, c, b, midpoint, d, c});
+        break;
     }
 }
 } // namespace
 
 float spectralWeight(const float wavelength, const float cellSize) noexcept {
-    if (cellSize <= 0.0F) return 1.0F;
+    if (cellSize <= 0.0F)
+        return 1.0F;
     return smoothStep(2.0F, 6.0F, wavelength / cellSize);
 }
 
-bool pageIsInactive(const std::uint32_t level,
-                    const std::uint32_t x,
-                    const std::uint32_t z) noexcept {
+bool pageIsInactive(const std::uint32_t level, const std::uint32_t x, const std::uint32_t z) noexcept {
     return level != 0U && x >= 2U && x < 6U && z >= 2U && z < 6U;
 }
 
-std::uint32_t pageStitchMask(const std::uint32_t level,
-                             const std::uint32_t x,
-                             const std::uint32_t z) noexcept {
-    if (level == 0U) return 0U;
-    if (x == 6U && z >= 2U && z < 6U) return StitchLeft;
-    if (x == 1U && z >= 2U && z < 6U) return StitchRight;
-    if (z == 6U && x >= 2U && x < 6U) return StitchBottom;
-    if (z == 1U && x >= 2U && x < 6U) return StitchTop;
+std::uint32_t pageStitchMask(const std::uint32_t level, const std::uint32_t x, const std::uint32_t z) noexcept {
+    if (level == 0U)
+        return 0U;
+    if (x == 6U && z >= 2U && z < 6U)
+        return StitchLeft;
+    if (x == 1U && z >= 2U && z < 6U)
+        return StitchRight;
+    if (z == 6U && x >= 2U && x < 6U)
+        return StitchBottom;
+    if (z == 1U && x >= 2U && x < 6U)
+        return StitchTop;
     return 0U;
 }
 
-SpectrumLODEntry spectrumLOD(const std::span<const WaterGerstnerWave> waves,
-                             const std::uint32_t waveCountValue,
-                             const std::uint32_t spectrumRevision,
-                             const float cellSize) {
+SpectrumLODEntry spectrumLOD(const std::span<const WaterGerstnerWave> waves, const std::uint32_t waveCountValue,
+                             const std::uint32_t spectrumRevision, const float cellSize) {
     static std::unordered_map<SpectrumCacheKey, SpectrumLODEntry, SpectrumCacheKeyHash> cache;
-    const std::uint32_t count = std::min<std::uint32_t>(waveCountValue,
-        static_cast<std::uint32_t>(waves.size()));
+    const std::uint32_t count = std::min<std::uint32_t>(waveCountValue, static_cast<std::uint32_t>(waves.size()));
     const SpectrumCacheKey key{spectrumRevision, std::bit_cast<std::uint32_t>(cellSize), count};
-    if (const auto found = cache.find(key); found != cache.end()) return found->second;
+    if (const auto found = cache.find(key); found != cache.end())
+        return found->second;
 
     SpectrumLODEntry entry{};
     for (std::uint32_t waveIndex = 0; waveIndex < count; ++waveIndex) {
         const WaterGerstnerWave& wave = waves[waveIndex];
         const float weight = spectralWeight(wave.wavelength, cellSize);
-        if (weight > 1.0e-6F) entry.waveCandidateMask |= 1U << waveIndex;
+        if (weight > 1.0e-6F)
+            entry.waveCandidateMask |= 1U << waveIndex;
         entry.verticalBound += std::abs(wave.amplitude * weight);
         entry.horizontalBound += std::abs(wave.steepness * wave.amplitude * weight);
         const float k = 6.28318530718F / std::max(wave.wavelength, 1.0e-3F);
@@ -169,14 +167,17 @@ SpectrumLODEntry spectrumLOD(const std::span<const WaterGerstnerWave> waves,
         const float variance = 0.5F * (1.0F - weight * weight) * slope * slope;
         entry.unresolvedSlopeVariance += variance;
         Vec2 direction = wave.direction;
-        if (direction.length() < 1.0e-5F) direction = {1.0F, 0.0F};
-        else direction = direction.normalized();
+        if (direction.length() < 1.0e-5F)
+            direction = {1.0F, 0.0F};
+        else
+            direction = direction.normalized();
         entry.unresolvedSlopeXX += variance * direction.x() * direction.x();
         entry.unresolvedSlopeXZ += variance * direction.x() * direction.y();
         entry.unresolvedSlopeZZ += variance * direction.y() * direction.y();
         entry.normalDetailImportance += variance;
     }
-    if (cache.size() > 1024U) cache.clear();
+    if (cache.size() > 1024U)
+        cache.clear();
     cache.emplace(key, entry);
     return entry;
 }
@@ -184,8 +185,8 @@ SpectrumLODEntry spectrumLOD(const std::span<const WaterGerstnerWave> waves,
 std::vector<GPUVirtualWaterPage> buildOceanPageDomain(const OceanDomainConfig& config) {
     std::vector<GPUVirtualWaterPage> pages;
     pages.reserve(ActivePagesPerBody);
-    const std::uint32_t waveCount = std::min<std::uint32_t>(config.waveCount,
-        static_cast<std::uint32_t>(config.waves.size()));
+    const std::uint32_t waveCount =
+        std::min<std::uint32_t>(config.waveCount, static_cast<std::uint32_t>(config.waves.size()));
 
     const std::uint32_t levelCount = std::clamp(config.geometryLevelCount, 1U, ClipLevels);
     for (std::uint32_t level = 0; level < levelCount; ++level) {
@@ -195,7 +196,8 @@ std::vector<GPUVirtualWaterPage> buildOceanPageDomain(const OceanDomainConfig& c
         const SpectrumLODEntry spectrum = spectrumLOD(config.waves, waveCount, config.spectrumRevision, cell);
         for (std::uint32_t z = 0; z < PagesPerAxis; ++z) {
             for (std::uint32_t x = 0; x < PagesPerAxis; ++x) {
-                if (pageIsInactive(level, x, z)) continue;
+                if (pageIsInactive(level, x, z))
+                    continue;
                 GPUVirtualWaterPage page{};
                 page.originX = -outer + pageSize * static_cast<float>(x);
                 page.originZ = -outer + pageSize * static_cast<float>(z);
@@ -223,15 +225,20 @@ std::vector<GPUVirtualWaterPage> buildOceanPageDomain(const OceanDomainConfig& c
                 // page to them would clamp/alias wakes. Only the level-0 pages
                 // own state mappings; their world identity is reconnected after
                 // clipmap recentering by WaterStatePageKey.
-                if(level!=0U) page.executionFlags &= ~ExecutionSparseState;
+                if (level != 0U)
+                    page.executionFlags &= ~ExecutionSparseState;
                 const float stateWorldSize = (2.0F * config.extents[0]) / static_cast<float>(PagesPerAxis);
                 page.stateWorldSizeClass = std::bit_cast<std::uint32_t>(stateWorldSize);
                 page.drawBin = config.bodyIndex * StitchVariantCount + page.stitchMask;
                 if (level + 1U < levelCount) {
-                    if (x == 0U) page.spectralEdgeMask |= StitchLeft;
-                    if (x + 1U == PagesPerAxis) page.spectralEdgeMask |= StitchRight;
-                    if (z == 0U) page.spectralEdgeMask |= StitchBottom;
-                    if (z + 1U == PagesPerAxis) page.spectralEdgeMask |= StitchTop;
+                    if (x == 0U)
+                        page.spectralEdgeMask |= StitchLeft;
+                    if (x + 1U == PagesPerAxis)
+                        page.spectralEdgeMask |= StitchRight;
+                    if (z == 0U)
+                        page.spectralEdgeMask |= StitchBottom;
+                    if (z + 1U == PagesPerAxis)
+                        page.spectralEdgeMask |= StitchTop;
                 }
                 applySpectrumMetadata(page, spectrum);
                 pages.push_back(page);
@@ -244,13 +251,17 @@ std::vector<GPUVirtualWaterPage> buildOceanPageDomain(const OceanDomainConfig& c
 
 std::vector<GPUVirtualWaterPage> buildFiniteWaterPageDomain(const FiniteWaterDomainConfig& config) {
     std::vector<GPUVirtualWaterPage> pages;
-    if (config.boundary.size() < 3U) return pages;
+    if (config.boundary.size() < 3U)
+        return pages;
     float minX = std::numeric_limits<float>::max(), minZ = minX;
     float maxX = std::numeric_limits<float>::lowest(), maxZ = maxX;
     float height = 0.0F;
     for (const Vec3& point : config.boundary) {
-        minX = std::min(minX, point.x()); minZ = std::min(minZ, point.z());
-        maxX = std::max(maxX, point.x()); maxZ = std::max(maxZ, point.z()); height += point.y();
+        minX = std::min(minX, point.x());
+        minZ = std::min(minZ, point.z());
+        maxX = std::max(maxX, point.x());
+        maxZ = std::max(maxZ, point.z());
+        height += point.y();
     }
     height /= static_cast<float>(config.boundary.size());
     const float spanX = std::max(maxX - minX, 1.0F);
@@ -258,29 +269,34 @@ std::vector<GPUVirtualWaterPage> buildFiniteWaterPageDomain(const FiniteWaterDom
     float pageSize = std::max(config.targetPageWorldSize, 1.0F);
     std::uint32_t countX = static_cast<std::uint32_t>(std::ceil(spanX / pageSize));
     std::uint32_t countZ = static_cast<std::uint32_t>(std::ceil(spanZ / pageSize));
-    const float scale = std::sqrt(static_cast<float>(std::max(1U, countX * countZ)) /
-                                  static_cast<float>(ActivePagesPerBody));
+    const float scale =
+        std::sqrt(static_cast<float>(std::max(1U, countX * countZ)) / static_cast<float>(ActivePagesPerBody));
     if (scale > 1.0F) {
         pageSize *= scale;
         countX = static_cast<std::uint32_t>(std::ceil(spanX / pageSize));
         countZ = static_cast<std::uint32_t>(std::ceil(spanZ / pageSize));
     }
     const float cellSize = pageSize / static_cast<float>(PageCells);
-    const SpectrumLODEntry spectrum = spectrumLOD(config.waves, config.waveCount,
-                                                   config.spectrumRevision, cellSize);
+    const SpectrumLODEntry spectrum = spectrumLOD(config.waves, config.waveCount, config.spectrumRevision, cellSize);
     pages.reserve(std::min<std::uint32_t>(countX * countZ, ActivePagesPerBody));
     for (std::uint32_t z = 0; z < countZ && pages.size() < ActivePagesPerBody; ++z) {
         for (std::uint32_t x = 0; x < countX && pages.size() < ActivePagesPerBody; ++x) {
             GPUVirtualWaterPage page{};
             page.originX = minX + static_cast<float>(x) * pageSize;
             page.originZ = minZ + static_cast<float>(z) * pageSize;
-            page.minX = page.originX; page.minZ = page.originZ;
+            page.minX = page.originX;
+            page.minZ = page.originZ;
             page.maxX = std::min(page.originX + pageSize, maxX);
             page.maxZ = std::min(page.originZ + pageSize, maxZ);
-            page.baseHeight = height; page.cellSize = cellSize;
-            page.level = 0U; page.stitchMask = 0U; page.flags = PageActive;
-            page.instanceIndex = config.instanceIndex; page.bodyIndex = config.bodyIndex;
-            page.bodyIdIndex = config.bodyId.index; page.bodyIdGeneration = config.bodyId.generation;
+            page.baseHeight = height;
+            page.cellSize = cellSize;
+            page.level = 0U;
+            page.stitchMask = 0U;
+            page.flags = PageActive;
+            page.instanceIndex = config.instanceIndex;
+            page.bodyIndex = config.bodyIndex;
+            page.bodyIdIndex = config.bodyId.index;
+            page.bodyIdGeneration = config.bodyId.generation;
             page.spectrumRevision = config.spectrumRevision;
             page.localPageX = static_cast<std::int32_t>(x);
             page.localPageZ = static_cast<std::int32_t>(z);
@@ -294,14 +310,16 @@ std::vector<GPUVirtualWaterPage> buildFiniteWaterPageDomain(const FiniteWaterDom
                 for (std::uint32_t cx = 0; cx < PageCells; ++cx) {
                     const float px = page.originX + (static_cast<float>(cx) + 0.5F) * cellSize;
                     const float pz = page.originZ + (static_cast<float>(cz) + 0.5F) * cellSize;
-                    if (pointInPolygon(config.boundary, px, pz)) mask |= 1ULL << (cz * PageCells + cx);
+                    if (pointInPolygon(config.boundary, px, pz))
+                        mask |= 1ULL << (cz * PageCells + cx);
                 }
             }
-            if (mask == 0U) continue;
-            page.coverageClass = mask == ~0ULL
-                ? static_cast<std::uint32_t>(WaterCoverageClass::Wet)
-                : static_cast<std::uint32_t>(WaterCoverageClass::Partial);
-            if (mask != ~0ULL) page.flags |= PageShoreline;
+            if (mask == 0U)
+                continue;
+            page.coverageClass = mask == ~0ULL ? static_cast<std::uint32_t>(WaterCoverageClass::Wet)
+                                               : static_cast<std::uint32_t>(WaterCoverageClass::Partial);
+            if (mask != ~0ULL)
+                page.flags |= PageShoreline;
             page.cellCoverageMaskLow = static_cast<std::uint32_t>(mask);
             page.cellCoverageMaskHigh = static_cast<std::uint32_t>(mask >> 32U);
             pages.push_back(page);
@@ -313,7 +331,8 @@ std::vector<GPUVirtualWaterPage> buildFiniteWaterPageDomain(const FiniteWaterDom
 
 std::vector<GPUVirtualWaterPage> buildSplinePageDomain(const SplineDomainConfig& config) {
     std::vector<GPUVirtualWaterPage> pages;
-    if (config.points.size() < 2U) return pages;
+    if (config.points.size() < 2U)
+        return pages;
     pages.reserve(std::min<std::size_t>(config.points.size() - 1U, ActivePagesPerBody));
     for (std::size_t segment = 0; segment + 1U < config.points.size() && pages.size() < ActivePagesPerBody; ++segment) {
         const RiverSplinePoint& a = config.points[segment];
@@ -321,7 +340,8 @@ std::vector<GPUVirtualWaterPage> buildSplinePageDomain(const SplineDomainConfig&
         const float dx = b.position.x() - a.position.x();
         const float dz = b.position.z() - a.position.z();
         const float length = std::sqrt(dx * dx + dz * dz);
-        if (length < 1.0e-4F) continue;
+        if (length < 1.0e-4F)
+            continue;
         const float halfA = std::max(a.width * 0.5F, 0.05F);
         const float halfB = std::max(b.width * 0.5F, 0.05F);
         const float nx = -dz / length, nz = dx / length;
@@ -338,31 +358,38 @@ std::vector<GPUVirtualWaterPage> buildSplinePageDomain(const SplineDomainConfig&
         page.localPageZ = 0;
         page.level = 0U;
         page.drawBin = config.bodyIndex * StitchVariantCount;
-        page.splineStartX = a.position.x(); page.splineStartZ = a.position.z();
-        page.splineEndX = b.position.x(); page.splineEndZ = b.position.z();
-        page.splineHalfWidth0 = halfA; page.splineHalfWidth1 = halfB;
-        page.originX = std::min({a.position.x() + nx * halfA, a.position.x() - nx * halfA,
-                                 b.position.x() + nx * halfB, b.position.x() - nx * halfB});
-        page.originZ = std::min({a.position.z() + nz * halfA, a.position.z() - nz * halfA,
-                                 b.position.z() + nz * halfB, b.position.z() - nz * halfB});
-        page.minX = page.originX; page.minZ = page.originZ;
-        page.maxX = std::max({a.position.x() + nx * halfA, a.position.x() - nx * halfA,
-                              b.position.x() + nx * halfB, b.position.x() - nx * halfB});
-        page.maxZ = std::max({a.position.z() + nz * halfA, a.position.z() - nz * halfA,
-                              b.position.z() + nz * halfB, b.position.z() - nz * halfB});
+        page.splineStartX = a.position.x();
+        page.splineStartZ = a.position.z();
+        page.splineEndX = b.position.x();
+        page.splineEndZ = b.position.z();
+        page.splineHalfWidth0 = halfA;
+        page.splineHalfWidth1 = halfB;
+        page.originX = std::min({a.position.x() + nx * halfA, a.position.x() - nx * halfA, b.position.x() + nx * halfB,
+                                 b.position.x() - nx * halfB});
+        page.originZ = std::min({a.position.z() + nz * halfA, a.position.z() - nz * halfA, b.position.z() + nz * halfB,
+                                 b.position.z() - nz * halfB});
+        page.minX = page.originX;
+        page.minZ = page.originZ;
+        page.maxX = std::max({a.position.x() + nx * halfA, a.position.x() - nx * halfA, b.position.x() + nx * halfB,
+                              b.position.x() - nx * halfB});
+        page.maxZ = std::max({a.position.z() + nz * halfA, a.position.z() - nz * halfA, b.position.z() + nz * halfB,
+                              b.position.z() - nz * halfB});
         page.baseHeight = a.position.y();
         page.reservedFloat = b.position.y();
         page.cellSize = std::max(length, std::max(halfA, halfB) * 2.0F) / static_cast<float>(PageCells);
-        page.flowX = dx / length; page.flowZ = dz / length;
+        page.flowX = dx / length;
+        page.flowZ = dz / length;
         page.flowSpeed = std::max(0.0F, 0.5F * (a.flowSpeed + b.flowSpeed));
         page.coverageClass = static_cast<std::uint32_t>(WaterCoverageClass::Wet);
-        applySpectrumMetadata(page, spectrumLOD(config.waves, config.waveCount,
-                                                 config.spectrumRevision, page.cellSize));
+        applySpectrumMetadata(page,
+                              spectrumLOD(config.waves, config.waveCount, config.spectrumRevision, page.cellSize));
         pages.push_back(page);
     }
     for (std::uint32_t i = 0; i < pages.size(); ++i) {
-        if (i > 0U) pages[i].neighborLeft0 = pages[i].neighborLeft1 = config.pageBaseIndex + i - 1U;
-        if (i + 1U < pages.size()) pages[i].neighborRight0 = pages[i].neighborRight1 = config.pageBaseIndex + i + 1U;
+        if (i > 0U)
+            pages[i].neighborLeft0 = pages[i].neighborLeft1 = config.pageBaseIndex + i - 1U;
+        if (i + 1U < pages.size())
+            pages[i].neighborRight0 = pages[i].neighborRight1 = config.pageBaseIndex + i + 1U;
     }
     return pages;
 }
@@ -381,10 +408,8 @@ Mesh buildReusableOceanPageMesh() {
     }
 
     std::array<std::uint32_t, PageCells> bottom{}, right{}, top{}, left{};
-    const auto addMidpoint = [&](std::array<std::uint32_t, PageCells>& target,
-                                 const std::uint32_t segment,
-                                 const float x,
-                                 const float z) {
+    const auto addMidpoint = [&](std::array<std::uint32_t, PageCells>& target, const std::uint32_t segment,
+                                 const float x, const float z) {
         target[segment] = static_cast<std::uint32_t>(mesh.vertices.size());
         WaterSystem::addWaterVertex(mesh, {x, 0.0F, z}, {x, z}, 0.0F);
     };

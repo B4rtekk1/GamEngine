@@ -1,21 +1,20 @@
-#include <gtest/gtest.h>
-
+#include "Engine/Core/SceneCamera.h"
+#include "Engine/ECS/Components/MeshRendererComponent.h"
+#include "Engine/ECS/Components/RigidbodyRuntime.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Physics/PhysicsSystem.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Scene/Prefab.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Scene/SceneSerializer.h"
-#include "Engine/Scene/Prefab.h"
-#include "Engine/ECS/Components/TerrainGrassComponent.h"
-#include "Engine/ECS/Components/MeshRendererComponent.h"
-#include "Engine/ECS/Components/RigidbodyRuntime.h"
-#include "Engine/Scene/Components/IdentityComponents.h"
-#include "Engine/Scene/Components/LightComponent.h"
-#include "Engine/Core/SceneCamera.h"
 
-#include <stdexcept>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <sstream>
+#include <stdexcept>
 
 namespace {
 
@@ -89,8 +88,8 @@ TEST(PhysXPhysics, ParentedCameraShotsUseWorldPositionAndExcludeThePlayerCollide
     ASSERT_TRUE(hit);
     EXPECT_EQ(hit->actor.id(), target.id());
     EXPECT_NEAR(hit->distance, 9.5F, 0.01F);
-    const auto clip = view->projectionMatrix().native() * view->viewMatrix().native() *
-        glm::vec4{hit->point.native(), 1.0F};
+    const auto clip =
+        view->projectionMatrix().native() * view->viewMatrix().native() * glm::vec4{hit->point.native(), 1.0F};
     EXPECT_NEAR(clip.x / clip.w, 0.0F, 0.001F);
     EXPECT_NEAR(clip.y / clip.w, 0.0F, 0.001F);
 }
@@ -112,8 +111,7 @@ TEST(Scene, GameObjectsDoNotReceiveMeshRenderersUntilTheyBecomeMeshObjects) {
     Engine::Scene scene;
     static_cast<void>(scene.createGameObject("Empty"));
     const auto editor = scene.editor();
-    EXPECT_FALSE(editor.has<Engine::MeshRendererComponent>(
-        scene.findEntity(scene.findActor("Empty").id())));
+    EXPECT_FALSE(editor.has<Engine::MeshRendererComponent>(scene.findEntity(scene.findActor("Empty").id())));
 
     const Engine::Actor cube = scene.createCube("Cube");
     ASSERT_TRUE(cube.valid());
@@ -131,7 +129,8 @@ TEST(PhysXPhysics, DynamicBoxFallsAndRestsOnStaticGround) {
     box.addRigidbody();
 
     Engine::PhysicsSystem physics;
-    for (int step = 0; step < 240; ++step) physics.update(scene, 1.0F / 60.0F);
+    for (int step = 0; step < 240; ++step)
+        physics.update(scene, 1.0F / 60.0F);
 
     EXPECT_NEAR(box.position().y(), 1.0F, 0.03F);
     EXPECT_LT(box.velocity().length(), 0.05F);
@@ -149,15 +148,15 @@ TEST(PhysXPhysics, TriggerDoesNotStopDynamicBody) {
     sphere.addRigidbody();
 
     Engine::PhysicsSystem physics;
-    for (int step = 0; step < 90; ++step) physics.update(scene, 1.0F / 60.0F);
+    for (int step = 0; step < 90; ++step)
+        physics.update(scene, 1.0F / 60.0F);
 
     EXPECT_LT(sphere.position().y(), -2.0F);
 }
 
 TEST(PhysXPhysics, DynamicSphereRestsOnTerrainMesh) {
     Engine::Scene scene;
-    static_cast<void>(scene.createTerrain(
-        "Terrain", Engine::TerrainComponent{33, 100.0F, 100.0F, -10.0F, 10.0F}));
+    static_cast<void>(scene.createTerrain("Terrain", Engine::TerrainComponent{33, 100.0F, 100.0F, -10.0F, 10.0F}));
 
     const Engine::Actor sphere = scene.createActor("Sphere");
     sphere.setPosition({0.0F, 3.0F, 0.0F});
@@ -165,7 +164,8 @@ TEST(PhysXPhysics, DynamicSphereRestsOnTerrainMesh) {
     sphere.addRigidbody();
 
     Engine::PhysicsSystem physics;
-    for (int step = 0; step < 240; ++step) physics.update(scene, 1.0F / 60.0F);
+    for (int step = 0; step < 240; ++step)
+        physics.update(scene, 1.0F / 60.0F);
 
     EXPECT_NEAR(sphere.position().y(), 0.5F, 0.03F);
     EXPECT_LT(sphere.velocity().length(), 0.05F);
@@ -177,8 +177,7 @@ TEST(PhysXPhysics, RaycastReturnsPhysXHitDataAndActor) {
     target.setPosition({0.0F, 1.0F, 0.0F});
     target.addBoxCollider({1.0F, 1.0F, 1.0F});
 
-    const auto hit = scene.physics().raycast(
-        {0.0F, 5.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, 10.0F);
+    const auto hit = scene.physics().raycast({0.0F, 5.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, 10.0F);
 
     ASSERT_TRUE(hit.has_value());
     EXPECT_EQ(hit->actor.name(), "Ray target");
@@ -208,8 +207,7 @@ TEST(PhysXPhysics, RaycastRejectsInvalidQueriesAndNormalizesDirection) {
 
 TEST(PhysXPhysics, SphereTramplesAndGrassGraduallyRecovers) {
     Engine::Scene scene;
-    const Engine::Actor terrain = scene.createTerrain(
-        "Terrain", Engine::TerrainComponent{5, 4.0F, 4.0F, -1.0F, 1.0F});
+    const Engine::Actor terrain = scene.createTerrain("Terrain", Engine::TerrainComponent{5, 4.0F, 4.0F, -1.0F, 1.0F});
     Engine::TerrainGrassComponent grass;
     grass.instances.push_back({.position = {0.0F, 0.0F, 0.0F}});
     scene.editor().add<Engine::TerrainGrassComponent>(scene.findEntity(terrain.id()), grass);
@@ -223,15 +221,13 @@ TEST(PhysXPhysics, SphereTramplesAndGrassGraduallyRecovers) {
     Engine::PhysicsSystem physics;
     physics.update(scene, 1.0F / 60.0F);
     const auto entity = scene.findEntity(terrain.id());
-    const float trampled = scene.editor().read<Engine::TerrainGrassComponent>(entity)
-                                .instances.front().trampled;
+    const float trampled = scene.editor().read<Engine::TerrainGrassComponent>(entity).instances.front().trampled;
     EXPECT_GT(trampled, 0.5F);
     EXPECT_LT(sphere.velocity().x(), 5.0F);
 
     sphere.setPosition({10.0F, 0.5F, 0.0F});
     physics.update(scene, 1.0F / 60.0F);
-    EXPECT_LT(scene.editor().read<Engine::TerrainGrassComponent>(entity)
-                  .instances.front().trampled, trampled);
+    EXPECT_LT(scene.editor().read<Engine::TerrainGrassComponent>(entity).instances.front().trampled, trampled);
 }
 
 TEST(Prefab, CubePreservesRenderSettingsWhenInstantiatedInScene) {
@@ -491,10 +487,8 @@ TEST(SceneSerializer, RestoresTerrainMaterialLayersAfterRegeneratingGeometry) {
     const auto entity = source.findEntity(actor.id());
     ASSERT_NE(entity, Engine::NullEntity);
     source.editor().patch<Engine::TerrainComponent>(entity, [](auto& terrain) {
-        terrain.materialLayers[0] = Engine::Mesh::Image{
-            .width = 1, .height = 1, .rgbaPixels = {10, 20, 30, 255}};
-        terrain.materialLayers[2] = Engine::Mesh::Image{
-            .width = 1, .height = 1, .rgbaPixels = {40, 50, 60, 255}};
+        terrain.materialLayers[0] = Engine::Mesh::Image{.width = 1, .height = 1, .rgbaPixels = {10, 20, 30, 255}};
+        terrain.materialLayers[2] = Engine::Mesh::Image{.width = 1, .height = 1, .rgbaPixels = {40, 50, 60, 255}};
     });
     const auto& terrain = source.editor().read<Engine::TerrainComponent>(entity);
     source.editor().patch<Engine::MeshRendererComponent>(entity, [&](auto& renderer) {
@@ -635,7 +629,8 @@ TEST(Scene, ReportsOnlyWorldTransformsAffectedByDirtyHierarchyBranch) {
     const auto changed = Engine::TransformSystem::changedWorldTransforms(registry);
     const auto contains = [&](const Engine::Entity entity) {
         for (const Engine::Entity changedEntity : changed) {
-            if (changedEntity == entity) return true;
+            if (changedEntity == entity)
+                return true;
         }
         return false;
     };
@@ -736,19 +731,19 @@ TEST(Scene, ReparentingCanKeepLocalTransform) {
 TEST(Scene, DefersWorldTrsDecompositionUntilRequested) {
     Engine::Registry registry;
     const auto entity = registry.create();
-    auto &local = registry.add<Engine::Transform>(entity);
+    auto& local = registry.add<Engine::Transform>(entity);
     local.position = {3.0F, 4.0F, 5.0F};
     local.rotation = {0.0F, 45.0F, 0.0F};
     local.scale = {2.0F, 3.0F, 4.0F};
 
     Engine::TransformSystem::updateDirty(registry);
-    const auto &transform = registry.get<Engine::Transform>(entity);
+    const auto& transform = registry.get<Engine::Transform>(entity);
     EXPECT_FALSE(transform.worldTrsValid);
     EXPECT_FLOAT_EQ(transform.worldPosition().x(), 3.0F);
     EXPECT_FLOAT_EQ(transform.worldPosition().y(), 4.0F);
     EXPECT_FLOAT_EQ(transform.worldPosition().z(), 5.0F);
 
-    const auto &scale = transform.worldScale();
+    const auto& scale = transform.worldScale();
     EXPECT_TRUE(transform.worldTrsValid);
     EXPECT_FLOAT_EQ(scale.x(), 2.0F);
     EXPECT_FLOAT_EQ(scale.y(), 3.0F);

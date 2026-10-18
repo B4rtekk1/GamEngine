@@ -3,10 +3,12 @@
 #include <Engine/Scripting/Script.h>
 
 class PlayerController final : public Engine::Script {
-public:
+  public:
     void onCreate() override {}
     void onEnable() override {}
-    void onUpdate(float deltaTime) override { (void)deltaTime; }
+    void onUpdate(float deltaTime) override {
+        (void)deltaTime;
+    }
     void onDisable() override {}
     void onDestroy() override {}
 };

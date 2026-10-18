@@ -1,14 +1,13 @@
 #pragma once
-Renderer::~Renderer() { shutdown(); }
+Renderer::~Renderer() {
+    shutdown();
+}
 
 Renderer::Renderer(RenderConfig config)
     : optimizationFeatures_(config.features), renderPath_(config.renderPath), antialiasingLevel_(config.antialiasing),
-      shadowQuality_(config.shadowQuality),
-      rtContactShadowSettings_(config.rtContactShadows),
+      shadowQuality_(config.shadowQuality), rtContactShadowSettings_(config.rtContactShadows),
       gtaoQuality_(config.gtaoQuality), gtaoDebugView_(config.gtaoDebugView), pbrDebugView_(config.pbrDebugView),
-      iblQuality_(config.iblQuality),
-      shadowDebugView_(config.shadowDebugView),
-      grassSettings_(config.grass),
+      iblQuality_(config.iblQuality), shadowDebugView_(config.shadowDebugView), grassSettings_(config.grass),
       state_(std::make_unique<State>()) {}
 
 void Renderer::setOptimizationFeatures(RenderOptimizationFeatures features) noexcept {
@@ -18,9 +17,11 @@ void Renderer::setOptimizationFeatures(RenderOptimizationFeatures features) noex
         optimizationFeatures_.transformCaching == features.transformCaching &&
         optimizationFeatures_.materialCaching == features.materialCaching &&
         optimizationFeatures_.gpuCulling == features.gpuCulling &&
-        optimizationFeatures_.occlusionCulling == features.occlusionCulling) return;
+        optimizationFeatures_.occlusionCulling == features.occlusionCulling)
+        return;
     optimizationFeatures_ = features;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
 
 const RenderOptimizationFeatures& Renderer::optimizationFeatures() const noexcept {
@@ -28,9 +29,11 @@ const RenderOptimizationFeatures& Renderer::optimizationFeatures() const noexcep
 }
 
 void Renderer::setRenderPath(const RenderPath path) noexcept {
-    if (renderPath_ == path) return;
+    if (renderPath_ == path)
+        return;
     renderPath_ = path;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
 
 RenderPath Renderer::renderPath() const noexcept {
@@ -38,9 +41,11 @@ RenderPath Renderer::renderPath() const noexcept {
 }
 
 void Renderer::setAntialiasingLevel(AntialiasingLevel level) noexcept {
-    if (antialiasingLevel_ == level) return;
+    if (antialiasingLevel_ == level)
+        return;
     antialiasingLevel_ = level;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
 
 AntialiasingLevel Renderer::antialiasingLevel() const noexcept {
@@ -48,9 +53,11 @@ AntialiasingLevel Renderer::antialiasingLevel() const noexcept {
 }
 
 void Renderer::setShadowQuality(const ShadowQuality quality) noexcept {
-    if (shadowQuality_ == quality) return;
+    if (shadowQuality_ == quality)
+        return;
     shadowQuality_ = quality;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
 
 ShadowQuality Renderer::shadowQuality() const noexcept {
@@ -58,9 +65,11 @@ ShadowQuality Renderer::shadowQuality() const noexcept {
 }
 
 void Renderer::setContactShadowMode(const ContactShadowMode mode) noexcept {
-    if (rtContactShadowSettings_.mode == mode) return;
+    if (rtContactShadowSettings_.mode == mode)
+        return;
     rtContactShadowSettings_.mode = mode;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
 
 ContactShadowMode Renderer::contactShadowMode() const noexcept {
@@ -75,9 +84,11 @@ void Renderer::setRtContactShadowSettings(const RtContactShadowSettings& setting
     if (rtContactShadowSettings_.mode == settings.mode &&
         rtContactShadowSettings_.maxDistance == settings.maxDistance &&
         rtContactShadowSettings_.normalBias == settings.normalBias &&
-        rtContactShadowSettings_.resolutionScale == settings.resolutionScale) return;
+        rtContactShadowSettings_.resolutionScale == settings.resolutionScale)
+        return;
     rtContactShadowSettings_ = settings;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
 
 const RtContactShadowSettings& Renderer::rtContactShadowSettings() const noexcept {
@@ -87,42 +98,62 @@ const RtContactShadowSettings& Renderer::rtContactShadowSettings() const noexcep
 void Renderer::applyRenderQualityPreset(const RenderQualityPreset preset) noexcept {
     const RenderQualityPresetSettings settings = renderQualityPresetSettings(preset);
     if (shadowQuality_ == settings.shadows && gtaoQuality_ == settings.gtao &&
-        antialiasingLevel_ == settings.antialiasing) return;
+        antialiasingLevel_ == settings.antialiasing)
+        return;
     shadowQuality_ = settings.shadows;
     gtaoQuality_ = settings.gtao;
     antialiasingLevel_ = settings.antialiasing;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
 
 void Renderer::setGtaoQuality(const GtaoQuality quality) noexcept {
-    if (gtaoQuality_ == quality) return;
+    if (gtaoQuality_ == quality)
+        return;
     gtaoQuality_ = quality;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
-GtaoQuality Renderer::gtaoQuality() const noexcept { return gtaoQuality_; }
+GtaoQuality Renderer::gtaoQuality() const noexcept {
+    return gtaoQuality_;
+}
 void Renderer::setGtaoDebugView(const GtaoDebugView view) noexcept {
-    if (gtaoDebugView_ == view) return;
+    if (gtaoDebugView_ == view)
+        return;
     gtaoDebugView_ = view;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
-GtaoDebugView Renderer::gtaoDebugView() const noexcept { return gtaoDebugView_; }
+GtaoDebugView Renderer::gtaoDebugView() const noexcept {
+    return gtaoDebugView_;
+}
 void Renderer::setPbrDebugView(const PbrDebugView view) noexcept {
-    if (pbrDebugView_ == view) return;
+    if (pbrDebugView_ == view)
+        return;
     pbrDebugView_ = view;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
-PbrDebugView Renderer::pbrDebugView() const noexcept { return pbrDebugView_; }
+PbrDebugView Renderer::pbrDebugView() const noexcept {
+    return pbrDebugView_;
+}
 void Renderer::setIblQuality(const IblQuality quality) noexcept {
-    if (iblQuality_ == quality) return;
+    if (iblQuality_ == quality)
+        return;
     iblQuality_ = quality;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
-IblQuality Renderer::iblQuality() const noexcept { return iblQuality_; }
+IblQuality Renderer::iblQuality() const noexcept {
+    return iblQuality_;
+}
 
 void Renderer::setShadowDebugView(const ShadowDebugView view) noexcept {
-    if (shadowDebugView_ == view) return;
+    if (shadowDebugView_ == view)
+        return;
     shadowDebugView_ = view;
-    if (backend_) backend_->markRenderSettingsChanged();
+    if (backend_)
+        backend_->markRenderSettingsChanged();
 }
 
 ShadowDebugView Renderer::shadowDebugView() const noexcept {
@@ -146,28 +177,32 @@ std::vector<GpuSceneMemoryAllocation> Renderer::gpuSceneMemory() const {
 }
 
 void Renderer::setProjectRoot(std::filesystem::path root) {
-    if (backend_) throw std::logic_error("Renderer project root must be set before initialization");
+    if (backend_)
+        throw std::logic_error("Renderer project root must be set before initialization");
     state_->projectRoot = std::move(root).lexically_normal();
 }
 
-void Renderer::setEditorUiBackend(EditorUiBackend *backend) noexcept {
-    if (backend_) return;
+void Renderer::setEditorUiBackend(EditorUiBackend* backend) noexcept {
+    if (backend_)
+        return;
     editorUiBackend_ = backend;
 }
 
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
-    if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, renderPath_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_, gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
-                                         state_->assetManager, state_->forwardPass, state_->skyPass,
-                                         state_->tonemapPass, state_->temporalAaPass, state_->bloomPass, state_->gtaoPass,
-                                         state_->particlePipeline,
-                                         state_->canvasRenderer, editorUiBackend_);
+    if (backend_)
+        throw std::logic_error("Renderer is already initialized");
+    backend_ = std::make_unique<Backend>(
+        scene, window, optimizationFeatures_, renderPath_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_,
+        gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
+        state_->assetManager, state_->forwardPass, state_->skyPass, state_->tonemapPass, state_->temporalAaPass,
+        state_->bloomPass, state_->gtaoPass, state_->particlePipeline, state_->canvasRenderer, editorUiBackend_);
     backend_->initializeCore();
 }
 
 void Renderer::initializeScene(Scene& scene) {
-    if (!backend_) throw std::logic_error("Renderer core must be initialized first");
+    if (!backend_)
+        throw std::logic_error("Renderer core must be initialized first");
     backend_->initializeSceneResources(scene);
 }
 
@@ -176,52 +211,71 @@ void Renderer::initialize(Scene& scene, void* nativeWindow) {
     initializeScene(scene);
 }
 
-void Renderer::beginFrame() { Backend::beginFrame(); }
+void Renderer::beginFrame() {
+    Backend::beginFrame();
+}
 EditorEventState Renderer::pollEditorEvents() const {
     return backend_ ? backend_->pollEditorEvents() : EditorEventState{};
 }
-void Renderer::beginEditorUiFrame() const { backend_->beginEditorUiFrame(); }
+void Renderer::beginEditorUiFrame() const {
+    backend_->beginEditorUiFrame();
+}
 void Renderer::processEvent(const void* nativeEvent) const {
-    if (backend_) backend_->processEvent(*static_cast<const SDL_Event*>(nativeEvent));
+    if (backend_)
+        backend_->processEvent(*static_cast<const SDL_Event*>(nativeEvent));
 }
 
 void Renderer::setEditorSceneCameraInput(const bool active) const {
-    if (backend_) backend_->setEditorSceneCameraInput(active);
+    if (backend_)
+        backend_->setEditorSceneCameraInput(active);
 }
 
 void Renderer::setGameCameraInput(const bool active) const {
-    if (backend_) backend_->setGameCameraInput(active);
+    if (backend_)
+        backend_->setGameCameraInput(active);
 }
 void Renderer::setSceneViewportActive(const bool active) const {
-    if (backend_) backend_->setSceneViewportActive(active);
+    if (backend_)
+        backend_->setSceneViewportActive(active);
 }
 void Renderer::setSceneViewportExtent(const std::uint32_t width, const std::uint32_t height) const {
-    if (backend_) backend_->setSceneViewportExtent(width, height);
+    if (backend_)
+        backend_->setSceneViewportExtent(width, height);
 }
 void Renderer::updateEditorSceneCameraInput() const {
-    if (backend_) backend_->updateEditorSceneCameraInput();
+    if (backend_)
+        backend_->updateEditorSceneCameraInput();
 }
 void Renderer::setEditorSelection(const Entity entity) const {
-    if (backend_) backend_->setEditorSelection(entity);
+    if (backend_)
+        backend_->setEditorSelection(entity);
 }
 bool Renderer::setEnvironmentEquirectangular(const std::filesystem::path& path) const {
     return backend_ && backend_->setEnvironmentEquirectangular(path);
 }
 void Renderer::bakeReflectionProbe(const Entity entity) const {
-    if (backend_) backend_->bakeReflectionProbe(entity);
+    if (backend_)
+        backend_->bakeReflectionProbe(entity);
 }
 void Renderer::addWaterInteraction(const Vec3 worldPosition, const float radius, const float strength) const {
-    if (backend_) backend_->addWaterInteraction(worldPosition, radius, strength);
+    if (backend_)
+        backend_->addWaterInteraction(worldPosition, radius, strength);
 }
-void Renderer::renderFrame() const { backend_->renderFrame(); }
+void Renderer::renderFrame() const {
+    backend_->renderFrame();
+}
 void Renderer::synchronizeScene(Scene& scene) const {
-    if (!backend_) return;
-    if (!backend_->sceneResourcesReady()) backend_->initializeSceneResources(scene);
-    else backend_->synchronizeSceneResources(scene);
+    if (!backend_)
+        return;
+    if (!backend_->sceneResourcesReady())
+        backend_->initializeSceneResources(scene);
+    else
+        backend_->synchronizeSceneResources(scene);
 }
 void Renderer::updateMeshGeometry(const Entity entity, const std::uint32_t firstVertex,
                                   const std::uint32_t vertexCount) const {
-    if (backend_) backend_->updateMeshGeometry(entity, firstVertex, vertexCount);
+    if (backend_)
+        backend_->updateMeshGeometry(entity, firstVertex, vertexCount);
 }
 void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
     static_cast<void>(nativeWindow);
@@ -230,8 +284,7 @@ void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
             backend_->initializeSceneResources(scene);
             return;
         }
-        if (backend_->antialiasingLevel != antialiasingLevel_ ||
-            backend_->configuredGtaoQuality != gtaoQuality_) {
+        if (backend_->antialiasingLevel != antialiasingLevel_ || backend_->configuredGtaoQuality != gtaoQuality_) {
             backend_->reconfigureAntialiasing(antialiasingLevel_);
         }
         // Scene snapshots replace the complete ECS registry. Incremental
@@ -240,10 +293,12 @@ void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
         // capacities from the discarded registry. Rebuild every
         // registry-derived resource before the next render frame.
         backend_->reloadSceneResources(scene);
-    } else initialize(scene, nativeWindow);
+    } else
+        initialize(scene, nativeWindow);
 }
 void Renderer::reconfigureAntialiasing() const {
-    if (!backend_) return;
+    if (!backend_)
+        return;
     backend_->reconfigureAntialiasing(antialiasingLevel_);
 }
 bool Renderer::reloadShaders() const {
@@ -268,10 +323,12 @@ Vec3 Renderer::editorGizmoPosition(const Entity entity) const noexcept {
     return backend_ ? backend_->editorGizmoPosition(entity) : Vec3{};
 }
 void Renderer::setEditorCameraRotation(const float yaw, const float pitch) const noexcept {
-    if (backend_) backend_->setEditorCameraRotation(yaw, pitch);
+    if (backend_)
+        backend_->setEditorCameraRotation(yaw, pitch);
 }
 void Renderer::setEditorCameraPosition(const Vec3 position) const noexcept {
-    if (backend_) backend_->setEditorCameraPosition(position);
+    if (backend_)
+        backend_->setEditorCameraPosition(position);
 }
 void Renderer::shutdown() noexcept {
     backend_.reset();

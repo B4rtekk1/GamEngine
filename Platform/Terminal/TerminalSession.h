@@ -9,11 +9,10 @@
 namespace Platform {
 
 class TerminalSession {
-public:
+  public:
     virtual ~TerminalSession() = default;
 
-    virtual bool start(const std::filesystem::path& executable,
-                       const std::filesystem::path& workingDirectory) = 0;
+    virtual bool start(const std::filesystem::path& executable, const std::filesystem::path& workingDirectory) = 0;
     /** Stops the native session and releases all of its background work. */
     virtual void stop() = 0;
     virtual void write(std::string_view data) = 0;

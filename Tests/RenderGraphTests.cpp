@@ -1,53 +1,56 @@
-#include "Engine/Renderer/RenderGraph/RenderGraph.h"
 #include "Engine/Renderer/Lighting/ReflectionGraph.h"
-
-#include <gtest/gtest.h>
+#include "Engine/Renderer/RenderGraph/RenderGraph.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <gtest/gtest.h>
 
 namespace Engine::RenderGraph {
 namespace {
-    constexpr TextureDesc ColorTarget{
-        .extent = {1920, 1080, 1},
-        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
-        .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
+constexpr TextureDesc ColorTarget{.extent = {1920, 1080, 1},
+                                  .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+                                  .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
 }
 
 TEST(RenderGraphTests, VsmPagePublicationPrecedesVisibilityAndForwardSampling) {
     RenderGraph graph;
     graph.enablePassCulling();
-    const auto pageTable = graph.importBuffer("VSM table",
-        reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), {
-            .size = 7168 * sizeof(std::uint32_t),
-            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT});
+    const auto pageTable =
+        graph.importBuffer("VSM table", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)),
+                           {.size = 7168 * sizeof(std::uint32_t),
+                            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT});
     TextureHandle visibility;
-    graph.addPass("Shadow VSM", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.write(pageTable, BufferUsage::TransferWrite);
-    }, {});
-    graph.addPass("Directional visibility", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.read(pageTable, BufferUsage::StorageReadCompute);
-        visibility = builder.writeTexture("Visibility", ColorTarget);
-    }, {});
-    graph.addPass("Forward lighting inputs", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.read(pageTable, BufferUsage::StorageReadFragment);
-        builder.read(visibility);
-        builder.setSideEffect();
-    }, {});
+    graph.addPass("Shadow VSM", Queue::Graphics,
+                  [&](PassBuilder& builder) { builder.write(pageTable, BufferUsage::TransferWrite); }, {});
+    graph.addPass("Directional visibility", Queue::Graphics,
+                  [&](PassBuilder& builder) {
+                      builder.read(pageTable, BufferUsage::StorageReadCompute);
+                      visibility = builder.writeTexture("Visibility", ColorTarget);
+                  },
+                  {});
+    graph.addPass("Forward lighting inputs", Queue::Graphics,
+                  [&](PassBuilder& builder) {
+                      builder.read(pageTable, BufferUsage::StorageReadFragment);
+                      builder.read(visibility);
+                      builder.setSideEffect();
+                  },
+                  {});
     graph.compile();
-    EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{
-        "Shadow VSM", "Directional visibility", "Forward lighting inputs"}));
+    EXPECT_EQ(graph.executionOrder(),
+              (std::vector<std::string>{"Shadow VSM", "Directional visibility", "Forward lighting inputs"}));
 }
 
 TEST(RenderGraphTests, OrdersPassesFromResourceDependencies) {
     RenderGraph graph;
-    const auto input = graph.importTexture("Input", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)), ColorTarget,
-                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto input = graph.importTexture("Input", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)),
+                                           ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     TextureHandle bloom;
-    graph.addPass("Bloom", [&](PassBuilder& builder) {
-        builder.read(input);
-        bloom = builder.writeTexture("Bloom", ColorTarget);
-    }, {});
+    graph.addPass("Bloom",
+                  [&](PassBuilder& builder) {
+                      builder.read(input);
+                      bloom = builder.writeTexture("Bloom", ColorTarget);
+                  },
+                  {});
     graph.addPass("Tonemap", [&](PassBuilder& builder) { builder.read(bloom); }, {});
 
     graph.compile();
@@ -60,14 +63,18 @@ TEST(RenderGraphTests, ReusesAllocationSlotForNonOverlappingCompatibleTextures) 
     TextureHandle second;
     TextureHandle gate;
     graph.addPass("First", [&](PassBuilder& builder) { first = builder.writeTexture("First", ColorTarget); }, {});
-    graph.addPass("Consume first", [&](PassBuilder& builder) {
-        builder.read(first);
-        gate = builder.writeTexture("Gate", ColorTarget);
-    }, {});
-    graph.addPass("Second", [&](PassBuilder& builder) {
-        builder.read(gate);
-        second = builder.writeTexture("Second", ColorTarget);
-    }, {});
+    graph.addPass("Consume first",
+                  [&](PassBuilder& builder) {
+                      builder.read(first);
+                      gate = builder.writeTexture("Gate", ColorTarget);
+                  },
+                  {});
+    graph.addPass("Second",
+                  [&](PassBuilder& builder) {
+                      builder.read(gate);
+                      second = builder.writeTexture("Second", ColorTarget);
+                  },
+                  {});
 
     graph.compile();
     EXPECT_EQ(graph.lifetime(first).allocationSlot, graph.lifetime(second).allocationSlot);
@@ -80,14 +87,18 @@ TEST(RenderGraphTests, ReusesAllocationSlotForNonOverlappingCompatibleBuffers) {
     BufferHandle scatter;
     BufferHandle gate;
     graph.addPass("Count", [&](PassBuilder& builder) { count = builder.writeBuffer("Count", scratch); }, {});
-    graph.addPass("Prefix", [&](PassBuilder& builder) {
-        builder.read(count);
-        gate = builder.writeBuffer("Gate", scratch);
-    }, {});
-    graph.addPass("Scatter", [&](PassBuilder& builder) {
-        builder.read(gate);
-        scatter = builder.writeBuffer("Scatter", scratch);
-    }, {});
+    graph.addPass("Prefix",
+                  [&](PassBuilder& builder) {
+                      builder.read(count);
+                      gate = builder.writeBuffer("Gate", scratch);
+                  },
+                  {});
+    graph.addPass("Scatter",
+                  [&](PassBuilder& builder) {
+                      builder.read(gate);
+                      scatter = builder.writeBuffer("Scatter", scratch);
+                  },
+                  {});
     graph.compile();
     EXPECT_EQ(graph.lifetime(count).allocationSlot, graph.lifetime(scatter).allocationSlot);
 }
@@ -96,9 +107,9 @@ TEST(RenderGraphTests, RebuildsTheSameTopologyAfterLogicalReset) {
     RenderGraph graph;
     const auto build = [&graph] {
         TextureHandle intermediate;
-        graph.addPass("Producer", [&](PassBuilder& builder) {
-            intermediate = builder.writeTexture("Intermediate", ColorTarget);
-        }, {});
+        graph.addPass("Producer",
+                      [&](PassBuilder& builder) { intermediate = builder.writeTexture("Intermediate", ColorTarget); },
+                      {});
         graph.addPass("Consumer", [&](PassBuilder& builder) { builder.read(intermediate); }, {});
     };
     build();
@@ -117,9 +128,8 @@ TEST(RenderGraphTests, RebindsFrameLocalResourcesAndUploadWaitsFromACompiledTemp
         const auto input = graph.importTexture("Frame input", reinterpret_cast<VkImage>(imageValue), ColorTarget,
                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         graph.markUploaded(input, uploadValue);
-        graph.addPass("Consume frame input", Queue::AsyncCompute, [input](PassBuilder& builder) {
-            builder.read(input, TextureUsage::SampledReadCompute);
-        }, {});
+        graph.addPass("Consume frame input", Queue::AsyncCompute,
+                      [input](PassBuilder& builder) { builder.read(input, TextureUsage::SampledReadCompute); }, {});
         return input;
     };
 
@@ -141,12 +151,11 @@ TEST(RenderGraphTests, CachedBufferUploadWaitsFollowEachFramesTicket) {
     constexpr BufferDesc storage{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
     for (const std::uint64_t ticket : {0ULL, 17ULL, 0ULL, 29ULL}) {
         graph.reset();
-        const auto input = graph.importBuffer("Uploaded buffer",
-            reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
+        const auto input =
+            graph.importBuffer("Uploaded buffer", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
         graph.markUploaded(input, ticket);
-        graph.addPass("Consume buffer", Queue::AsyncCompute, [input](PassBuilder& builder) {
-            builder.read(input, BufferUsage::StorageReadCompute);
-        }, {});
+        graph.addPass("Consume buffer", Queue::AsyncCompute,
+                      [input](PassBuilder& builder) { builder.read(input, BufferUsage::StorageReadCompute); }, {});
         graph.compile();
         if (ticket == 0) {
             EXPECT_TRUE(graph.uploadWaits().empty());
@@ -162,12 +171,10 @@ TEST(RenderGraphTests, CachedBufferUploadWaitsFollowEachFramesTicket) {
 TEST(RenderGraphTests, ReportsTimelineDependenciesAcrossQueues) {
     RenderGraph graph;
     TextureHandle intermediate;
-    graph.addPass("Depth", Queue::Graphics, [&](PassBuilder& builder) {
-        intermediate = builder.writeTexture("Depth", ColorTarget);
-    }, {});
-    graph.addPass("Hi-Z", Queue::AsyncCompute, [&](PassBuilder& builder) {
-        builder.read(intermediate, TextureUsage::SampledReadCompute);
-    }, {});
+    graph.addPass("Depth", Queue::Graphics,
+                  [&](PassBuilder& builder) { intermediate = builder.writeTexture("Depth", ColorTarget); }, {});
+    graph.addPass("Hi-Z", Queue::AsyncCompute,
+                  [&](PassBuilder& builder) { builder.read(intermediate, TextureUsage::SampledReadCompute); }, {});
     graph.compile();
 
     ASSERT_EQ(graph.queueDependencies().size(), 1U);
@@ -180,11 +187,11 @@ TEST(RenderGraphTests, ReportsTimelineDependenciesAcrossQueues) {
 
 TEST(RenderGraphTests, ReportsTheFirstTextureConsumerStage) {
     RenderGraph graph;
-    const auto texture = graph.importTexture("Uploaded texture", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)),
-                                             ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    graph.addPass("Fragment consumer", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.read(texture, TextureUsage::SampledReadFragment);
-    }, {});
+    const auto texture =
+        graph.importTexture("Uploaded texture", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)), ColorTarget,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    graph.addPass("Fragment consumer", Queue::Graphics,
+                  [&](PassBuilder& builder) { builder.read(texture, TextureUsage::SampledReadFragment); }, {});
 
     graph.compile();
 
@@ -195,14 +202,13 @@ TEST(RenderGraphTests, ReportsTheFirstTextureConsumerStage) {
 
 TEST(RenderGraphTests, DoesNotWaitForAnUploadThatIsOverwrittenBeforeRead) {
     RenderGraph graph;
-    const auto texture = graph.importTexture("Discarded upload", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)),
-                                             ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    graph.addPass("Overwrite", Queue::AsyncCompute, [&](PassBuilder& builder) {
-        builder.write(texture, TextureUsage::StorageWriteCompute);
-    }, {});
-    graph.addPass("Later read", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.read(texture, TextureUsage::SampledReadFragment);
-    }, {});
+    const auto texture =
+        graph.importTexture("Discarded upload", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)), ColorTarget,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    graph.addPass("Overwrite", Queue::AsyncCompute,
+                  [&](PassBuilder& builder) { builder.write(texture, TextureUsage::StorageWriteCompute); }, {});
+    graph.addPass("Later read", Queue::Graphics,
+                  [&](PassBuilder& builder) { builder.read(texture, TextureUsage::SampledReadFragment); }, {});
 
     graph.compile();
     EXPECT_FALSE(graph.firstConsumer(texture));
@@ -210,12 +216,16 @@ TEST(RenderGraphTests, DoesNotWaitForAnUploadThatIsOverwrittenBeforeRead) {
 
 TEST(RenderGraphTests, ReportsVertexAndIndexInputAsTheFirstBufferConsumer) {
     RenderGraph graph;
-    constexpr BufferDesc input{.size = 4096, .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
-    const auto buffer = graph.importBuffer("Uploaded mesh", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), input);
-    graph.addPass("Raster", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.read(buffer, BufferUsage::VertexRead);
-        builder.read(buffer, BufferUsage::IndexRead);
-    }, {});
+    constexpr BufferDesc input{.size = 4096,
+                               .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+    const auto buffer =
+        graph.importBuffer("Uploaded mesh", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), input);
+    graph.addPass("Raster", Queue::Graphics,
+                  [&](PassBuilder& builder) {
+                      builder.read(buffer, BufferUsage::VertexRead);
+                      builder.read(buffer, BufferUsage::IndexRead);
+                  },
+                  {});
 
     graph.compile();
 
@@ -227,10 +237,10 @@ TEST(RenderGraphTests, ReportsVertexAndIndexInputAsTheFirstBufferConsumer) {
 TEST(RenderGraphTests, ReportsMeshShaderAsTheFirstMeshConsumer) {
     RenderGraph graph;
     constexpr BufferDesc meshlets{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
-    const auto buffer = graph.importBuffer("Uploaded meshlets", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), meshlets);
-    graph.addPass("Mesh raster", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.read(buffer, BufferUsage::MeshRead);
-    }, {});
+    const auto buffer =
+        graph.importBuffer("Uploaded meshlets", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), meshlets);
+    graph.addPass("Mesh raster", Queue::Graphics,
+                  [&](PassBuilder& builder) { builder.read(buffer, BufferUsage::MeshRead); }, {});
 
     graph.compile();
 
@@ -240,10 +250,10 @@ TEST(RenderGraphTests, ReportsMeshShaderAsTheFirstMeshConsumer) {
 TEST(RenderGraphTests, ReportsComputeAsTheFirstGpuSceneConsumer) {
     RenderGraph graph;
     constexpr BufferDesc storage{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
-    const auto buffer = graph.importBuffer("Uploaded GPU scene", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
-    graph.addPass("Cull", Queue::AsyncCompute, [&](PassBuilder& builder) {
-        builder.read(buffer, BufferUsage::StorageReadCompute);
-    }, {});
+    const auto buffer =
+        graph.importBuffer("Uploaded GPU scene", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
+    graph.addPass("Cull", Queue::AsyncCompute,
+                  [&](PassBuilder& builder) { builder.read(buffer, BufferUsage::StorageReadCompute); }, {});
 
     graph.compile();
 
@@ -255,29 +265,26 @@ TEST(RenderGraphTests, ReportsComputeAsTheFirstGpuSceneConsumer) {
 TEST(RenderGraphTests, PlansUploadWaitsAtTheConsumerBatch) {
     RenderGraph graph;
     constexpr BufferDesc storage{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
-    const auto scene = graph.importBuffer("GPU scene", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
+    const auto scene =
+        graph.importBuffer("GPU scene", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
     const auto texture = graph.importTexture("Texture", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(2)),
                                              ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     graph.markUploaded(scene, 3);
     graph.markUploaded(texture, 5);
-    graph.addPass("Cull", Queue::AsyncCompute, [&](PassBuilder& builder) {
-        builder.read(scene, BufferUsage::StorageReadCompute);
-    }, {});
-    graph.addPass("Shade", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.read(texture, TextureUsage::SampledReadFragment);
-    }, {});
+    graph.addPass("Cull", Queue::AsyncCompute,
+                  [&](PassBuilder& builder) { builder.read(scene, BufferUsage::StorageReadCompute); }, {});
+    graph.addPass("Shade", Queue::Graphics,
+                  [&](PassBuilder& builder) { builder.read(texture, TextureUsage::SampledReadFragment); }, {});
 
     graph.compile();
 
     ASSERT_EQ(graph.uploadWaits().size(), 2U);
     // Waits are collected by resource type; their vector order does not
     // determine submission order. Verify the actual consumer batch instead.
-    const auto cullWait = std::ranges::find_if(graph.uploadWaits(), [](const UploadWait& wait) {
-        return wait.queue == Queue::AsyncCompute;
-    });
-    const auto shadeWait = std::ranges::find_if(graph.uploadWaits(), [](const UploadWait& wait) {
-        return wait.queue == Queue::Graphics;
-    });
+    const auto cullWait = std::ranges::find_if(
+        graph.uploadWaits(), [](const UploadWait& wait) { return wait.queue == Queue::AsyncCompute; });
+    const auto shadeWait =
+        std::ranges::find_if(graph.uploadWaits(), [](const UploadWait& wait) { return wait.queue == Queue::Graphics; });
     ASSERT_NE(cullWait, graph.uploadWaits().end());
     ASSERT_NE(shadeWait, graph.uploadWaits().end());
     EXPECT_EQ(cullWait->timelineValue, 3U);
@@ -290,12 +297,11 @@ TEST(RenderGraphTests, CullsPassesThatCannotReachAnExport) {
     RenderGraph graph;
     graph.enablePassCulling();
     TextureHandle visible;
-    graph.addPass("Visible", [&](PassBuilder& builder) {
-        visible = builder.writeTexture("Visible", ColorTarget);
-    }, {});
-    graph.addPass("Unused", [&](PassBuilder& builder) {
-        [[maybe_unused]] const auto unused = builder.writeTexture("Unused", ColorTarget);
-    }, {});
+    graph.addPass("Visible", [&](PassBuilder& builder) { visible = builder.writeTexture("Visible", ColorTarget); }, {});
+    graph.addPass(
+        "Unused",
+        [&](PassBuilder& builder) { [[maybe_unused]] const auto unused = builder.writeTexture("Unused", ColorTarget); },
+        {});
     graph.exportTexture(visible);
     graph.compile();
 
@@ -305,12 +311,12 @@ TEST(RenderGraphTests, CullsPassesThatCannotReachAnExport) {
 TEST(RenderGraphTests, KeepsExplicitSideEffectsWhileCullingUnreachablePasses) {
     RenderGraph graph;
     graph.enablePassCulling();
-    graph.addPass("External query write", [](PassBuilder& builder) {
-        builder.setSideEffect();
-    }, {});
-    graph.addPass("Dead temporary", [](PassBuilder& builder) {
-        [[maybe_unused]] const auto temporary = builder.writeTexture("Temporary", ColorTarget);
-    }, {});
+    graph.addPass("External query write", [](PassBuilder& builder) { builder.setSideEffect(); }, {});
+    graph.addPass("Dead temporary",
+                  [](PassBuilder& builder) {
+                      [[maybe_unused]] const auto temporary = builder.writeTexture("Temporary", ColorTarget);
+                  },
+                  {});
 
     graph.compile();
 
@@ -321,16 +327,15 @@ TEST(RenderGraphTests, BuildsQueueBatchesFromTheCompiledDag) {
     RenderGraph graph;
     TextureHandle depth;
     TextureHandle hiZ;
-    graph.addPass("Forward", Queue::Graphics, [&](PassBuilder& builder) {
-        depth = builder.writeTexture("Depth", ColorTarget);
-    }, {});
-    graph.addPass("Hi-Z", Queue::AsyncCompute, [&](PassBuilder& builder) {
-        builder.read(depth, TextureUsage::SampledReadCompute);
-        hiZ = builder.writeTexture("Hi-Z", ColorTarget);
-    }, {});
-    graph.addPass("Tonemap", Queue::Graphics, [&](PassBuilder& builder) {
-        builder.read(hiZ);
-    }, {});
+    graph.addPass("Forward", Queue::Graphics,
+                  [&](PassBuilder& builder) { depth = builder.writeTexture("Depth", ColorTarget); }, {});
+    graph.addPass("Hi-Z", Queue::AsyncCompute,
+                  [&](PassBuilder& builder) {
+                      builder.read(depth, TextureUsage::SampledReadCompute);
+                      hiZ = builder.writeTexture("Hi-Z", ColorTarget);
+                  },
+                  {});
+    graph.addPass("Tonemap", Queue::Graphics, [&](PassBuilder& builder) { builder.read(hiZ); }, {});
     graph.compile();
 
     ASSERT_EQ(graph.queueBatches().size(), 3U);
@@ -355,17 +360,19 @@ TEST(RenderGraphTests, SubmissionRequiresOneCommandBufferPerCompiledBatch) {
 TEST(RenderGraphTests, ReflectionFallbackOrdersSsrBeforeProbeAndSkyResolution) {
     RenderGraph graph;
     const auto image = [](const std::uintptr_t value) { return reinterpret_cast<VkImage>(value); };
-    const auto color = graph.importTexture("Forward HDR", image(1), ColorTarget,
-                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    const auto depth = graph.importTexture("Depth", image(2), ColorTarget,
-                                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-    const auto sky = graph.importTexture("Global sky", image(3), ColorTarget,
-                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    const auto probes = graph.importTexture("Local probe atlas", image(4), ColorTarget,
-                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    const auto output = Lighting::addReflectionPasses(graph, {
-        .sceneColor = color, .depth = depth, .globalSky = sky,
-        .localProbeAtlas = probes, .reflectionDesc = ColorTarget, .enableSsr = true});
+    const auto color =
+        graph.importTexture("Forward HDR", image(1), ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto depth =
+        graph.importTexture("Depth", image(2), ColorTarget, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+    const auto sky = graph.importTexture("Global sky", image(3), ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto probes =
+        graph.importTexture("Local probe atlas", image(4), ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto output = Lighting::addReflectionPasses(graph, {.sceneColor = color,
+                                                              .depth = depth,
+                                                              .globalSky = sky,
+                                                              .localProbeAtlas = probes,
+                                                              .reflectionDesc = ColorTarget,
+                                                              .enableSsr = true});
     graph.exportTexture(output.resolved);
     graph.compile();
     EXPECT_EQ(graph.executionOrder(),
@@ -374,4 +381,4 @@ TEST(RenderGraphTests, ReflectionFallbackOrdersSsrBeforeProbeAndSkyResolution) {
     EXPECT_EQ(graph.queueDependencies().front().producerQueue, Queue::AsyncCompute);
     EXPECT_EQ(graph.queueDependencies().front().consumerQueue, Queue::Graphics);
 }
-} // namespace Engine::Renderer
+} // namespace Engine::RenderGraph

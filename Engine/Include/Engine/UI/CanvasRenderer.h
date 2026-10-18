@@ -2,92 +2,84 @@
 
 #include <Engine/UI/UIBatch.h>
 #include <Engine/UI/Vulkan/UIPipeline.h>
-
-#include <vulkan/vulkan.h>
-#include <vk_mem_alloc.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
-    class Buffer;
+class Buffer;
 
-    namespace Assets {
-        class AssetManager;
-    }
+namespace Assets {
+class AssetManager;
 }
+} // namespace Engine
 
 namespace Engine::UI {
-    class Canvas;
-    class UIElement;
+class Canvas;
+class UIElement;
 
-    class CanvasRenderer final {
-    public:
-        struct ImageIndex final {
-            explicit ImageIndex(const std::uint32_t value) : value(value) {}
+class CanvasRenderer final {
+  public:
+    struct ImageIndex final {
+        explicit ImageIndex(const std::uint32_t value) : value(value) {}
 
-            std::uint32_t value;
-        };
-
-        struct FrameIndex final {
-            explicit FrameIndex(const std::uint32_t value) : value(value) {}
-
-            std::uint32_t value;
-        };
-
-        ~CanvasRenderer();
-
-        CanvasRenderer();
-
-        CanvasRenderer(const CanvasRenderer &) = delete;
-
-        CanvasRenderer &operator=(const CanvasRenderer &) = delete;
-
-        void create(VkPhysicalDevice physicalDevice, VkDevice device,
-                    VkFormat colorFormat, VkExtent2D extent,
-                    const std::vector<VkImageView> &imageViews,
-                    std::uint32_t framesInFlight,
-                    Assets::AssetManager &assets,
-                    VkImageView fontAtlasView = VK_NULL_HANDLE,
-                    VkSampler fontAtlasSampler = VK_NULL_HANDLE,
-                    VmaAllocator allocator = VK_NULL_HANDLE);
-
-        void destroy() noexcept;
-
-        void record(const Canvas &canvas, VkCommandBuffer commandBuffer,
-                    ImageIndex imageIndex, FrameIndex frameIndex,
-                    VkExtent2D extent);
-
-    private:
-        struct FrameResources;
-        struct SortCache final {
-            std::vector<const UIElement*> source;
-            std::vector<const UIElement*> sorted;
-        };
-
-        void appendElement(const UIElement &element);
-
-        [[nodiscard]] const std::vector<const UIElement *> &sortedChildren(const UIElement &element);
-
-        static void sortIfNeeded(const std::vector<const UIElement *> &source,
-                                 SortCache &cache);
-
-        [[nodiscard]] bool ensureCapacity(FrameResources &frame) const;
-
-        VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
-        VkDevice device_ = VK_NULL_HANDLE;
-        VmaAllocator allocator_ = VK_NULL_HANDLE;
-        UIPipeline pipeline_;
-        UIBatch batch_;
-        std::vector<std::unique_ptr<FrameResources> > frames_;
-        SortCache rootElements_;
-        std::vector<const UIElement *> rootElementsSource_;
-        std::unordered_map<const UIElement *, SortCache> sortedChildren_;
-        std::uint64_t cachedCanvasRevision_{};
-        bool batchDirty_{true};
-        std::uint64_t pendingFrameUploads_{};
+        std::uint32_t value;
     };
+
+    struct FrameIndex final {
+        explicit FrameIndex(const std::uint32_t value) : value(value) {}
+
+        std::uint32_t value;
+    };
+
+    ~CanvasRenderer();
+
+    CanvasRenderer();
+
+    CanvasRenderer(const CanvasRenderer&) = delete;
+
+    CanvasRenderer& operator=(const CanvasRenderer&) = delete;
+
+    void create(VkPhysicalDevice physicalDevice, VkDevice device, VkFormat colorFormat, VkExtent2D extent,
+                const std::vector<VkImageView>& imageViews, std::uint32_t framesInFlight, Assets::AssetManager& assets,
+                VkImageView fontAtlasView = VK_NULL_HANDLE, VkSampler fontAtlasSampler = VK_NULL_HANDLE,
+                VmaAllocator allocator = VK_NULL_HANDLE);
+
+    void destroy() noexcept;
+
+    void record(const Canvas& canvas, VkCommandBuffer commandBuffer, ImageIndex imageIndex, FrameIndex frameIndex,
+                VkExtent2D extent);
+
+  private:
+    struct FrameResources;
+    struct SortCache final {
+        std::vector<const UIElement*> source;
+        std::vector<const UIElement*> sorted;
+    };
+
+    void appendElement(const UIElement& element);
+
+    [[nodiscard]] const std::vector<const UIElement*>& sortedChildren(const UIElement& element);
+
+    static void sortIfNeeded(const std::vector<const UIElement*>& source, SortCache& cache);
+
+    [[nodiscard]] bool ensureCapacity(FrameResources& frame) const;
+
+    VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
+    VkDevice device_ = VK_NULL_HANDLE;
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
+    UIPipeline pipeline_;
+    UIBatch batch_;
+    std::vector<std::unique_ptr<FrameResources>> frames_;
+    SortCache rootElements_;
+    std::vector<const UIElement*> rootElementsSource_;
+    std::unordered_map<const UIElement*, SortCache> sortedChildren_;
+    std::uint64_t cachedCanvasRevision_{};
+    bool batchDirty_{true};
+    std::uint64_t pendingFrameUploads_{};
+};
 } // namespace Engine::UI

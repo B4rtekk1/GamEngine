@@ -1,15 +1,18 @@
-#include <gtest/gtest.h>
-
 #include "Engine/ECS/Registry.h"
 
 #include <algorithm>
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <vector>
 
 namespace {
 
-struct Position { int x{}; };
-struct Velocity { int x{}; };
+struct Position {
+    int x{};
+};
+struct Velocity {
+    int x{};
+};
 
 TEST(Entity, PacksAndUnpacksIndexAndGeneration) {
     const Engine::Entity entity = Engine::makeEntity(42, 7);
@@ -76,38 +79,32 @@ TEST(Registry, TracksRenderableTopologyWithoutTransformOrDeformationNoise) {
     EXPECT_GT(registry.renderTopologyRevision(), afterTransform);
     const std::uint64_t afterRenderer = registry.renderTopologyRevision();
 
-    registry.modify<Engine::Transform>(entity, [](auto& transform) {
-        transform.position = Engine::Vec3{4.0F, 0.0F, 0.0F};
-    });
+    registry.modify<Engine::Transform>(entity,
+                                       [](auto& transform) { transform.position = Engine::Vec3{4.0F, 0.0F, 0.0F}; });
     EXPECT_EQ(registry.renderTopologyRevision(), afterRenderer);
 
-    registry.modify<Engine::MeshRendererComponent>(entity,
-        [](auto& renderer) { renderer.cullingBatch = 7; });
+    registry.modify<Engine::MeshRendererComponent>(entity, [](auto& renderer) { renderer.cullingBatch = 7; });
     EXPECT_GT(registry.renderTopologyRevision(), afterRenderer);
 
     const auto beforeBody = registry.renderTopologyRevision();
     registry.add<Engine::RigidbodyComponent>(entity);
     EXPECT_GT(registry.renderTopologyRevision(), beforeBody);
     const auto afterBody = registry.renderTopologyRevision();
-    registry.modify<Engine::RigidbodyComponent>(entity,
-        [](auto& body) { body.mass = 2.0F; });
+    registry.modify<Engine::RigidbodyComponent>(entity, [](auto& body) { body.mass = 2.0F; });
     EXPECT_EQ(registry.renderTopologyRevision(), afterBody);
-    registry.modify<Engine::RigidbodyComponent>(entity,
-        [](auto& body) { body.type = Engine::RigidbodyType::Static; });
+    registry.modify<Engine::RigidbodyComponent>(entity, [](auto& body) { body.type = Engine::RigidbodyType::Static; });
     EXPECT_GT(registry.renderTopologyRevision(), afterBody);
 
     const auto beforeShadowMode = registry.renderTopologyRevision();
-    registry.modify<Engine::MeshRendererComponent>(entity,
-        [](auto& renderer) { renderer.shadowCacheMode = Engine::ShadowCacheMode::Dynamic; });
+    registry.modify<Engine::MeshRendererComponent>(
+        entity, [](auto& renderer) { renderer.shadowCacheMode = Engine::ShadowCacheMode::Dynamic; });
     EXPECT_GT(registry.renderTopologyRevision(), beforeShadowMode);
 
     const Engine::Entity terrain = registry.create();
     registry.add<Engine::Transform>(terrain);
     registry.add<Engine::TerrainGrassComponent>(terrain);
     const std::uint64_t afterGrassAdded = registry.renderTopologyRevision();
-    registry.modify<Engine::TerrainGrassComponent>(terrain, [](auto& grass) {
-        grass.instances.push_back({});
-    });
+    registry.modify<Engine::TerrainGrassComponent>(terrain, [](auto& grass) { grass.instances.push_back({}); });
     EXPECT_GT(registry.renderTopologyRevision(), afterGrassAdded);
     const std::uint64_t afterGrassTopology = registry.renderTopologyRevision();
     registry.markChanged<Engine::TerrainGrassComponent>(terrain);
@@ -210,10 +207,8 @@ TEST(Registry, DestroyPublishesRemovalChangesForEveryPresentComponent) {
 
     EXPECT_EQ(registry.componentRevision<Position>(), positionRevision + 1);
     EXPECT_EQ(registry.componentRevision<Velocity>(), velocityRevision + 1);
-    EXPECT_EQ(registry.componentEntitiesChangedSince<Position>(positionRevision),
-              std::vector<Engine::Entity>{entity});
-    EXPECT_EQ(registry.componentEntitiesChangedSince<Velocity>(velocityRevision),
-              std::vector<Engine::Entity>{entity});
+    EXPECT_EQ(registry.componentEntitiesChangedSince<Position>(positionRevision), std::vector<Engine::Entity>{entity});
+    EXPECT_EQ(registry.componentEntitiesChangedSince<Velocity>(velocityRevision), std::vector<Engine::Entity>{entity});
 }
 
 TEST(Registry, EmptyAndMissingComponentViewsDoNotInvokeCallbacks) {
@@ -252,7 +247,8 @@ TEST(Registry, RecentChangesSkipOldRecordsAndPreserveRemovalEvents) {
     const auto second = registry.create();
     registry.add<Position>(first, Position{1});
     registry.add<Position>(second, Position{2});
-    for (int index = 0; index < 5000; ++index) registry.markChanged<Position>(first);
+    for (int index = 0; index < 5000; ++index)
+        registry.markChanged<Position>(first);
     const auto baseline = registry.componentRevision<Position>();
     registry.markChanged<Position>(second);
     registry.markChanged<Position>(second);
@@ -260,25 +256,25 @@ TEST(Registry, RecentChangesSkipOldRecordsAndPreserveRemovalEvents) {
 
     std::vector<Engine::Entity> visits;
     registry.forEachComponentChangedSince<Position>(baseline,
-        [&](const Engine::Entity entity) { visits.push_back(entity); });
+                                                    [&](const Engine::Entity entity) { visits.push_back(entity); });
     EXPECT_EQ(visits, (std::vector<Engine::Entity>{second, second, first}));
     const auto unique = registry.componentEntitiesChangedSince<Position>(baseline);
     EXPECT_EQ(unique, (std::vector<Engine::Entity>{first, second}));
     EXPECT_TRUE(registry.componentEntitiesChangedSince<Position>(baseline + 3).empty());
     EXPECT_TRUE(registry.componentEntitiesChangedSince<Position>(baseline + 100).empty());
-    registry.forEachComponentChangedSince<Position>(baseline + 3,
-        [](Engine::Entity) { ADD_FAILURE() << "An unchanged component was visited"; });
+    registry.forEachComponentChangedSince<Position>(
+        baseline + 3, [](Engine::Entity) { ADD_FAILURE() << "An unchanged component was visited"; });
 }
 
 TEST(Registry, RecentChangesIncludeFirstRetainedRevision) {
     Engine::Registry registry;
     const auto entity = registry.create();
     registry.add<Position>(entity, Position{});
-    for (int index = 0; index < 5000; ++index) registry.markChanged<Position>(entity);
+    for (int index = 0; index < 5000; ++index)
+        registry.markChanged<Position>(entity);
     const auto revision = registry.componentRevision<Position>();
     std::size_t visits = 0;
-    registry.forEachComponentChangedSince<Position>(revision - 4096,
-        [&](Engine::Entity) { ++visits; });
+    registry.forEachComponentChangedSince<Position>(revision - 4096, [&](Engine::Entity) { ++visits; });
     EXPECT_EQ(visits, 4096U);
 }
 
@@ -309,9 +305,8 @@ TEST(Registry, RebuildsGlassBinsOnlyWhenTransmissionCrossesTheOpaqueBoundary) {
     registry.add<Engine::Transform>(entity);
     registry.add<Engine::MeshRendererComponent>(entity);
     const auto opaqueRevision = registry.renderTopologyRevision();
-    registry.modify<Engine::MeshRendererComponent>(entity, [](auto& renderer) {
-        renderer.material.pbr.transmission = 1.0F;
-    });
+    registry.modify<Engine::MeshRendererComponent>(entity,
+                                                   [](auto& renderer) { renderer.material.pbr.transmission = 1.0F; });
     EXPECT_GT(registry.renderTopologyRevision(), opaqueRevision);
     const auto glassRevision = registry.renderTopologyRevision();
     registry.modify<Engine::MeshRendererComponent>(entity, [](auto& renderer) {
@@ -319,8 +314,7 @@ TEST(Registry, RebuildsGlassBinsOnlyWhenTransmissionCrossesTheOpaqueBoundary) {
         renderer.material.pbr.transmission = 0.8F;
     });
     EXPECT_EQ(registry.renderTopologyRevision(), glassRevision);
-    registry.modify<Engine::MeshRendererComponent>(entity, [](auto& renderer) {
-        renderer.material.pbr.transmission = 0.0F;
-    });
+    registry.modify<Engine::MeshRendererComponent>(entity,
+                                                   [](auto& renderer) { renderer.material.pbr.transmission = 0.0F; });
     EXPECT_GT(registry.renderTopologyRevision(), glassRevision);
 }

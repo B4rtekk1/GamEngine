@@ -1,17 +1,20 @@
-#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
+
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/shader_loader.h"
 
 #include <array>
 #include <stdexcept>
 
 namespace Engine {
-DirectionalVisibilityPass::~DirectionalVisibilityPass() { destroy(); }
+DirectionalVisibilityPass::~DirectionalVisibilityPass() {
+    destroy();
+}
 
-void DirectionalVisibilityPass::create(const VkPhysicalDevice physical, const VkDevice device,
-    const VkExtent2D extent, const VmaAllocator allocator, Assets::AssetManager& assets,
-    const ShadowMap& shadowMap, const std::span<const VkBuffer> frameBuffers,
-    const std::span<const VkBuffer> pageTables) {
+void DirectionalVisibilityPass::create(const VkPhysicalDevice physical, const VkDevice device, const VkExtent2D extent,
+                                       const VmaAllocator allocator, Assets::AssetManager& assets,
+                                       const ShadowMap& shadowMap, const std::span<const VkBuffer> frameBuffers,
+                                       const std::span<const VkBuffer> pageTables) {
     if (!device || !extent.width || !extent.height || frameBuffers.size() != sets_.size() ||
         pageTables.size() != sets_.size())
         throw std::invalid_argument("Directional visibility requires two frame buffers and page tables");
@@ -65,12 +68,18 @@ void DirectionalVisibilityPass::create(const VkPhysicalDevice physical, const Vk
             const VkDescriptorBufferInfo frameInfo{frameBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorImageInfo output{VK_NULL_HANDLE, visibility_[frame].imageView(), VK_IMAGE_LAYOUT_GENERAL};
             const std::array<VkWriteDescriptorSet, 6> writes{{
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImages[0]},
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImages[1]},
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImages[2]},
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pageInfo},
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 6, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &frameInfo},
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 7, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &output},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 0, 0, 1,
+                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImages[0]},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 1, 0, 1,
+                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImages[1]},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 2, 0, 1,
+                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImages[2]},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 3, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pageInfo},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 6, 0, 1,
+                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &frameInfo},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 7, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &output},
             }};
             vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
@@ -81,24 +90,35 @@ void DirectionalVisibilityPass::create(const VkPhysicalDevice physical, const Vk
             throw std::runtime_error("Could not create directional visibility pipeline layout");
         const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/directional_visibility.spv");
         VkComputePipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-        pipelineInfo.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-            VK_SHADER_STAGE_COMPUTE_BIT, shader.get(), "main", nullptr};
+        pipelineInfo.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                              nullptr,
+                              0,
+                              VK_SHADER_STAGE_COMPUTE_BIT,
+                              shader.get(),
+                              "main",
+                              nullptr};
         pipelineInfo.layout = pipelineLayout_;
-        if (vkCreateComputePipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo, nullptr, &pipeline_) != VK_SUCCESS)
+        if (vkCreateComputePipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo, nullptr, &pipeline_) !=
+            VK_SUCCESS)
             throw std::runtime_error("Could not create directional visibility pipeline");
-    } catch (...) { destroy(); throw; }
+    } catch (...) {
+        destroy();
+        throw;
+    }
 }
 
 void DirectionalVisibilityPass::record(const VkCommandBuffer commandBuffer, const std::uint32_t frameSlot,
-    const VkImageView depth, const VkSampler depthSampler,
-    const VkImageView normals, const VkSampler normalSampler,
-    const bool manageOutputTransitions) {
-    if (!pipeline_ || !depth || !normals || frameSlot >= sets_.size()) return;
+                                       const VkImageView depth, const VkSampler depthSampler, const VkImageView normals,
+                                       const VkSampler normalSampler, const bool manageOutputTransitions) {
+    if (!pipeline_ || !depth || !normals || frameSlot >= sets_.size())
+        return;
     const VkDescriptorImageInfo depthInfo{depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
     const VkDescriptorImageInfo normalInfo{normalSampler, normals, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     const std::array<VkWriteDescriptorSet, 2> writes{{
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frameSlot], 4, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frameSlot], 5, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frameSlot], 4, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frameSlot], 5, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo},
     }};
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -112,31 +132,37 @@ void DirectionalVisibilityPass::record(const VkCommandBuffer commandBuffer, cons
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dependency.imageMemoryBarrierCount = 1;
     dependency.pImageMemoryBarriers = &barrier;
-    if (manageOutputTransitions) vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    if (manageOutputTransitions)
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-        pipelineLayout_, 0, 1, &sets_[frameSlot], 0, nullptr);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &sets_[frameSlot], 0,
+                            nullptr);
     vkCmdDispatch(commandBuffer, (extent_.width + 7) / 8, (extent_.height + 7) / 8, 1);
     barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     // This image is consumed by RT contact shadow compute before the forward
     // fragment pass samples it.
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    if (manageOutputTransitions) vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    if (manageOutputTransitions)
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
 }
 
 void DirectionalVisibilityPass::destroy() noexcept {
     if (device_) {
-        if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
-        if (pipelineLayout_) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
-        if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
-        if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
+        if (pipeline_)
+            vkDestroyPipeline(device_, pipeline_, nullptr);
+        if (pipelineLayout_)
+            vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
+        if (pool_)
+            vkDestroyDescriptorPool(device_, pool_, nullptr);
+        if (layout_)
+            vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
     }
-    for (auto& target : visibility_) target.destroy();
+    for (auto& target : visibility_)
+        target.destroy();
     pipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     pool_ = VK_NULL_HANDLE;

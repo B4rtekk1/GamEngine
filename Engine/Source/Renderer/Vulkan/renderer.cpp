@@ -1,111 +1,114 @@
 #include "Engine/Renderer/Vulkan/renderer.h"
-#include "Engine/Renderer/Vulkan/renderer_scene_helpers.h"
-#include "Engine/Renderer/Vulkan/renderer_types.h"
+
+#include "Engine/Core/Profiler.h"
 #include "Engine/Renderer/Vulkan/CameraController.h"
 #include "Engine/Renderer/Vulkan/SceneGpuResources.h"
-#include "Engine/Core/Profiler.h"
+#include "Engine/Renderer/Vulkan/renderer_scene_helpers.h"
+#include "Engine/Renderer/Vulkan/renderer_types.h"
 
 #define SDL_MAIN_HANDLED
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
-#include <vulkan/vulkan.h>
-
 #include <algorithm>
 #include <glm/glm.hpp>
 #include <glm/gtc/packing.hpp>
+#include <vulkan/vulkan.h>
 #define GLM_ENABLE_EXPERIMENTAL
-#include <glm/gtx/matrix_decompose.hpp>
-
-#include "Engine/Renderer/Vulkan/msaa.h"
-#include "Engine/Renderer/Vulkan/depth_buffer.h"
-#include "Engine/Renderer/Vulkan/hdr_buffer.h"
-#include "Engine/Renderer/Passes/BloomPass.h"
-#include "Engine/Renderer/Passes/GtaoPass.h"
-#include "Engine/Renderer/Passes/RtContactShadowPass.h"
-#include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
-#include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
-#include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
-#include "Engine/Renderer/ViewportCamera.h"
-#include "Engine/Renderer/shader_loader.h"
-#include "Engine/Renderer/Vulkan/buffer.h"
-#include "Engine/Renderer/Vulkan/upload_context.h"
-#include "Engine/Renderer/Vulkan/graphics_pipeline.h"
-#include "Engine/Renderer/Vulkan/GpuTimestampProfiler.h"
-#include "Engine/Renderer/Vulkan/vulkan_device.h"
-#include "Engine/Renderer/Vulkan/PipelineCache.h"
-#include "Engine/Renderer/Vulkan/swapchain.h"
-#include "Engine/Renderer/Textures/Texture2D.h"
-#include "Engine/Renderer/Lighting/ImageBasedLighting.h"
-#include "Engine/Renderer/Lighting/ReflectionProbeManager.h"
-#include "Engine/Renderer/Geometry/GpuVertex.h"
-#include "Engine/Renderer/Geometry/Mesh.h"
-#include "Engine/ECS/Registry.h"
-#include "Engine/Scene/Scene.h"
-#include "Engine/Scene/Components/IdentityComponents.h"
-#include "Engine/Scene/TransformSystem.h"
-#include "Engine/ECS/Components/CameraComponent.h"
-#include "Engine/ECS/Components/ReflectionProbeComponent.h"
-#include "Engine/ECS/Components/ParticleEmitterComponent.h"
-#include "Engine/ECS/Components/SmokeEmitterComponent.h"
-#include "Engine/ECS/Components/ColliderComponent.h"
-#include "Engine/ECS/Components/RigidbodyComponent.h"
-#include "Engine/ECS/Components/TerrainGrassComponent.h"
-#include "Engine/ECS/Components/TerrainComponent.h"
-#include "Engine/ECS/Components/WindComponent.h"
-#include "Engine/ECS/Components/WaterBodyComponent.h"
-#include "Engine/Scene/Components/LightComponent.h"
-#include "Engine/Core/Transform.h"
-#include "Engine/Core/Camera.h"
-#include "Engine/Core/Diagnostics.h"
-#include "Engine/Math/AABB.h"
-#include "Engine/Math/Frustum.h"
-#include "Engine/Math/Math.h"
-#include "Engine/Core/Time.h"
-#include "Engine/Core/SceneCamera.h"
-#include "Engine/Renderer/Passes/ForwardPass.h"
-#include "Engine/Renderer/Passes/WaterPass.h"
-#include "Engine/Renderer/Passes/GlassPass.h"
-#include "Engine/ECS/Components/GlassDestructionComponent.h"
-#include "Engine/Renderer/Water/WaterSystem.h"
-#include "Engine/Renderer/Water/VirtualWaterRenderer.h"
-#include "Engine/Renderer/Passes/ShadowPass.h"
-#include "Engine/Renderer/Lighting/VsmFeedbackCache.h"
-#include "Engine/Renderer/Lighting/VsmPagePolicy.h"
-#include "Engine/Renderer/Passes/SkyPass.h"
-#include "Engine/Renderer/Passes/TonemapPass.h"
-#include "Engine/Renderer/Passes/TemporalAaPass.h"
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Assets/Gmesh.h"
 #include "Engine/Assets/Gtex.h"
+#include "Engine/Core/Camera.h"
+#include "Engine/Core/Diagnostics.h"
+#include "Engine/Core/SceneCamera.h"
+#include "Engine/Core/Time.h"
+#include "Engine/Core/Transform.h"
+#include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/GlassDestructionComponent.h"
+#include "Engine/ECS/Components/ParticleEmitterComponent.h"
+#include "Engine/ECS/Components/ReflectionProbeComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/SmokeEmitterComponent.h"
+#include "Engine/ECS/Components/TerrainComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/ECS/Components/WaterBodyComponent.h"
+#include "Engine/ECS/Components/WindComponent.h"
+#include "Engine/ECS/Registry.h"
+#include "Engine/Input/Input.h"
+#include "Engine/Math/AABB.h"
+#include "Engine/Math/Frustum.h"
+#include "Engine/Math/Math.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
 #include "Engine/Renderer/Culling/GPUInstanceCullingPass.h"
-#include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 #include "Engine/Renderer/Culling/HiZPass.h"
+#include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Culling/MeshletCulling.h"
+#include "Engine/Renderer/Geometry/GpuVertex.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Lighting/ImageBasedLighting.h"
+#include "Engine/Renderer/Lighting/ReflectionProbeManager.h"
+#include "Engine/Renderer/Lighting/VsmFeedbackCache.h"
+#include "Engine/Renderer/Lighting/VsmPagePolicy.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
+#include "Engine/Renderer/Passes/BloomPass.h"
+#include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
+#include "Engine/Renderer/Passes/ForwardPass.h"
+#include "Engine/Renderer/Passes/GlassPass.h"
+#include "Engine/Renderer/Passes/GtaoPass.h"
+#include "Engine/Renderer/Passes/RtContactShadowPass.h"
+#include "Engine/Renderer/Passes/ShadowPass.h"
+#include "Engine/Renderer/Passes/SkyPass.h"
+#include "Engine/Renderer/Passes/TemporalAaPass.h"
+#include "Engine/Renderer/Passes/TonemapPass.h"
+#include "Engine/Renderer/Passes/WaterPass.h"
+#include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
 #include "Engine/Renderer/RenderGraph/RenderGraph.h"
-#include "Engine/Input/Input.h"
+#include "Engine/Renderer/Textures/Texture2D.h"
+#include "Engine/Renderer/ViewportCamera.h"
+#include "Engine/Renderer/Vulkan/GpuTimestampProfiler.h"
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
+#include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
+#include "Engine/Renderer/Vulkan/buffer.h"
+#include "Engine/Renderer/Vulkan/depth_buffer.h"
+#include "Engine/Renderer/Vulkan/graphics_pipeline.h"
+#include "Engine/Renderer/Vulkan/hdr_buffer.h"
+#include "Engine/Renderer/Vulkan/msaa.h"
+#include "Engine/Renderer/Vulkan/swapchain.h"
+#include "Engine/Renderer/Vulkan/upload_context.h"
+#include "Engine/Renderer/Vulkan/vulkan_device.h"
+#include "Engine/Renderer/Water/VirtualWaterRenderer.h"
+#include "Engine/Renderer/Water/WaterSystem.h"
+#include "Engine/Renderer/shader_loader.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Scene/Scene.h"
+#include "Engine/Scene/TransformSystem.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/CanvasRenderer.h"
 #include "Engine/UI/PanelElement.h"
 #include "Platform/SDL/SDLInput.h"
 
-#include <cstdint>
 #include <array>
-#include <cassert>
 #include <bit>
 #include <bitset>
+#include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <glm/gtx/matrix_decompose.hpp>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <numbers>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -114,737 +117,536 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <filesystem>
-#include <optional>
-#include <memory>
-#include <numbers>
 
 namespace Engine {
-    using UniformBufferObject = RendererUniformBufferObject;
+using UniformBufferObject = RendererUniformBufferObject;
 
-    namespace {
-        struct DirectionalLight final {
-            Vec3 direction;
-            Math::Color color;
-            float intensity{};
-            bool enabled{};
-            bool castShadows{};
-        };
+namespace {
+struct DirectionalLight final {
+    Vec3 direction;
+    Math::Color color;
+    float intensity{};
+    bool enabled{};
+    bool castShadows{};
+};
 
-        struct WindFrameData final {
-            Vec4 directionStrength;
-            Vec4 sourcePositionRange;
-            Vec4 gustFrequencyTime;
-        };
+struct WindFrameData final {
+    Vec4 directionStrength;
+    Vec4 sourcePositionRange;
+    Vec4 gustFrequencyTime;
+};
 
+/** ECS-derived values shared by Game View and Scene View for one frame. */
+struct SceneFrameData final {
+    Entity primaryCamera{NullEntity};
+    DirectionalLight directionalLight{};
+    WindFrameData wind{};
+    std::array<LocalLightGPU, MaxLocalLights> lights{};
+    std::uint32_t lightCount{};
+};
+} // namespace
 
-        /** ECS-derived values shared by Game View and Scene View for one frame. */
-        struct SceneFrameData final {
-            Entity primaryCamera{NullEntity};
-            DirectionalLight directionalLight{};
-            WindFrameData wind{};
-            std::array<LocalLightGPU, MaxLocalLights> lights{};
-            std::uint32_t lightCount{};
-        };
-    }
+struct SceneFrameDataCache final {
+    SceneFrameData data{};
+    CameraComponent primaryCameraComponent{};
+    Vec3 primaryCameraPosition;
+    float primaryCameraYaw{};
+    float primaryCameraPitch{};
+    bool hasWind{};
+    bool initialized{};
+    std::uint64_t transformRevision{};
+    std::uint64_t lightRevision{};
+    std::uint64_t windRevision{};
+    std::uint64_t cameraRevision{};
+    std::uint64_t uuidRevision{};
+    std::uint64_t structuralRevision{};
+    std::unordered_map<UUID, Entity> entitiesByUuid;
+};
 
-    struct SceneFrameDataCache final {
-        SceneFrameData data{};
-        CameraComponent primaryCameraComponent{};
-        Vec3 primaryCameraPosition;
-        float primaryCameraYaw{};
-        float primaryCameraPitch{};
-        bool hasWind{};
-        bool initialized{};
-        std::uint64_t transformRevision{};
-        std::uint64_t lightRevision{};
-        std::uint64_t windRevision{};
-        std::uint64_t cameraRevision{};
-        std::uint64_t uuidRevision{};
-        std::uint64_t structuralRevision{};
-        std::unordered_map<UUID, Entity> entitiesByUuid;
-    };
-
-    constexpr uint32_t WIDTH = 800;
-    constexpr uint32_t HEIGHT = 600;
-    constexpr int MAX_FRAMES_IN_FLIGHT = 2;
-    constexpr float HALF_EXTENT_FACTOR = 0.5F;
-    constexpr float DEFAULT_SELECTION_RADIUS = 1.0F;
-    constexpr float SCENE_CAMERA_FOV_DEGREES = 60.0F;
-    constexpr float SCENE_CAMERA_ASPECT_RATIO = 1.0F;
-    constexpr float SCENE_CAMERA_NEAR_CLIP = 0.1F;
-    constexpr float SCENE_CAMERA_FAR_CLIP = 1000.0F;
-    constexpr float EDITOR_CAMERA_DISTANCE_MULTIPLIER = 3.0F;
+constexpr uint32_t WIDTH = 800;
+constexpr uint32_t HEIGHT = 600;
+constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+constexpr float HALF_EXTENT_FACTOR = 0.5F;
+constexpr float DEFAULT_SELECTION_RADIUS = 1.0F;
+constexpr float SCENE_CAMERA_FOV_DEGREES = 60.0F;
+constexpr float SCENE_CAMERA_ASPECT_RATIO = 1.0F;
+constexpr float SCENE_CAMERA_NEAR_CLIP = 0.1F;
+constexpr float SCENE_CAMERA_FAR_CLIP = 1000.0F;
+constexpr float EDITOR_CAMERA_DISTANCE_MULTIPLIER = 3.0F;
 
 #ifdef NDEBUG
-    constexpr bool enableValidationLayers = false;
+constexpr bool enableValidationLayers = false;
 #else
-    constexpr bool enableValidationLayers = true;
+constexpr bool enableValidationLayers = true;
 #endif
 
-    constexpr std::array<const char *, 1> validationLayers = {
-        "VK_LAYER_KHRONOS_validation",
-    };
+constexpr std::array<const char*, 1> validationLayers = {
+    "VK_LAYER_KHRONOS_validation",
+};
 
-    class Renderer::State {
-    public:
-        Assets::AssetManager assetManager{};
-        std::filesystem::path projectRoot;
-        ForwardPass forwardPass{};
-        SkyPass skyPass;
-        TonemapPass tonemapPass;
-        TemporalAaPass temporalAaPass;
-        BloomPass bloomPass;
-        GtaoPass gtaoPass;
-        GraphicsPipeline particlePipeline;
-        UI::CanvasRenderer canvasRenderer;
-    };
+class Renderer::State {
+  public:
+    Assets::AssetManager assetManager{};
+    std::filesystem::path projectRoot;
+    ForwardPass forwardPass{};
+    SkyPass skyPass;
+    TonemapPass tonemapPass;
+    TemporalAaPass temporalAaPass;
+    BloomPass bloomPass;
+    GtaoPass gtaoPass;
+    GraphicsPipeline particlePipeline;
+    UI::CanvasRenderer canvasRenderer;
+};
 
-    class Renderer::Backend {
-    public:
-        explicit Backend(Scene &scene, SDL_Window *window,
-                         const RenderOptimizationFeatures &optimizationFeatures,
-                         const RenderPath &renderPath,
-                         const AntialiasingLevel antialiasingLevel,
-                         const ShadowQuality &shadowQuality,
-                         const RtContactShadowSettings &rtContactShadowSettings,
-                         const GtaoQuality &gtaoQuality, const GtaoDebugView &gtaoDebugView,
-                         const PbrDebugView &pbrDebugView,
-                         const IblQuality &iblQuality,
-                         const ShadowDebugView &shadowDebugView,
-                         const GrassRenderSettings &grassSettings,
-                         std::filesystem::path projectRoot,
-                         Assets::AssetManager &assetManager,
-                         ForwardPass &forwardPass,
-                         SkyPass &skyPass,
-                         TonemapPass &tonemapPass,
-                         TemporalAaPass &temporalAaPass,
-                         BloomPass &bloomPass,
-                         GtaoPass &gtaoPass,
-                         GraphicsPipeline &particlePipeline,
-                         UI::CanvasRenderer &canvasRenderer,
-                         EditorUiBackend *editorUiBackend)
-            : window(window), forwardPass(forwardPass),
-              particlePipeline(particlePipeline),
-              skyPass(skyPass),
-              tonemapPass(tonemapPass),
-              temporalAaPass(temporalAaPass),
-              bloomPass(bloomPass),
-              gtaoPass(gtaoPass),
-              canvasRenderer(canvasRenderer),
-              editorUiBackend(editorUiBackend),
-              projectRoot(std::move(projectRoot)),
-              scene(scene),
-              registry(scene.registry()),
-              optimizationFeatures(optimizationFeatures),
-              renderPath(renderPath),
-              antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality), rtContactShadowSettings(rtContactShadowSettings), gtaoQuality(gtaoQuality),
-              gtaoDebugView(gtaoDebugView), pbrDebugView(pbrDebugView), iblQuality(iblQuality),
-              shadowDebugView(shadowDebugView),
-              configuredGtaoQuality(gtaoQuality),
-              grassSettings(grassSettings),
-              assetManager(assetManager),
-              renderables(sceneGpu.renderables),
-              instanceBatches(sceneGpu.instanceBatches),
-              instanceModels(sceneGpu.instanceModels),
-              previousInstanceTransforms(sceneGpu.previousInstanceTransforms),
-              materials(sceneGpu.materials),
-              materialSlots(sceneGpu.materialSlots),
-              lastTransformRevision(sceneGpu.lastTransformRevision),
-              lastMeshRendererRevision(sceneGpu.lastMeshRendererRevision),
-              lastTerrainGrassRevision(sceneGpu.lastTerrainGrassRevision),
-              lastParentRevision(sceneGpu.lastParentRevision),
-              dirtyTransforms(sceneGpu.dirtyTransforms),
-              dirtyMaterials(sceneGpu.dirtyMaterials),
-              dirtyCullingObjects(sceneGpu.dirtyCullingObjects),
-              sceneCenter(sceneGpu.sceneCenter),
-              sceneRadius(sceneGpu.sceneRadius),
-              hasShadowCasters(sceneGpu.hasShadowCasters) {
+class Renderer::Backend {
+  public:
+    explicit Backend(Scene& scene, SDL_Window* window, const RenderOptimizationFeatures& optimizationFeatures,
+                     const RenderPath& renderPath, const AntialiasingLevel antialiasingLevel,
+                     const ShadowQuality& shadowQuality, const RtContactShadowSettings& rtContactShadowSettings,
+                     const GtaoQuality& gtaoQuality, const GtaoDebugView& gtaoDebugView,
+                     const PbrDebugView& pbrDebugView, const IblQuality& iblQuality,
+                     const ShadowDebugView& shadowDebugView, const GrassRenderSettings& grassSettings,
+                     std::filesystem::path projectRoot, Assets::AssetManager& assetManager, ForwardPass& forwardPass,
+                     SkyPass& skyPass, TonemapPass& tonemapPass, TemporalAaPass& temporalAaPass, BloomPass& bloomPass,
+                     GtaoPass& gtaoPass, GraphicsPipeline& particlePipeline, UI::CanvasRenderer& canvasRenderer,
+                     EditorUiBackend* editorUiBackend)
+        : window(window), forwardPass(forwardPass), particlePipeline(particlePipeline), skyPass(skyPass),
+          tonemapPass(tonemapPass), temporalAaPass(temporalAaPass), bloomPass(bloomPass), gtaoPass(gtaoPass),
+          canvasRenderer(canvasRenderer), editorUiBackend(editorUiBackend), projectRoot(std::move(projectRoot)),
+          scene(scene), registry(scene.registry()), optimizationFeatures(optimizationFeatures), renderPath(renderPath),
+          antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality),
+          rtContactShadowSettings(rtContactShadowSettings), gtaoQuality(gtaoQuality), gtaoDebugView(gtaoDebugView),
+          pbrDebugView(pbrDebugView), iblQuality(iblQuality), shadowDebugView(shadowDebugView),
+          configuredGtaoQuality(gtaoQuality), grassSettings(grassSettings), assetManager(assetManager),
+          renderables(sceneGpu.renderables), instanceBatches(sceneGpu.instanceBatches),
+          instanceModels(sceneGpu.instanceModels), previousInstanceTransforms(sceneGpu.previousInstanceTransforms),
+          materials(sceneGpu.materials), materialSlots(sceneGpu.materialSlots),
+          lastTransformRevision(sceneGpu.lastTransformRevision),
+          lastMeshRendererRevision(sceneGpu.lastMeshRendererRevision),
+          lastTerrainGrassRevision(sceneGpu.lastTerrainGrassRevision), lastParentRevision(sceneGpu.lastParentRevision),
+          dirtyTransforms(sceneGpu.dirtyTransforms), dirtyMaterials(sceneGpu.dirtyMaterials),
+          dirtyCullingObjects(sceneGpu.dirtyCullingObjects), sceneCenter(sceneGpu.sceneCenter),
+          sceneRadius(sceneGpu.sceneRadius), hasShadowCasters(sceneGpu.hasShadowCasters) {}
+
+    ~Backend() {
+        static_cast<void>(Input::setCursorMode(CursorMode::Normal));
+        SDLInput::setWindow(nullptr);
+        cleanup();
+    }
+
+    void initializeCore() {
+        initWindow();
+        SDLInput::setWindow(window);
+        initVulkanCore();
+        Time::init();
+    }
+
+    void initializeSceneResources(const Scene& updatedScene) {
+        if (&updatedScene != &scene) {
+            throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
         }
-
-        ~Backend() {
-            static_cast<void>(Input::setCursorMode(CursorMode::Normal));
-            SDLInput::setWindow(nullptr);
-            cleanup();
+        if (sceneResourcesInitialized) {
+            return;
         }
+        initSceneResources();
+        pipelineCache.save();
+        sceneResourcesInitialized = true;
+    }
 
-        void initializeCore() {
-            initWindow();
-            SDLInput::setWindow(window);
-            initVulkanCore();
-            Time::init();
-        }
+    [[nodiscard]] bool sceneResourcesReady() const noexcept {
+        return sceneResourcesInitialized;
+    }
 
-        void initializeSceneResources(const Scene &updatedScene) {
-            if (&updatedScene != &scene) {
-                throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
-            }
-            if (sceneResourcesInitialized) {
+    [[nodiscard]] std::optional<GpuProfileFrame> gpuProfile() const noexcept {
+        return gpuTimestampProfiler.hasCompletedFrame() ? std::optional{lastGpuProfile} : std::nullopt;
+    }
+
+    [[nodiscard]] std::vector<GpuMemoryHeapBudget> gpuMemoryHeaps() const {
+        return vulkanDevice.memoryBudgetManager().heaps();
+    }
+
+    [[nodiscard]] std::vector<GpuMemoryCategoryBudget> gpuMemoryCategories() const {
+        return vulkanDevice.memoryBudgetManager().categories();
+    }
+
+    [[nodiscard]] std::vector<GpuSceneMemoryAllocation> gpuSceneMemory() const {
+        std::vector<GpuSceneMemoryAllocation> result;
+        const auto append = [&](const char* table, const Buffer& buffer) {
+            if (buffer.handle() == VK_NULL_HANDLE) {
                 return;
             }
-            initSceneResources();
-            pipelineCache.save();
-            sceneResourcesInitialized = true;
+            const Buffer::MemoryInfo info = buffer.memoryInfo(vulkanDevice.physical());
+            constexpr VkMemoryPropertyFlags deviceLocal = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+            constexpr VkMemoryPropertyFlags hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+            constexpr VkMemoryPropertyFlags hostCoherent = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            result.push_back({
+                table,
+                info.heapIndex,
+                (info.properties & deviceLocal) != 0,
+                (info.properties & hostVisible) != 0,
+                (info.properties & hostCoherent) != 0,
+                info.bytes,
+            });
+        };
+        for (const auto& allocation : glassPass.memoryAllocations())
+            result.push_back(allocation);
+        for (const auto& allocation : sceneGlassPass.memoryAllocations())
+            result.push_back(allocation);
+        append("Instances", gpuSceneInstanceBuffers[currentFrame]);
+        append("Meshes", gpuSceneMeshBuffers[currentFrame]);
+        append("Materials", gpuSceneMaterialBuffers[currentFrame]);
+        append("Frame instances", instanceBuffers[currentFrame]);
+        append("Previous transforms", previousTransformBuffers[currentFrame]);
+        append("Frame materials", materialBuffers[currentFrame]);
+        const Buffer::MemoryInfo pageTableInfo = shadowPass.pageTableMemoryInfo(currentFrame, vulkanDevice.physical());
+        if (pageTableInfo.bytes != 0) {
+            result.push_back({"VSM page table", pageTableInfo.heapIndex,
+                              (pageTableInfo.properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0,
+                              (pageTableInfo.properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0,
+                              (pageTableInfo.properties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0,
+                              pageTableInfo.bytes});
         }
+        return result;
+    }
 
-        [[nodiscard]] bool sceneResourcesReady() const noexcept { return sceneResourcesInitialized; }
+    static void beginFrame() {
+        Input::beginFrame();
+    }
 
-        [[nodiscard]] std::optional<GpuProfileFrame> gpuProfile() const noexcept {
-            return gpuTimestampProfiler.hasCompletedFrame() ? std::optional{lastGpuProfile} : std::nullopt;
-        }
-
-        [[nodiscard]] std::vector<GpuMemoryHeapBudget> gpuMemoryHeaps() const {
-            return vulkanDevice.memoryBudgetManager().heaps();
-        }
-
-        [[nodiscard]] std::vector<GpuMemoryCategoryBudget> gpuMemoryCategories() const {
-            return vulkanDevice.memoryBudgetManager().categories();
-        }
-
-        [[nodiscard]] std::vector<GpuSceneMemoryAllocation> gpuSceneMemory() const {
-            std::vector<GpuSceneMemoryAllocation> result;
-            const auto append = [&](const char *table, const Buffer &buffer) {
-                if (buffer.handle() == VK_NULL_HANDLE) {
-                    return;
-                }
-                const Buffer::MemoryInfo info = buffer.memoryInfo(vulkanDevice.physical());
-                constexpr VkMemoryPropertyFlags deviceLocal = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-                constexpr VkMemoryPropertyFlags hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-                constexpr VkMemoryPropertyFlags hostCoherent = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-                result.push_back({
-                    table, info.heapIndex, (info.properties & deviceLocal) != 0,
-                    (info.properties & hostVisible) != 0, (info.properties & hostCoherent) != 0, info.bytes,
-                });
-            };
-            for (const auto &allocation : glassPass.memoryAllocations()) result.push_back(allocation);
-            for (const auto &allocation : sceneGlassPass.memoryAllocations()) result.push_back(allocation);
-            append("Instances", gpuSceneInstanceBuffers[currentFrame]);
-            append("Meshes", gpuSceneMeshBuffers[currentFrame]);
-            append("Materials", gpuSceneMaterialBuffers[currentFrame]);
-            append("Frame instances", instanceBuffers[currentFrame]);
-            append("Previous transforms", previousTransformBuffers[currentFrame]);
-            append("Frame materials", materialBuffers[currentFrame]);
-            const Buffer::MemoryInfo pageTableInfo =
-                shadowPass.pageTableMemoryInfo(currentFrame, vulkanDevice.physical());
-            if (pageTableInfo.bytes != 0) {
-                result.push_back({"VSM page table", pageTableInfo.heapIndex,
-                    (pageTableInfo.properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0,
-                    (pageTableInfo.properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0,
-                    (pageTableInfo.properties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0,
-                    pageTableInfo.bytes});
+    EditorEventState pollEditorEvents() {
+        EditorEventState result{};
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            const bool mouseEvent = event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                                    event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_MOUSE_WHEEL;
+            // While Play Mode owns the mouse, do not let the hidden
+            // cursor activate editor controls below it.  The matching
+            // button-up event still reaches ImGui so it cannot retain a
+            // stuck right-button state after the cursor is released.
+            const bool mouseButtonReleased = event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+            if (editorUiActive && editorUiBackend &&
+                (!mouseEvent || Input::cursorMode() != CursorMode::Locked || mouseButtonReleased)) {
+                editorUiBackend->processEvent(&event);
             }
-            return result;
-        }
-
-        static void beginFrame() { Input::beginFrame(); }
-
-        EditorEventState pollEditorEvents() {
-            EditorEventState result{};
-            SDL_Event event;
-            while (SDL_PollEvent(&event)) {
-                const bool mouseEvent = event.type == SDL_EVENT_MOUSE_MOTION ||
-                                        event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
-                                        event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
-                                        event.type == SDL_EVENT_MOUSE_WHEEL;
-                // While Play Mode owns the mouse, do not let the hidden
-                // cursor activate editor controls below it.  The matching
-                // button-up event still reaches ImGui so it cannot retain a
-                // stuck right-button state after the cursor is released.
-                const bool mouseButtonReleased = event.type == SDL_EVENT_MOUSE_BUTTON_UP;
-                if (editorUiActive && editorUiBackend &&
-                    (!mouseEvent || Input::cursorMode() != CursorMode::Locked || mouseButtonReleased)) {
-                    editorUiBackend->processEvent(&event);
-                }
-                processEvent(event);
-                if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE &&
-                    Input::cursorMode() == CursorMode::Locked) {
-                    static_cast<void>(Input::setCursorMode(CursorMode::Normal));
-                }
-                if (event.type == SDL_EVENT_QUIT ||
-                    (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-                     event.window.windowID == SDL_GetWindowID(window))) {
-                    result.quitRequested = true;
-                }
-                if (event.type == SDL_EVENT_KEY_DOWN &&
-                    (!editorUiBackend || !editorUiBackend->wantsTextInput())) {
-                    if (event.key.key == SDLK_F5) {
-                        result.togglePlay = true;
-                    }
-                    if (event.key.key == SDLK_F6) {
-                        result.togglePause = true;
-                    }
-                }
-            }
-            return result;
-        }
-
-        void beginEditorUiFrame() {
-            if (!editorUiActive || !editorUiBackend) return;
-            applyPendingSceneViewportResize();
-            editorUiBackend->newFrame();
-        }
-
-        [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept {
-            // Scene View temporarily suppresses the Game View TAA resolve.
-            // In that case the temporal history has not been written or
-            // transitioned yet, so ImGui must keep sampling the HDR target.
-            if (taaResolveActive) {
-                const VkDescriptorSet descriptor =
-                        gameViewportTemporalDescriptors[temporalAaPass.nextResolvedIndex()];
-                if (descriptor != VK_NULL_HANDLE) {
-                    return descriptor;
-                }
-            }
-            return gameViewportDescriptor;
-        }
-
-        [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept { return sceneViewportDescriptor; }
-        [[nodiscard]] float editorCameraYaw() const noexcept { return cameraController.editorYaw(); }
-        [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }
-        [[nodiscard]] Vec3 editorCameraPosition() const noexcept { return cameraController.editorPosition(); }
-
-        [[nodiscard]] glm::mat4 worldModel(const Entity entity) const noexcept {
-            const Registry &readRegistry = registry;
-            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) {
-                return glm::mat4{1.0F};
-            }
-            return readRegistry.get<Transform>(entity).worldMatrix().native();
-        }
-
-        [[nodiscard]] Vec3 editorGizmoPosition(const Entity entity) const noexcept {
-            const Registry &readRegistry = registry;
-            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) {
-                return {};
-            }
-
-            try {
-                const glm::mat4 model = worldModel(entity);
-                for (const RenderableRecord &record: renderables) {
-                    if (record.entity != entity) {
-                        continue;
-                    }
-                    const AABB bounds = record.localBounds.transformed(model);
-                    return Vec3{(bounds.min.native() + bounds.max.native()) * HALF_EXTENT_FACTOR};
-                }
-                return Vec3{glm::vec3{model[3]}};
-            } catch (const std::out_of_range &) {
-                return {};
-            }
-        }
-
-        void setEditorCameraRotation(const float yaw, const float pitch) noexcept {
-            cameraController.setEditorRotation(yaw, pitch);
-            sceneViewportNeedsRender = true;
-        }
-
-        void setEditorCameraPosition(const Vec3 position) noexcept {
-            cameraController.setEditorPosition(position);
-            sceneViewportNeedsRender = true;
-        }
-
-        void setSceneViewportActive(const bool active) noexcept {
-            const bool wasActive = sceneViewportActive;
-            sceneViewportActive = active;
-            // Returning to the panel must never show an uninitialized or stale
-            // cache after it was hidden while the scene changed.
-            if (active && !wasActive) {
-                sceneViewportNeedsRender = true;
-            }
-        }
-
-        void markRenderSettingsChanged() noexcept {
-            ++renderSettingsRevision;
-        }
-
-        void setSceneViewportExtent(const std::uint32_t width, const std::uint32_t height) noexcept {
-            if (width != 0 && height != 0) {
-                requestedSceneViewportExtent = {width, height};
-            }
-        }
-
-        void processEvent(const SDL_Event &event) {
-            SDLInput::processEvent(event);
-            if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED &&
-                event.window.windowID == SDL_GetWindowID(window)) {
-                swapchain.logPresentationState();
-            }
-            if (event.type == SDL_EVENT_WINDOW_RESIZED ||
-                event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-                framebufferResized = true;
-            }
-        }
-
-        void setEditorSceneCameraInput(const bool active) {
-            cameraController.setEditorInputEnabled(active);
-        }
-
-        void setGameCameraInput(const bool active) {
-            const bool wasActive = cameraController.gameInputEnabled();
-            cameraController.setGameInputEnabled(active);
-            if (wasActive && !active) {
+            processEvent(event);
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE &&
+                Input::cursorMode() == CursorMode::Locked) {
                 static_cast<void>(Input::setCursorMode(CursorMode::Normal));
             }
+            if (event.type == SDL_EVENT_QUIT ||
+                (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window))) {
+                result.quitRequested = true;
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN && (!editorUiBackend || !editorUiBackend->wantsTextInput())) {
+                if (event.key.key == SDLK_F5) {
+                    result.togglePlay = true;
+                }
+                if (event.key.key == SDLK_F6) {
+                    result.togglePause = true;
+                }
+            }
+        }
+        return result;
+    }
+
+    void beginEditorUiFrame() {
+        if (!editorUiActive || !editorUiBackend)
+            return;
+        applyPendingSceneViewportResize();
+        editorUiBackend->newFrame();
+    }
+
+    [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept {
+        // Scene View temporarily suppresses the Game View TAA resolve.
+        // In that case the temporal history has not been written or
+        // transitioned yet, so ImGui must keep sampling the HDR target.
+        if (taaResolveActive) {
+            const VkDescriptorSet descriptor = gameViewportTemporalDescriptors[temporalAaPass.nextResolvedIndex()];
+            if (descriptor != VK_NULL_HANDLE) {
+                return descriptor;
+            }
+        }
+        return gameViewportDescriptor;
+    }
+
+    [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept {
+        return sceneViewportDescriptor;
+    }
+    [[nodiscard]] float editorCameraYaw() const noexcept {
+        return cameraController.editorYaw();
+    }
+    [[nodiscard]] float editorCameraPitch() const noexcept {
+        return cameraController.editorPitch();
+    }
+    [[nodiscard]] Vec3 editorCameraPosition() const noexcept {
+        return cameraController.editorPosition();
+    }
+
+    [[nodiscard]] glm::mat4 worldModel(const Entity entity) const noexcept {
+        const Registry& readRegistry = registry;
+        if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) {
+            return glm::mat4{1.0F};
+        }
+        return readRegistry.get<Transform>(entity).worldMatrix().native();
+    }
+
+    [[nodiscard]] Vec3 editorGizmoPosition(const Entity entity) const noexcept {
+        const Registry& readRegistry = registry;
+        if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) {
+            return {};
         }
 
-        void setEditorSelection(const Entity entity) {
+        try {
+            const glm::mat4 model = worldModel(entity);
+            for (const RenderableRecord& record : renderables) {
+                if (record.entity != entity) {
+                    continue;
+                }
+                const AABB bounds = record.localBounds.transformed(model);
+                return Vec3{(bounds.min.native() + bounds.max.native()) * HALF_EXTENT_FACTOR};
+            }
+            return Vec3{glm::vec3{model[3]}};
+        } catch (const std::out_of_range&) {
+            return {};
+        }
+    }
+
+    void setEditorCameraRotation(const float yaw, const float pitch) noexcept {
+        cameraController.setEditorRotation(yaw, pitch);
+        sceneViewportNeedsRender = true;
+    }
+
+    void setEditorCameraPosition(const Vec3 position) noexcept {
+        cameraController.setEditorPosition(position);
+        sceneViewportNeedsRender = true;
+    }
+
+    void setSceneViewportActive(const bool active) noexcept {
+        const bool wasActive = sceneViewportActive;
+        sceneViewportActive = active;
+        // Returning to the panel must never show an uninitialized or stale
+        // cache after it was hidden while the scene changed.
+        if (active && !wasActive) {
             sceneViewportNeedsRender = true;
-            editorSelectedEntity = entity;
-            editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
-            for (std::size_t index = 0; index < renderables.size(); ++index) {
-                if (renderables[index].entity == entity) {
-                    editorSelectedRenderable = static_cast<std::uint32_t>(index);
-                    break;
-                }
-            }
+        }
+    }
 
-            // Selection is a read-only editor operation. Use a const view of
-            // the registry so Registry::get() does not advance the scene
-            // mutation revision and trigger a full renderer reload.
-            const Registry &readRegistry = registry;
-            if (!readRegistry.has<Transform>(entity)) { return; }
-            Vec3 target = Vec3{glm::vec3{worldModel(entity)[3]}};
-            float radius = DEFAULT_SELECTION_RADIUS;
-            if (editorSelectedRenderable != std::numeric_limits<std::uint32_t>::max()) {
-                const RenderableRecord &record = renderables[editorSelectedRenderable];
-                const AABB bounds = record.localBounds.transformed(
-                    worldModel(entity));
-                target = Vec3{(bounds.min.native() + bounds.max.native()) * HALF_EXTENT_FACTOR};
-                radius = std::max(glm::length(bounds.max.native() - bounds.min.native()) * HALF_EXTENT_FACTOR,
-                                  DEFAULT_SELECTION_RADIUS);
-            }
+    void markRenderSettingsChanged() noexcept {
+        ++renderSettingsRevision;
+    }
 
-            Camera sceneCamera{
-                Degrees{SCENE_CAMERA_FOV_DEGREES}, SCENE_CAMERA_ASPECT_RATIO,
-                SCENE_CAMERA_NEAR_CLIP, SCENE_CAMERA_FAR_CLIP
-            };
-            sceneCamera.setPosition(cameraController.editorPosition());
-            sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
-                                    Degrees{cameraController.editorPitch()});
-            cameraController.setEditorPosition(
-                target - sceneCamera.forward() * (radius * EDITOR_CAMERA_DISTANCE_MULTIPLIER));
+    void setSceneViewportExtent(const std::uint32_t width, const std::uint32_t height) noexcept {
+        if (width != 0 && height != 0) {
+            requestedSceneViewportExtent = {width, height};
+        }
+    }
+
+    void processEvent(const SDL_Event& event) {
+        SDLInput::processEvent(event);
+        if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED && event.window.windowID == SDL_GetWindowID(window)) {
+            swapchain.logPresentationState();
+        }
+        if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+            framebufferResized = true;
+        }
+    }
+
+    void setEditorSceneCameraInput(const bool active) {
+        cameraController.setEditorInputEnabled(active);
+    }
+
+    void setGameCameraInput(const bool active) {
+        const bool wasActive = cameraController.gameInputEnabled();
+        cameraController.setGameInputEnabled(active);
+        if (wasActive && !active) {
+            static_cast<void>(Input::setCursorMode(CursorMode::Normal));
+        }
+    }
+
+    void setEditorSelection(const Entity entity) {
+        sceneViewportNeedsRender = true;
+        editorSelectedEntity = entity;
+        editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
+        for (std::size_t index = 0; index < renderables.size(); ++index) {
+            if (renderables[index].entity == entity) {
+                editorSelectedRenderable = static_cast<std::uint32_t>(index);
+                break;
+            }
         }
 
-        void renderFrame() {
-            if (!sceneResourcesInitialized) {
-                Time::update();
-                drawCoreFrame();
-                return;
-            }
+        // Selection is a read-only editor operation. Use a const view of
+        // the registry so Registry::get() does not advance the scene
+        // mutation revision and trigger a full renderer reload.
+        const Registry& readRegistry = registry;
+        if (!readRegistry.has<Transform>(entity)) {
+            return;
+        }
+        Vec3 target = Vec3{glm::vec3{worldModel(entity)[3]}};
+        float radius = DEFAULT_SELECTION_RADIUS;
+        if (editorSelectedRenderable != std::numeric_limits<std::uint32_t>::max()) {
+            const RenderableRecord& record = renderables[editorSelectedRenderable];
+            const AABB bounds = record.localBounds.transformed(worldModel(entity));
+            target = Vec3{(bounds.min.native() + bounds.max.native()) * HALF_EXTENT_FACTOR};
+            radius = std::max(glm::length(bounds.max.native() - bounds.min.native()) * HALF_EXTENT_FACTOR,
+                              DEFAULT_SELECTION_RADIUS);
+        }
+
+        Camera sceneCamera{Degrees{SCENE_CAMERA_FOV_DEGREES}, SCENE_CAMERA_ASPECT_RATIO, SCENE_CAMERA_NEAR_CLIP,
+                           SCENE_CAMERA_FAR_CLIP};
+        sceneCamera.setPosition(cameraController.editorPosition());
+        sceneCamera.setRotation(Degrees{cameraController.editorYaw()}, Degrees{cameraController.editorPitch()});
+        cameraController.setEditorPosition(target -
+                                           sceneCamera.forward() * (radius * EDITOR_CAMERA_DISTANCE_MULTIPLIER));
+    }
+
+    void renderFrame() {
+        if (!sceneResourcesInitialized) {
             Time::update();
-            // Scene View navigation is updated before the editor UI so its
-            // rendered image and gizmo overlay use the same camera state.
-            // The game camera remains a render-frame concern.
-            if (!cameraController.editorInputEnabled()) {
-                updateCameraInput();
-            }
-            // Camera input modifies local transforms; resolve them before
-            // collecting cached camera/light frame data for this frame.
-            TransformSystem::update(registry);
-            updateFpsCounter();
-            // Gameplay can replace meshes after the editor's UI change check.
-            // Retire and rebuild stale batches before drawFrame dereferences
-            // their MeshGpuResource identities (loaded panes may release them).
-            synchronizeSceneResources(scene);
-            synchronizeGlassAtlasSlots();
-            if (glassPass.needsCrackAtlasResize(glassAtlasPaneCount) ||
-                sceneGlassPass.needsCrackAtlasResize(glassAtlasPaneCount)) {
-                waitForGlobalResourceRebuild();
-                glassPass.resizeCrackAtlas(glassAtlasPaneCount);
-                sceneGlassPass.resizeCrackAtlas(glassAtlasPaneCount);
-                sceneViewportNeedsRender=true;
-            }
-            drawFrame();
+            drawCoreFrame();
+            return;
         }
-
-        void waitIdle() const {
-            if (device != VK_NULL_HANDLE) {
-                vkDeviceWaitIdle(device);
-            }
+        Time::update();
+        // Scene View navigation is updated before the editor UI so its
+        // rendered image and gizmo overlay use the same camera state.
+        // The game camera remains a render-frame concern.
+        if (!cameraController.editorInputEnabled()) {
+            updateCameraInput();
         }
-
-        // Descriptor pools and scene-wide buffers are shared by every frame
-        // slot.  Waiting only for currentFrame is therefore insufficient
-        // before a Play/Stop snapshot or another global scene rebuild.
-        void waitForAllFrames() const {
-            if (device == VK_NULL_HANDLE || inFlightFences.empty()) {
-                return;
-            }
-            if (vkWaitForFences(device, static_cast<std::uint32_t>(inFlightFences.size()),
-                                inFlightFences.data(), VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
-                throw std::runtime_error("Could not synchronize all frames");
-            }
-        }
-
-        // Frame fences retire complete graphics submissions, including the
-        // async-compute chain when it is enabled.  A scene topology rebuild
-        // must wait for every frame slot that can still reference a replaced
-        // descriptor, texture, or scene table.
-        void waitForGlobalResourceRebuild() const {
-            if (device == VK_NULL_HANDLE) {
-                return;
-            }
-            // Do not use vkDeviceWaitIdle() here.  It also waits for work
-            // unrelated to the old scene generation and made an otherwise
-            // bounded topology edit look like a hung editor.  Retire the
-            // exact two classes of work that own scene resources instead.
-            Diagnostics::instance().report(
-                DiagnosticSeverity::Info,
-                "[SceneSync] waiting for frame/upload retirement before topology rebuild",
-                {.subsystem = "Renderer"});
-            Diagnostics::instance().flush();
-            const std::uint64_t uploadRetireValue = uploadContext.lastSubmittedValue();
-            waitForAllFrames();
-            if (uploadRetireValue != 0U) uploadContext.wait(uploadRetireValue);
-            Diagnostics::instance().report(
-                DiagnosticSeverity::Info,
-                "[SceneSync] frame/upload retirement complete",
-                {.subsystem = "Renderer"});
-            Diagnostics::instance().flush();
-        }
-
-        [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path &path) {
-            if (!sceneResourcesInitialized || device == VK_NULL_HANDLE || path.empty()) {
-                return false;
-            }
-            try {
-                waitIdle();
-                ImageBasedLighting replacement;
-                const auto runtimeRoot = projectRoot.empty() ? assetManager.asset_root() : projectRoot;
-                replacement.create(vulkanDevice.physical(), device, commandPool,
-                                   vulkanDevice.graphicsQueue(), vulkanDevice.allocator(), path,
-                                   runtimeRoot / "Library");
-                imageBasedLighting.swap(replacement);
-                sceneFrameDataCache.initialized = false;
-                const auto descriptors = imageBasedLighting.descriptors();
-                shadowPass.updateImageBasedLightingDescriptors(descriptors);
-                sceneDescriptorPass.updateImageBasedLightingDescriptors(descriptors);
-                const auto environment = imageBasedLighting.environmentDescriptor();
-                skyPass.setEnvironment(environment);
-                sceneSkyPass.setEnvironment(environment);
-                environmentEquirectangularPath = path;
-                sceneViewportNeedsRender = true;
-                return true;
-            } catch (const std::exception &exception) {
-                std::cerr << "[Renderer] Could not rebuild environment IBL: " << exception.what() << '\n';
-                return false;
-            }
-        }
-
-        void bakeReflectionProbe(const Entity entity) {
-            if (sceneResourcesInitialized) {
-                reflectionProbeManager.bakeProbe(entity);
-            }
-        }
-
-        [[nodiscard]] bool reloadShaders() {
-            if (device == VK_NULL_HANDLE || !sceneResourcesInitialized) {
-                return false;
-            }
-
-            // Validate every newly copied module before touching a live
-            // pipeline.  A malformed SPIR-V file (for example an interrupted
-            // copy) therefore leaves the complete active renderer intact.
-            try {
-                const auto shaderDirectory = assetManager.asset_root() / "shaders";
-                for (const auto &entry: std::filesystem::directory_iterator(shaderDirectory)) {
-                    if (entry.is_regular_file() && entry.path().extension() == ".spv") {
-                        static_cast<void>(Vkutil::loadShaderModule(device, assetManager, entry.path()));
-                    }
-                }
-            } catch (const std::exception &exception) {
-                std::cerr << "[Renderer] Shader validation failed: " << exception.what() << '\n';
-                return false;
-            }
-
-            // A hot reload is an infrequent editor operation.  Waiting here
-            // makes every old pipeline safe to release, while deliberately
-            // retaining the Vulkan instance, swapchain, ImGui backend, scene
-            // geometry and viewport images.
-            vkDeviceWaitIdle(device);
-            try {
-                tonemapPass.destroy();
-                temporalAaPass.destroy();
-                bloomPass.destroy();
-                destroyVelocityResources();
-                if (hdrFramebuffer != VK_NULL_HANDLE) {
-                    vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
-                    hdrFramebuffer = VK_NULL_HANDLE;
-                }
-                destroySceneViewportFramebuffer();
-
-                canvasRenderer.destroy();
-                particlePipeline.destroy();
-                sceneParticlePipeline.destroy();
-                if (particleComputePipeline != VK_NULL_HANDLE) {
-                    vkDestroyPipeline(device, particleComputePipeline, nullptr);
-                    particleComputePipeline = VK_NULL_HANDLE;
-                }
-                if (particleComputePipelineLayout != VK_NULL_HANDLE) {
-                    vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
-                    particleComputePipelineLayout = VK_NULL_HANDLE;
-                }
-                skyPass.destroy();
-                sceneSkyPass.destroy();
-                sceneViewportForwardPass.destroy();
-                forwardPass.destroy();
-                shadowPass.destroy();
-                sceneDescriptorPass.destroy();
-                destroyCullingResources();
-
-                createCullingResources();
-                createShadowPass();
-                createSceneDescriptorPass();
-                createForwardPass();
-                createSceneViewportForwardPass();
-                createParticleResources();
-                createSkyPass();
-                createSceneSkyPass();
-                createFramebuffers();
-                createSceneViewportFramebuffer();
-                createTemporalAaPass();
-                createBloomPass();
-                createTonemapPass();
-                createUIResources();
-                refreshEditorViewportTextures();
-                sceneViewportCacheValid = false;
-                sceneViewportImageInitialized = false;
-                sceneViewportNeedsRender = true;
-                assetManager.unload_unused();
-                return true;
-            } catch (const std::exception &exception) {
-                std::cerr << "[Renderer] Shader reload failed: " << exception.what() << '\n';
-                return false;
-            }
-        }
-
-        // Rebuild only registry-derived GPU data. The instance, device,
-        // swapchain and ImGui backend survive ordinary editor scene changes.
-        void addWaterInteraction(const Vec3& worldPosition, const float radius, const float strength) {
-            virtualWaterRenderer.queueInteraction(worldPosition, radius, strength);
-        }
-
-        void reloadSceneResources(const Scene &updatedScene) {
-            if (&updatedScene != &scene) {
-                throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
-            }
-            if (device == VK_NULL_HANDLE) {
-                return;
-            }
-            // A scene snapshot replaces descriptor sets and buffers consumed
-            // by graphics, transfer and dedicated compute submissions. Frame
-            // fences cover presentation, but not every one-shot or async
-            // submission, so retire the entire device before releasing these
-            // shared resources.
+        // Camera input modifies local transforms; resolve them before
+        // collecting cached camera/light frame data for this frame.
+        TransformSystem::update(registry);
+        updateFpsCounter();
+        // Gameplay can replace meshes after the editor's UI change check.
+        // Retire and rebuild stale batches before drawFrame dereferences
+        // their MeshGpuResource identities (loaded panes may release them).
+        synchronizeSceneResources(scene);
+        synchronizeGlassAtlasSlots();
+        if (glassPass.needsCrackAtlasResize(glassAtlasPaneCount) ||
+            sceneGlassPass.needsCrackAtlasResize(glassAtlasPaneCount)) {
             waitForGlobalResourceRebuild();
+            glassPass.resizeCrackAtlas(glassAtlasPaneCount);
+            sceneGlassPass.resizeCrackAtlas(glassAtlasPaneCount);
+            sceneViewportNeedsRender = true;
+        }
+        drawFrame();
+    }
 
-            destroyCullingResources();
+    void waitIdle() const {
+        if (device != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(device);
+        }
+    }
+
+    // Descriptor pools and scene-wide buffers are shared by every frame
+    // slot.  Waiting only for currentFrame is therefore insufficient
+    // before a Play/Stop snapshot or another global scene rebuild.
+    void waitForAllFrames() const {
+        if (device == VK_NULL_HANDLE || inFlightFences.empty()) {
+            return;
+        }
+        if (vkWaitForFences(device, static_cast<std::uint32_t>(inFlightFences.size()), inFlightFences.data(), VK_TRUE,
+                            UINT64_MAX) != VK_SUCCESS) {
+            throw std::runtime_error("Could not synchronize all frames");
+        }
+    }
+
+    // Frame fences retire complete graphics submissions, including the
+    // async-compute chain when it is enabled.  A scene topology rebuild
+    // must wait for every frame slot that can still reference a replaced
+    // descriptor, texture, or scene table.
+    void waitForGlobalResourceRebuild() const {
+        if (device == VK_NULL_HANDLE) {
+            return;
+        }
+        // Do not use vkDeviceWaitIdle() here.  It also waits for work
+        // unrelated to the old scene generation and made an otherwise
+        // bounded topology edit look like a hung editor.  Retire the
+        // exact two classes of work that own scene resources instead.
+        Diagnostics::instance().report(DiagnosticSeverity::Info,
+                                       "[SceneSync] waiting for frame/upload retirement before topology rebuild",
+                                       {.subsystem = "Renderer"});
+        Diagnostics::instance().flush();
+        const std::uint64_t uploadRetireValue = uploadContext.lastSubmittedValue();
+        waitForAllFrames();
+        if (uploadRetireValue != 0U)
+            uploadContext.wait(uploadRetireValue);
+        Diagnostics::instance().report(DiagnosticSeverity::Info, "[SceneSync] frame/upload retirement complete",
+                                       {.subsystem = "Renderer"});
+        Diagnostics::instance().flush();
+    }
+
+    [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path& path) {
+        if (!sceneResourcesInitialized || device == VK_NULL_HANDLE || path.empty()) {
+            return false;
+        }
+        try {
+            waitIdle();
+            ImageBasedLighting replacement;
+            const auto runtimeRoot = projectRoot.empty() ? assetManager.asset_root() : projectRoot;
+            replacement.create(vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
+                               vulkanDevice.allocator(), path, runtimeRoot / "Library");
+            imageBasedLighting.swap(replacement);
+            sceneFrameDataCache.initialized = false;
+            const auto descriptors = imageBasedLighting.descriptors();
+            shadowPass.updateImageBasedLightingDescriptors(descriptors);
+            sceneDescriptorPass.updateImageBasedLightingDescriptors(descriptors);
+            const auto environment = imageBasedLighting.environmentDescriptor();
+            skyPass.setEnvironment(environment);
+            sceneSkyPass.setEnvironment(environment);
+            environmentEquirectangularPath = path;
+            sceneViewportNeedsRender = true;
+            return true;
+        } catch (const std::exception& exception) {
+            std::cerr << "[Renderer] Could not rebuild environment IBL: " << exception.what() << '\n';
+            return false;
+        }
+    }
+
+    void bakeReflectionProbe(const Entity entity) {
+        if (sceneResourcesInitialized) {
+            reflectionProbeManager.bakeProbe(entity);
+        }
+    }
+
+    [[nodiscard]] bool reloadShaders() {
+        if (device == VK_NULL_HANDLE || !sceneResourcesInitialized) {
+            return false;
+        }
+
+        // Validate every newly copied module before touching a live
+        // pipeline.  A malformed SPIR-V file (for example an interrupted
+        // copy) therefore leaves the complete active renderer intact.
+        try {
+            const auto shaderDirectory = assetManager.asset_root() / "shaders";
+            for (const auto& entry : std::filesystem::directory_iterator(shaderDirectory)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".spv") {
+                    static_cast<void>(Vkutil::loadShaderModule(device, assetManager, entry.path()));
+                }
+            }
+        } catch (const std::exception& exception) {
+            std::cerr << "[Renderer] Shader validation failed: " << exception.what() << '\n';
+            return false;
+        }
+
+        // A hot reload is an infrequent editor operation.  Waiting here
+        // makes every old pipeline safe to release, while deliberately
+        // retaining the Vulkan instance, swapchain, ImGui backend, scene
+        // geometry and viewport images.
+        vkDeviceWaitIdle(device);
+        try {
             tonemapPass.destroy();
             temporalAaPass.destroy();
             bloomPass.destroy();
             destroyVelocityResources();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
             }
-            hdrFramebuffer = VK_NULL_HANDLE;
-            if (lightingHdrFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
-            }
-            lightingHdrFramebuffer = VK_NULL_HANDLE;
-            if (waterHdrFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
-            }
-            waterHdrFramebuffer = VK_NULL_HANDLE;
-            destroySceneViewportResources();
+            destroySceneViewportFramebuffer();
+
+            canvasRenderer.destroy();
             particlePipeline.destroy();
             sceneParticlePipeline.destroy();
-            skyPass.destroy();
-            sceneSkyPass.destroy();
-            forwardPass.destroy();
-            virtualWaterRenderer.destroy();
-            lightingForwardPass.destroy();
-            waterPass.destroy();
-            // These passes retain descriptors for the frame UBO and VSM page
-            // table. A scene reload replaces both buffers even at the same extent.
-            rtContactShadowPass.destroy();
-            directionalVisibilityPass.destroy();
-            shadowPass.destroy();
-            sceneDescriptorPass.destroy();
-            indexBuffer.destroy();
-            vertexBuffer.destroy();
-            geometryHeapAllocations.clear();
-            geometryHeapVertexHighWater = 0;
-            geometryHeapIndexHighWater = 0;
-            sceneGpu.database.clear();
-            for (Buffer &buffer: instanceBuffers) {
-                buffer.destroy();
-            }
-            for (Buffer &buffer: materialBuffers) {
-                buffer.destroy();
-            }
-            for (Buffer &buffer: gpuSceneInstanceBuffers) {
-                buffer.destroy();
-            }
-            for (Buffer &buffer: gpuSceneMeshBuffers) {
-                buffer.destroy();
-            }
-            for (Buffer &buffer: gpuSceneMaterialBuffers) {
-                buffer.destroy();
-            }
-            for (Buffer &buffer: visibleInstanceBuffers) {
-                buffer.destroy();
-            }
-            for (Buffer &buffer: visibleInstanceCountBuffers) {
-                buffer.destroy();
-            }
-            for (Buffer &buffer: meshletCullDispatchBuffers) {
-                buffer.destroy();
-            }
-            for (Buffer &buffer: uniformBuffers) {
-                buffer.destroy();
-            }
-            for (auto& [id, resource] : textureGpuResources) {
-                (void)id;
-                resource.texture.destroy();
-            }
-            textureGpuResources.clear();
-            meshTextureIds.clear();
-            meshTextureSlots.clear();
-            nextMaterialTextureSlot = 1;
-            freeMaterialTextureSlots.clear();
-            materialTextureDescriptors.clear();
-            fallbackMaterialTexture.destroy();
-            imageBasedLighting.destroy();
-            renderables.clear();
-            instanceBatches.clear();
-            instanceModels.clear();
-            materials.clear();
-            for (auto &indices: dirtyTransforms) {
-                indices.clear();
-            }
-            for (auto &indices: dirtyMaterials) {
-                indices.clear();
-            }
-            for (auto &indices: dirtyCullingObjects) {
-                indices.clear();
-            }
-            lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
-            lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
-            lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
-            lastParentRevision = std::numeric_limits<std::uint64_t>::max();
-            hiZValid.fill(false);
-
-            // SceneSerializer replaces the Registry at the same address. Its
-            // revision numbers can match the previous Registry by coincidence.
-            sceneFrameDataCache = {};
-            reflectionProbeTableInitialized = false;
-            reflectionProbeBufferDirtyMask = (1U << MAX_FRAMES_IN_FLIGHT) - 1U;
-            shadowClipmapsValid = false;
-            sceneShadowClipmapsValid = false;
-
-            // The previous scene may have owned a particle system. Its GPU
-            // resources must not survive a registry replacement into a scene
-            // without a ParticleEmitterComponent.
-            particleSystem.reset();
             if (particleComputePipeline != VK_NULL_HANDLE) {
                 vkDestroyPipeline(device, particleComputePipeline, nullptr);
                 particleComputePipeline = VK_NULL_HANDLE;
@@ -853,275 +655,439 @@ namespace Engine {
                 vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
                 particleComputePipelineLayout = VK_NULL_HANDLE;
             }
+            skyPass.destroy();
+            sceneSkyPass.destroy();
+            sceneViewportForwardPass.destroy();
+            forwardPass.destroy();
+            shadowPass.destroy();
+            sceneDescriptorPass.destroy();
+            destroyCullingResources();
 
-            createMaterialTextures();
-            createImageBasedLighting();
-            createMeshBuffers();
-            createInstanceBuffer();
-            lastRenderTopologyRevision = registry.renderTopologyRevision();
-            lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
-            lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
-            createUniformBuffers();
-            createSceneUniformBuffers();
             createCullingResources();
             createShadowPass();
             createSceneDescriptorPass();
             createForwardPass();
-            createSkyPass();
-            createFramebuffers();
-            createSceneViewportResources();
+            createSceneViewportForwardPass();
             createParticleResources();
+            createSkyPass();
             createSceneSkyPass();
+            createFramebuffers();
+            createSceneViewportFramebuffer();
             createTemporalAaPass();
             createBloomPass();
             createTonemapPass();
+            createUIResources();
             refreshEditorViewportTextures();
             sceneViewportCacheValid = false;
             sceneViewportImageInitialized = false;
             sceneViewportNeedsRender = true;
             assetManager.unload_unused();
+            return true;
+        } catch (const std::exception& exception) {
+            std::cerr << "[Renderer] Shader reload failed: " << exception.what() << '\n';
+            return false;
+        }
+    }
+
+    // Rebuild only registry-derived GPU data. The instance, device,
+    // swapchain and ImGui backend survive ordinary editor scene changes.
+    void addWaterInteraction(const Vec3& worldPosition, const float radius, const float strength) {
+        virtualWaterRenderer.queueInteraction(worldPosition, radius, strength);
+    }
+
+    void reloadSceneResources(const Scene& updatedScene) {
+        if (&updatedScene != &scene) {
+            throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
+        }
+        if (device == VK_NULL_HANDLE) {
+            return;
+        }
+        // A scene snapshot replaces descriptor sets and buffers consumed
+        // by graphics, transfer and dedicated compute submissions. Frame
+        // fences cover presentation, but not every one-shot or async
+        // submission, so retire the entire device before releasing these
+        // shared resources.
+        waitForGlobalResourceRebuild();
+
+        destroyCullingResources();
+        tonemapPass.destroy();
+        temporalAaPass.destroy();
+        bloomPass.destroy();
+        destroyVelocityResources();
+        if (hdrFramebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+        }
+        hdrFramebuffer = VK_NULL_HANDLE;
+        if (lightingHdrFramebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
+        }
+        lightingHdrFramebuffer = VK_NULL_HANDLE;
+        if (waterHdrFramebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
+        }
+        waterHdrFramebuffer = VK_NULL_HANDLE;
+        destroySceneViewportResources();
+        particlePipeline.destroy();
+        sceneParticlePipeline.destroy();
+        skyPass.destroy();
+        sceneSkyPass.destroy();
+        forwardPass.destroy();
+        virtualWaterRenderer.destroy();
+        lightingForwardPass.destroy();
+        waterPass.destroy();
+        // These passes retain descriptors for the frame UBO and VSM page
+        // table. A scene reload replaces both buffers even at the same extent.
+        rtContactShadowPass.destroy();
+        directionalVisibilityPass.destroy();
+        shadowPass.destroy();
+        sceneDescriptorPass.destroy();
+        indexBuffer.destroy();
+        vertexBuffer.destroy();
+        geometryHeapAllocations.clear();
+        geometryHeapVertexHighWater = 0;
+        geometryHeapIndexHighWater = 0;
+        sceneGpu.database.clear();
+        for (Buffer& buffer : instanceBuffers) {
+            buffer.destroy();
+        }
+        for (Buffer& buffer : materialBuffers) {
+            buffer.destroy();
+        }
+        for (Buffer& buffer : gpuSceneInstanceBuffers) {
+            buffer.destroy();
+        }
+        for (Buffer& buffer : gpuSceneMeshBuffers) {
+            buffer.destroy();
+        }
+        for (Buffer& buffer : gpuSceneMaterialBuffers) {
+            buffer.destroy();
+        }
+        for (Buffer& buffer : visibleInstanceBuffers) {
+            buffer.destroy();
+        }
+        for (Buffer& buffer : visibleInstanceCountBuffers) {
+            buffer.destroy();
+        }
+        for (Buffer& buffer : meshletCullDispatchBuffers) {
+            buffer.destroy();
+        }
+        for (Buffer& buffer : uniformBuffers) {
+            buffer.destroy();
+        }
+        for (auto& [id, resource] : textureGpuResources) {
+            (void)id;
+            resource.texture.destroy();
+        }
+        textureGpuResources.clear();
+        meshTextureIds.clear();
+        meshTextureSlots.clear();
+        nextMaterialTextureSlot = 1;
+        freeMaterialTextureSlots.clear();
+        materialTextureDescriptors.clear();
+        fallbackMaterialTexture.destroy();
+        imageBasedLighting.destroy();
+        renderables.clear();
+        instanceBatches.clear();
+        instanceModels.clear();
+        materials.clear();
+        for (auto& indices : dirtyTransforms) {
+            indices.clear();
+        }
+        for (auto& indices : dirtyMaterials) {
+            indices.clear();
+        }
+        for (auto& indices : dirtyCullingObjects) {
+            indices.clear();
+        }
+        lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
+        lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
+        lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
+        lastParentRevision = std::numeric_limits<std::uint64_t>::max();
+        hiZValid.fill(false);
+
+        // SceneSerializer replaces the Registry at the same address. Its
+        // revision numbers can match the previous Registry by coincidence.
+        sceneFrameDataCache = {};
+        reflectionProbeTableInitialized = false;
+        reflectionProbeBufferDirtyMask = (1U << MAX_FRAMES_IN_FLIGHT) - 1U;
+        shadowClipmapsValid = false;
+        sceneShadowClipmapsValid = false;
+
+        // The previous scene may have owned a particle system. Its GPU
+        // resources must not survive a registry replacement into a scene
+        // without a ParticleEmitterComponent.
+        particleSystem.reset();
+        if (particleComputePipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device, particleComputePipeline, nullptr);
+            particleComputePipeline = VK_NULL_HANDLE;
+        }
+        if (particleComputePipelineLayout != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
+            particleComputePipelineLayout = VK_NULL_HANDLE;
         }
 
-        // Recreate only data derived from renderable ECS components.  In
-        // particular, preserve the Vulkan instance/device, swapchain, ImGui
-        // backend and Scene View images: adding an object must not look like a
-        // complete scene reload to the editor.
-        void synchronizeSceneResources(const Scene &updatedScene) {
-            GE_PROFILE_SCOPE("SceneSyncCPU");
-            if (&updatedScene != &scene) {
-                throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
-            }
-            if (device == VK_NULL_HANDLE) {
-                return;
-            }
-            // The editor reports every ECS structural change here, including
-            // hierarchy, scripts and colliders. Avoid rebuilding render
-            // resources unless the renderable topology itself changed.
-            const std::uint64_t updatedTopologyRevision = registry.renderTopologyRevision();
-            const std::uint64_t updatedParticleEmitterRevision =
-                    registry.componentRevision<ParticleEmitterComponent>();
-            const std::uint64_t updatedSmokeEmitterRevision =
-                    registry.componentRevision<SmokeEmitterComponent>();
-            if (updatedTopologyRevision == lastRenderTopologyRevision &&
-                updatedParticleEmitterRevision == lastParticleEmitterRevision &&
-                updatedSmokeEmitterRevision == lastSmokeEmitterRevision) {
-                return;
-            }
-            sceneViewportNeedsRender = true;
-            // Retire the previous scene generation before changing shared
-            // descriptor bindings and scene tables.  This is fence/timeline
-            // based rather than a device-wide idle wait.
-            waitForGlobalResourceRebuild();
+        createMaterialTextures();
+        createImageBasedLighting();
+        createMeshBuffers();
+        createInstanceBuffer();
+        lastRenderTopologyRevision = registry.renderTopologyRevision();
+        lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
+        lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
+        createUniformBuffers();
+        createSceneUniformBuffers();
+        createCullingResources();
+        createShadowPass();
+        createSceneDescriptorPass();
+        createForwardPass();
+        createSkyPass();
+        createFramebuffers();
+        createSceneViewportResources();
+        createParticleResources();
+        createSceneSkyPass();
+        createTemporalAaPass();
+        createBloomPass();
+        createTonemapPass();
+        refreshEditorViewportTextures();
+        sceneViewportCacheValid = false;
+        sceneViewportImageInitialized = false;
+        sceneViewportNeedsRender = true;
+        assetManager.unload_unused();
+    }
 
-            // ECS topology is not renderer topology.  Only resources whose
-            // contents or descriptor bindings refer to the renderable tables
-            // are rebuilt below.  In particular, the render targets and all
-            // post processing passes deliberately survive this operation:
-            // adding an entity must not discard TAA history or recreate the
-            // Bloom/Tonemap/sky/forward/particle pipelines. ShadowPass now
-            // updates descriptor-set contents in place, preserving its set
-            // layout and therefore every pipeline which consumes it.
-            // Geometry keeps stable ranges across ordinary topology changes.
-            // After frame retirement, createMeshBuffers() may compact a mostly
-            // empty heap and rebuild its backing buffers at smaller capacity.
-            // Persistent scene tables retain their backing allocations. Their
-            // creators grow geometrically only when a new delta exceeds the
-            // current capacity, otherwise they overwrite changed records.
-            // createMeshBuffers() needs the previous renderable table to
-            // retire GPU Scene instances whose ECS entity disappeared. It
-            // clears and rebuilds both tables after that comparison.
-            instanceModels.clear();
-            materials.clear();
-            for (auto &indices: dirtyTransforms) { indices.clear(); }
-            for (auto &indices: dirtyMaterials) { indices.clear(); }
-            for (auto &indices: dirtyCullingObjects) { indices.clear(); }
-            lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
-            lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
-            lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
-            lastParentRevision = std::numeric_limits<std::uint64_t>::max();
-            hiZValid.fill(false);
+    // Recreate only data derived from renderable ECS components.  In
+    // particular, preserve the Vulkan instance/device, swapchain, ImGui
+    // backend and Scene View images: adding an object must not look like a
+    // complete scene reload to the editor.
+    void synchronizeSceneResources(const Scene& updatedScene) {
+        GE_PROFILE_SCOPE("SceneSyncCPU");
+        if (&updatedScene != &scene) {
+            throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
+        }
+        if (device == VK_NULL_HANDLE) {
+            return;
+        }
+        // The editor reports every ECS structural change here, including
+        // hierarchy, scripts and colliders. Avoid rebuilding render
+        // resources unless the renderable topology itself changed.
+        const std::uint64_t updatedTopologyRevision = registry.renderTopologyRevision();
+        const std::uint64_t updatedParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
+        const std::uint64_t updatedSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
+        if (updatedTopologyRevision == lastRenderTopologyRevision &&
+            updatedParticleEmitterRevision == lastParticleEmitterRevision &&
+            updatedSmokeEmitterRevision == lastSmokeEmitterRevision) {
+            return;
+        }
+        sceneViewportNeedsRender = true;
+        // Retire the previous scene generation before changing shared
+        // descriptor bindings and scene tables.  This is fence/timeline
+        // based rather than a device-wide idle wait.
+        waitForGlobalResourceRebuild();
 
-            createMaterialTextures();
-            createMeshBuffers();
-            createInstanceBuffer();
-            lastRenderTopologyRevision = registry.renderTopologyRevision();
-            lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
-            lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
-            // Camera UBOs are independent of renderable topology. Recreating
-            // them here would destroy buffers still referenced by the sky
-            // descriptor sets, while the sky passes intentionally survive a
-            // topology-only rebuild.
-            if (canReuseCullingResources()) {
-                // Descriptor sets and pipelines still point at the same
-                // capacity-reserved buffers. Only batch records changed.
-                refreshCullingBatchObjects();
+        // ECS topology is not renderer topology.  Only resources whose
+        // contents or descriptor bindings refer to the renderable tables
+        // are rebuilt below.  In particular, the render targets and all
+        // post processing passes deliberately survive this operation:
+        // adding an entity must not discard TAA history or recreate the
+        // Bloom/Tonemap/sky/forward/particle pipelines. ShadowPass now
+        // updates descriptor-set contents in place, preserving its set
+        // layout and therefore every pipeline which consumes it.
+        // Geometry keeps stable ranges across ordinary topology changes.
+        // After frame retirement, createMeshBuffers() may compact a mostly
+        // empty heap and rebuild its backing buffers at smaller capacity.
+        // Persistent scene tables retain their backing allocations. Their
+        // creators grow geometrically only when a new delta exceeds the
+        // current capacity, otherwise they overwrite changed records.
+        // createMeshBuffers() needs the previous renderable table to
+        // retire GPU Scene instances whose ECS entity disappeared. It
+        // clears and rebuilds both tables after that comparison.
+        instanceModels.clear();
+        materials.clear();
+        for (auto& indices : dirtyTransforms) {
+            indices.clear();
+        }
+        for (auto& indices : dirtyMaterials) {
+            indices.clear();
+        }
+        for (auto& indices : dirtyCullingObjects) {
+            indices.clear();
+        }
+        lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
+        lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
+        lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
+        lastParentRevision = std::numeric_limits<std::uint64_t>::max();
+        hiZValid.fill(false);
+
+        createMaterialTextures();
+        createMeshBuffers();
+        createInstanceBuffer();
+        lastRenderTopologyRevision = registry.renderTopologyRevision();
+        lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
+        lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
+        // Camera UBOs are independent of renderable topology. Recreating
+        // them here would destroy buffers still referenced by the sky
+        // descriptor sets, while the sky passes intentionally survive a
+        // topology-only rebuild.
+        if (canReuseCullingResources()) {
+            // Descriptor sets and pipelines still point at the same
+            // capacity-reserved buffers. Only batch records changed.
+            refreshCullingBatchObjects();
+        } else {
+            destroyCullingResources();
+            createCullingResources();
+        }
+        createShadowPass();
+        createSceneDescriptorPass();
+        {
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualInstances{};
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualCulling{};
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> sceneVirtualCulling{};
+            std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> virtualHiZ{};
+            for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+                virtualInstances[i] = instanceBuffers[i].handle();
+                virtualCulling[i] = cullingUniformBuffers[i].handle();
+                sceneVirtualCulling[i] = sceneCullingUniformBuffers[i].handle();
+                const auto previousHiZFrame = (i + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+                virtualHiZ[i] = {hiZBuffers[previousHiZFrame].sampler(), hiZBuffers[previousHiZFrame].fullView(),
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                // Match initial water resource creation: with occlusion
+                // culling disabled there is no Hi-Z image to bind.
+                if (virtualHiZ[i].imageView == VK_NULL_HANDLE) {
+                    const DepthBuffer& sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+                    virtualHiZ[i] = {sampledDepth.sampler(), sampledDepth.imageView(),
+                                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+                }
+            }
+            virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, virtualHiZ);
+            const Water::WaterRenderWorld waterWorld = Water::WaterRenderWorld::capture(registry, sceneGpu);
+            virtualWaterRenderer.rebuild(waterWorld);
+            // Scene View Virtual Water is intentionally not rebuilt here:
+            // topology changes must not enter the still-fragile editor
+            // water descriptor path while ordinary meshes are added.
+            // Its dedicated view resources are rebuilt by the Scene View
+            // initialization/update path instead.
+        }
+        lastRenderTopologyRevision = updatedTopologyRevision;
+        lastParticleEmitterRevision = updatedParticleEmitterRevision;
+        lastSmokeEmitterRevision = updatedSmokeEmitterRevision;
+        assetManager.unload_unused();
+    }
+
+    void updateMeshGeometry(const Entity entity, const std::uint32_t firstVertex,
+                            const std::uint32_t requestedVertexCount) {
+        const auto recordIt = sceneGpu.renderableIndices.find(entity);
+        if (recordIt == sceneGpu.renderableIndices.end() || !registry.has<MeshRenderer>(entity) ||
+            !registry.has<Transform>(entity)) {
+            return;
+        }
+        const auto& renderer = registry.get<MeshRenderer>(entity);
+        if (recordIt->second.size() != 1U) {
+            // Virtual-water pages share one source mesh but have many
+            // independently cullable draw ranges; rebuild their ranges
+            // atomically after an editor geometry edit.
+            synchronizeSceneResources(scene);
+            return;
+        }
+        RenderableRecord& record = renderables[recordIt->second.front()];
+        // Imported runtime assets release decoded vertices after upload.
+        // A geometry edit therefore has to go through the editor/source
+        // path, which pins data and rebuilds the GPU resource first.
+        const auto sourceMesh = renderer.mesh.source();
+        if (!renderer.hasRenderableMesh() || !sourceMesh || sourceMesh->vertexCount() != record.vertexCount ||
+            record.batchIndex >= instanceBatches.size()) {
+            synchronizeSceneResources(scene);
+            return;
+        }
+        if (firstVertex >= sourceMesh->vertexCount()) {
+            return;
+        }
+        const std::uint32_t vertexCount = std::min(requestedVertexCount, sourceMesh->vertexCount() - firstVertex);
+        if (vertexCount == 0) {
+            return;
+        }
+        // uploadDeviceLocal submits the copy after all graphics work already
+        // queued on this queue. Avoid waiting for every frame in flight here:
+        // that global stall made terrain sculpting block on unrelated frames.
+        std::vector<GpuVertex> packedVertices;
+        packedVertices.reserve(vertexCount);
+        for (std::uint32_t index = 0; index < vertexCount; ++index) {
+            packedVertices.push_back(GpuVertex::pack(sourceMesh->vertices[firstVertex + index]));
+        }
+        vertexBuffer.uploadDeviceLocal(packedVertices.data(), sizeof(GpuVertex) * packedVertices.size(),
+                                       sizeof(GpuVertex) * (record.firstVertex + firstVertex), commandPool,
+                                       vulkanDevice.graphicsQueue());
+
+        AABB localBounds{
+            .min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                        std::numeric_limits<float>::max()},
+            .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                        std::numeric_limits<float>::lowest()},
+        };
+        for (const Vertex& vertex : sourceMesh->vertices) {
+            localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
+            localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
+            localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
+            localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
+            localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
+            localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
+        }
+        record.localBounds = localBounds;
+        InstanceBatch& changedBatch = instanceBatches[record.batchIndex];
+        changedBatch.mesh = renderer.mesh.resource().get();
+
+        bool first = true;
+        AABB batchBounds{};
+        for (const std::size_t index : sceneGpu.batchRenderableIndices[record.batchIndex]) {
+            const RenderableRecord& item = renderables[index];
+            if (!registry.has<Transform>(item.entity)) {
+                continue;
+            }
+            const AABB world = item.localBounds.transformed(registry.get<Transform>(item.entity).matrix().native());
+            if (first) {
+                batchBounds = world;
+                first = false;
             } else {
-                destroyCullingResources();
-                createCullingResources();
-            }
-            createShadowPass();
-            createSceneDescriptorPass();
-            {
-                std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualInstances{};
-                std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualCulling{};
-                std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> sceneVirtualCulling{};
-                std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> virtualHiZ{};
-                for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-                    virtualInstances[i] = instanceBuffers[i].handle();
-                    virtualCulling[i] = cullingUniformBuffers[i].handle();
-                    sceneVirtualCulling[i] = sceneCullingUniformBuffers[i].handle();
-                    const auto previousHiZFrame = (i + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
-                    virtualHiZ[i] = {hiZBuffers[previousHiZFrame].sampler(), hiZBuffers[previousHiZFrame].fullView(),
-                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                    // Match initial water resource creation: with occlusion
-                    // culling disabled there is no Hi-Z image to bind.
-                    if (virtualHiZ[i].imageView == VK_NULL_HANDLE) {
-                        const DepthBuffer &sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
-                        virtualHiZ[i] = {sampledDepth.sampler(), sampledDepth.imageView(),
-                                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-                    }
-                }
-                virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, virtualHiZ);
-                const Water::WaterRenderWorld waterWorld =
-                    Water::WaterRenderWorld::capture(registry, sceneGpu);
-                virtualWaterRenderer.rebuild(waterWorld);
-                // Scene View Virtual Water is intentionally not rebuilt here:
-                // topology changes must not enter the still-fragile editor
-                // water descriptor path while ordinary meshes are added.
-                // Its dedicated view resources are rebuilt by the Scene View
-                // initialization/update path instead.
-            }
-            lastRenderTopologyRevision = updatedTopologyRevision;
-            lastParticleEmitterRevision = updatedParticleEmitterRevision;
-            lastSmokeEmitterRevision = updatedSmokeEmitterRevision;
-            assetManager.unload_unused();
-        }
-
-        void updateMeshGeometry(const Entity entity, const std::uint32_t firstVertex,
-                                const std::uint32_t requestedVertexCount) {
-            const auto recordIt = sceneGpu.renderableIndices.find(entity);
-            if (recordIt == sceneGpu.renderableIndices.end() ||
-                !registry.has<MeshRenderer>(entity) || !registry.has<Transform>(entity)) {
-                return;
-            }
-            const auto &renderer = registry.get<MeshRenderer>(entity);
-            if (recordIt->second.size() != 1U) {
-                // Virtual-water pages share one source mesh but have many
-                // independently cullable draw ranges; rebuild their ranges
-                // atomically after an editor geometry edit.
-                synchronizeSceneResources(scene);
-                return;
-            }
-            RenderableRecord &record = renderables[recordIt->second.front()];
-            // Imported runtime assets release decoded vertices after upload.
-            // A geometry edit therefore has to go through the editor/source
-            // path, which pins data and rebuilds the GPU resource first.
-            const auto sourceMesh = renderer.mesh.source();
-            if (!renderer.hasRenderableMesh() || !sourceMesh ||
-                sourceMesh->vertexCount() != record.vertexCount ||
-                record.batchIndex >= instanceBatches.size()) {
-                synchronizeSceneResources(scene);
-                return;
-            }
-            if (firstVertex >= sourceMesh->vertexCount()) {
-                return;
-            }
-            const std::uint32_t vertexCount = std::min(
-                requestedVertexCount, sourceMesh->vertexCount() - firstVertex);
-            if (vertexCount == 0) {
-                return;
-            }
-            // uploadDeviceLocal submits the copy after all graphics work already
-            // queued on this queue. Avoid waiting for every frame in flight here:
-            // that global stall made terrain sculpting block on unrelated frames.
-            std::vector<GpuVertex> packedVertices;
-            packedVertices.reserve(vertexCount);
-            for (std::uint32_t index = 0; index < vertexCount; ++index) {
-                packedVertices.push_back(GpuVertex::pack(sourceMesh->vertices[firstVertex + index]));
-            }
-            vertexBuffer.uploadDeviceLocal(
-                packedVertices.data(), sizeof(GpuVertex) * packedVertices.size(),
-                sizeof(GpuVertex) * (record.firstVertex + firstVertex), commandPool,
-                vulkanDevice.graphicsQueue());
-
-            AABB localBounds{
-                .min = Vec3{
-                    std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                    std::numeric_limits<float>::max()
-                },
-                .max = Vec3{
-                    std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
-                    std::numeric_limits<float>::lowest()
-                },
-            };
-            for (const Vertex &vertex: sourceMesh->vertices) {
-                localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
-                localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
-                localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
-                localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
-                localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
-                localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
-            }
-            record.localBounds = localBounds;
-            InstanceBatch &changedBatch = instanceBatches[record.batchIndex];
-            changedBatch.mesh = renderer.mesh.resource().get();
-
-            bool first = true;
-            AABB batchBounds{};
-            for (const std::size_t index: sceneGpu.batchRenderableIndices[record.batchIndex]) {
-                const RenderableRecord &item = renderables[index];
-                if (!registry.has<Transform>(item.entity)) {
-                    continue;
-                }
-                const AABB world = item.localBounds.transformed(
-                    registry.get<Transform>(item.entity).matrix().native());
-                if (first) {
-                    batchBounds = world;
-                    first = false;
-                } else {
-                    batchBounds.min = Vec3{glm::min(batchBounds.min.native(), world.min.native())};
-                    batchBounds.max = Vec3{glm::max(batchBounds.max.native(), world.max.native())};
-                }
-            }
-            if (!first && record.batchIndex < gpuObjects.size()) {
-                changedBatch.worldBounds = batchBounds;
-                auto &gpuObject = gpuObjects[record.batchIndex];
-                gpuObject.localAabbMin = {batchBounds.min.x(), batchBounds.min.y(), batchBounds.min.z(), 0.0F};
-                gpuObject.localAabbMax = {batchBounds.max.x(), batchBounds.max.y(), batchBounds.max.z(), 0.0F};
-                for (Buffer &buffer: cullingObjectBuffers) {
-                    buffer.update(&gpuObject, sizeof(gpuObject),
-                                  sizeof(Culling::GPUObjectData) * record.batchIndex);
-                }
-
-                glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
-                glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
-                for (const InstanceBatch &batch: instanceBatches) {
-                    sceneMinimum = glm::min(sceneMinimum, batch.worldBounds.min.native());
-                    sceneMaximum = glm::max(sceneMaximum, batch.worldBounds.max.native());
-                }
-                const glm::vec3 center = (sceneMinimum + sceneMaximum) * 0.5F;
-                const glm::vec3 halfExtent = (sceneMaximum - sceneMinimum) * 0.5F;
-                sceneCenter = Vec3{center};
-                sceneRadius = std::max({halfExtent.x, halfExtent.y, halfExtent.z, 1.0F});
-            }
-            lastRenderTopologyRevision = registry.renderTopologyRevision();
-            lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
-            lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
-            hiZValid.fill(false);
-            // Vertex edits can change every depth sample inside the previous
-            // and current bounds. They are interactive and infrequent, so a
-            // full shadow refresh is preferable to retaining stale terrain.
-            if (changedBatch.castShadow) {
-                shadowPass.invalidateCache();
-                sceneDescriptorPass.invalidateCache();
+                batchBounds.min = Vec3{glm::min(batchBounds.min.native(), world.min.native())};
+                batchBounds.max = Vec3{glm::max(batchBounds.max.native(), world.max.native())};
             }
         }
+        if (!first && record.batchIndex < gpuObjects.size()) {
+            changedBatch.worldBounds = batchBounds;
+            auto& gpuObject = gpuObjects[record.batchIndex];
+            gpuObject.localAabbMin = {batchBounds.min.x(), batchBounds.min.y(), batchBounds.min.z(), 0.0F};
+            gpuObject.localAabbMax = {batchBounds.max.x(), batchBounds.max.y(), batchBounds.max.z(), 0.0F};
+            for (Buffer& buffer : cullingObjectBuffers) {
+                buffer.update(&gpuObject, sizeof(gpuObject), sizeof(Culling::GPUObjectData) * record.batchIndex);
+            }
 
-#include "renderer_backend_state.inl"
-#include "renderer_backend_resources.inl"
-#include "renderer_backend_frame.inl"
+            glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
+            glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
+            for (const InstanceBatch& batch : instanceBatches) {
+                sceneMinimum = glm::min(sceneMinimum, batch.worldBounds.min.native());
+                sceneMaximum = glm::max(sceneMaximum, batch.worldBounds.max.native());
+            }
+            const glm::vec3 center = (sceneMinimum + sceneMaximum) * 0.5F;
+            const glm::vec3 halfExtent = (sceneMaximum - sceneMinimum) * 0.5F;
+            sceneCenter = Vec3{center};
+            sceneRadius = std::max({halfExtent.x, halfExtent.y, halfExtent.z, 1.0F});
+        }
+        lastRenderTopologyRevision = registry.renderTopologyRevision();
+        lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
+        lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
+        hiZValid.fill(false);
+        // Vertex edits can change every depth sample inside the previous
+        // and current bounds. They are interactive and infrequent, so a
+        // full shadow refresh is preferable to retaining stale terrain.
+        if (changedBatch.castShadow) {
+            shadowPass.invalidateCache();
+            sceneDescriptorPass.invalidateCache();
+        }
+    }
+
 #include "renderer_backend_cleanup.inl"
-    };
+#include "renderer_backend_frame.inl"
+#include "renderer_backend_resources.inl"
+#include "renderer_backend_state.inl"
+};
 
 #include "renderer_api.inl"
 } // namespace Engine

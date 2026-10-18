@@ -1,20 +1,18 @@
-#include <gtest/gtest.h>
-
+#include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/Scripting/Script.h"
 #include "Engine/Scripting/ScriptRegistry.h"
-#include "Engine/ECS/Components/ScriptComponent.h"
 
 #include <algorithm>
+#include <gtest/gtest.h>
 
 namespace {
 
 class RegistryTestScript final : public Engine::Script {
-public:
+  public:
     int marker{42};
 };
 
-class ReplacementRegistryTestScript final : public Engine::Script {
-};
+class ReplacementRegistryTestScript final : public Engine::Script {};
 
 TEST(ScriptRegistry, RegistersCreatesAndListsScriptClasses) {
     auto& registry = Engine::ScriptRegistry::instance();

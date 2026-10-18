@@ -1,1 +1,3 @@
-extern "C" int platformTestValue() { return 42; }
+extern "C" int platformTestValue() {
+    return 42;
+}

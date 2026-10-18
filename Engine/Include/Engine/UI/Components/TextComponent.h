@@ -1,43 +1,43 @@
 #pragma once
 
+#include "Engine/Math/Color.h"
+
 #include <array>
 #include <cstdint>
 #include <string>
 
-#include "Engine/Math/Color.h"
-
 namespace Engine {
+/**
+ * @brief Text rendered by the UI text pipeline.
+ */
+struct TextComponent final {
+    /** @brief UTF-8 text content. */
+    std::string text;
+
+    /** @brief Font atlas identifier resolved by the UI renderer. */
+    std::uint64_t fontAtlasId = 0;
+
+    /** @brief Requested font size in pixels. */
+    float fontSize = 16; // NOLINT
+
+    /** @brief RGBA text color. */
+    Math::Color color{1.0F, 1.0F, 1.0F, 1.0F};
+
+    /** @brief Additional line spacing in pixels. */
+    float lineSpacing = 0.0F;
+
+    /** @brief Horizontal scale applied while laying out glyphs. */
+    float horizontalScale = 1.0F;
+
+    /** @brief Enables or disables text rendering. */
+    bool visible = true;
+
     /**
-     * @brief Text rendered by the UI text pipeline.
+     * @brief Checks whether this component contains drawable text.
+     * @return True if the component is visible and contains text.
      */
-    struct TextComponent final {
-        /** @brief UTF-8 text content. */
-        std::string text;
-
-        /** @brief Font atlas identifier resolved by the UI renderer. */
-        std::uint64_t fontAtlasId = 0;
-
-        /** @brief Requested font size in pixels. */
-        float fontSize = 16; //NOLINT
-
-        /** @brief RGBA text color. */
-        Math::Color color{1.0F, 1.0F, 1.0F, 1.0F};
-
-        /** @brief Additional line spacing in pixels. */
-        float lineSpacing = 0.0F;
-
-        /** @brief Horizontal scale applied while laying out glyphs. */
-        float horizontalScale = 1.0F;
-
-        /** @brief Enables or disables text rendering. */
-        bool visible = true;
-
-        /**
-         * @brief Checks whether this component contains drawable text.
-         * @return True if the component is visible and contains text.
-         */
-        [[nodiscard]] bool isRenderable() const noexcept {
-            return visible && !text.empty() && fontSize > 0.0F && horizontalScale > 0.0F;
-        }
-    };
-}
+    [[nodiscard]] bool isRenderable() const noexcept {
+        return visible && !text.empty() && fontSize > 0.0F && horizontalScale > 0.0F;
+    }
+};
+} // namespace Engine

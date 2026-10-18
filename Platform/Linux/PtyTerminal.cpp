@@ -17,15 +17,17 @@ extern char** environ;
 namespace {
 
 class PtyTerminal final : public Platform::TerminalSession {
-public:
-    ~PtyTerminal() override { stop(); }
+  public:
+    ~PtyTerminal() override {
+        stop();
+    }
 
-    bool start(const std::filesystem::path& executable,
-               const std::filesystem::path& workingDirectory) override {
+    bool start(const std::filesystem::path& executable, const std::filesystem::path& workingDirectory) override {
         stop();
         const std::string program = executable.string();
         const std::string directory = workingDirectory.string();
-        if (program.empty() || ::access(program.c_str(), X_OK) != 0) return false;
+        if (program.empty() || ::access(program.c_str(), X_OK) != 0)
+            return false;
 
         // Prepare all allocations before fork: the editor can have other threads.
         std::vector<std::string> environment;
@@ -37,13 +39,15 @@ public:
         environment.emplace_back("TERM=xterm-256color");
         environment.emplace_back("COLORTERM=truecolor");
         std::vector<char*> environmentPointers;
-        for (auto& entry : environment) environmentPointers.push_back(entry.data());
+        for (auto& entry : environment)
+            environmentPointers.push_back(entry.data());
         environmentPointers.push_back(nullptr);
         char interactive[] = "-i";
         char* arguments[] = {const_cast<char*>(program.c_str()), interactive, nullptr};
 
         int errors[2];
-        if (::pipe2(errors, O_CLOEXEC) != 0) return false;
+        if (::pipe2(errors, O_CLOEXEC) != 0)
+            return false;
         winsize size{};
         size.ws_col = 120;
         size.ws_row = 30;
@@ -64,10 +68,11 @@ public:
         }
         int error{};
         ssize_t count;
-        do { count = ::read(errors[0], &error, sizeof(error)); } while (count < 0 && errno == EINTR);
+        do {
+            count = ::read(errors[0], &error, sizeof(error));
+        } while (count < 0 && errno == EINTR);
         ::close(errors[0]);
-        if (count != 0 || ::fcntl(master_, F_SETFL, O_NONBLOCK) < 0 ||
-            ::fcntl(master_, F_SETFD, FD_CLOEXEC) < 0) {
+        if (count != 0 || ::fcntl(master_, F_SETFL, O_NONBLOCK) < 0 || ::fcntl(master_, F_SETFD, FD_CLOEXEC) < 0) {
             stop();
             return false;
         }
@@ -80,8 +85,10 @@ public:
             master_ = -1;
         }
         pendingInput_.clear();
-        if (child_ <= 0) return;
-        if (!running()) return;
+        if (child_ <= 0)
+            return;
+        if (!running())
+            return;
         static_cast<void>(::kill(-child_, SIGHUP));
         static_cast<void>(::kill(child_, SIGHUP));
         for (int attempt = 0; attempt < 20 && running(); ++attempt)
@@ -89,34 +96,41 @@ public:
         if (child_ > 0) {
             static_cast<void>(::kill(-child_, SIGKILL));
             static_cast<void>(::kill(child_, SIGKILL));
-            while (::waitpid(child_, nullptr, 0) < 0 && errno == EINTR) {}
+            while (::waitpid(child_, nullptr, 0) < 0 && errno == EINTR) {
+            }
             child_ = -1;
         }
     }
 
     void write(std::string_view data) override {
-        if (master_ < 0) return;
+        if (master_ < 0)
+            return;
         pendingInput_.append(data);
         flushInput();
     }
 
     [[nodiscard]] std::string readAvailable() override {
-        if (master_ < 0) return {};
+        if (master_ < 0)
+            return {};
         flushInput();
         std::string output;
         std::array<char, 4096> buffer{};
         // Bound work per frame even when a command continuously produces output.
         while (output.size() < 65536) {
             const ssize_t count = ::read(master_, buffer.data(), buffer.size());
-            if (count > 0) output.append(buffer.data(), static_cast<size_t>(count));
-            else if (count < 0 && errno == EINTR) continue;
-            else break;
+            if (count > 0)
+                output.append(buffer.data(), static_cast<size_t>(count));
+            else if (count < 0 && errno == EINTR)
+                continue;
+            else
+                break;
         }
         return output;
     }
 
     void resize(std::uint16_t columns, std::uint16_t rows) override {
-        if (master_ < 0) return;
+        if (master_ < 0)
+            return;
         winsize size{};
         size.ws_col = columns;
         size.ws_row = rows;
@@ -124,21 +138,29 @@ public:
     }
 
     [[nodiscard]] bool running() const override {
-        if (child_ <= 0) return false;
+        if (child_ <= 0)
+            return false;
         pid_t result;
-        do { result = ::waitpid(child_, nullptr, WNOHANG); } while (result < 0 && errno == EINTR);
-        if (result == 0) return true;
-        if (result == child_ || (result < 0 && errno == ECHILD)) child_ = -1;
+        do {
+            result = ::waitpid(child_, nullptr, WNOHANG);
+        } while (result < 0 && errno == EINTR);
+        if (result == 0)
+            return true;
+        if (result == child_ || (result < 0 && errno == ECHILD))
+            child_ = -1;
         return false;
     }
 
-private:
+  private:
     void flushInput() {
         while (!pendingInput_.empty()) {
             const ssize_t count = ::write(master_, pendingInput_.data(), pendingInput_.size());
-            if (count > 0) pendingInput_.erase(0, static_cast<size_t>(count));
-            else if (count < 0 && errno == EINTR) continue;
-            else break;
+            if (count > 0)
+                pendingInput_.erase(0, static_cast<size_t>(count));
+            else if (count < 0 && errno == EINTR)
+                continue;
+            else
+                break;
         }
     }
 
@@ -156,7 +178,8 @@ std::unique_ptr<TerminalSession> createTerminalSession() {
 }
 
 std::filesystem::path defaultTerminalShell() {
-    if (const char* shell = std::getenv("SHELL"); shell && ::access(shell, X_OK) == 0) return shell;
+    if (const char* shell = std::getenv("SHELL"); shell && ::access(shell, X_OK) == 0)
+        return shell;
     return ::access("/bin/bash", X_OK) == 0 ? "/bin/bash" : "/bin/sh";
 }
 

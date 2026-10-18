@@ -1,6 +1,6 @@
-#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Passes/RtContactShadowPass.h"
 
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/shader_loader.h"
 
 #include <array>
@@ -8,14 +8,16 @@
 
 namespace Engine {
 namespace {
-    constexpr std::uint32_t FramesInFlight = 2;
+constexpr std::uint32_t FramesInFlight = 2;
 }
 
-RtContactShadowPass::~RtContactShadowPass() { destroy(); }
+RtContactShadowPass::~RtContactShadowPass() {
+    destroy();
+}
 
-void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice device,
-                                 const VkExtent2D extent, const VmaAllocator allocator,
-                                 Assets::AssetManager& assets, const std::span<const VkBuffer> ubos) {
+void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice device, const VkExtent2D extent,
+                                 const VmaAllocator allocator, Assets::AssetManager& assets,
+                                 const std::span<const VkBuffer> ubos) {
     if (!device || !extent.width || !extent.height || ubos.size() != FramesInFlight)
         throw std::invalid_argument("RT contact shadow pass requires two frame UBOs and an extent");
     destroy();
@@ -64,8 +66,10 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
             const VkDescriptorImageInfo output{VK_NULL_HANDLE, visibility_[frame].imageView(), VK_IMAGE_LAYOUT_GENERAL};
             const VkDescriptorBufferInfo ubo{ubos[frame], 0, VK_WHOLE_SIZE};
             const std::array<VkWriteDescriptorSet, 2> writes{{
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &output},
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 4, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &ubo},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 3, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &output},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 4, 0, 1,
+                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &ubo},
             }};
             vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
@@ -79,30 +83,45 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
             throw std::runtime_error("Could not create RT contact pipeline layout");
         const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/rt_contact_shadow.spv");
         VkComputePipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-        pipelineInfo.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                              VK_SHADER_STAGE_COMPUTE_BIT, shader.get(), "main", nullptr};
+        pipelineInfo.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                              nullptr,
+                              0,
+                              VK_SHADER_STAGE_COMPUTE_BIT,
+                              shader.get(),
+                              "main",
+                              nullptr};
         pipelineInfo.layout = pipelineLayout_;
-        if (vkCreateComputePipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo, nullptr, &pipeline_) != VK_SUCCESS)
+        if (vkCreateComputePipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo, nullptr, &pipeline_) !=
+            VK_SUCCESS)
             throw std::runtime_error("Could not create RT contact compute pipeline");
-    } catch (...) { destroy(); throw; }
+    } catch (...) {
+        destroy();
+        throw;
+    }
 }
 
 void RtContactShadowPass::record(const VkCommandBuffer cmd, const std::uint32_t frame,
                                  const VkAccelerationStructureKHR tlas, const VkImageView depth,
-                                 const VkSampler depthSampler, const VkImageView normals,
-                                 const VkSampler normalSampler, const VkImageView directionalVisibility,
-                                 const VkSampler directionalSampler, const RtContactShadowSettings& settings) {
-    if (!pipeline_ || !tlas || !depth || !normals || !directionalVisibility || frame >= FramesInFlight) return;
+                                 const VkSampler depthSampler, const VkImageView normals, const VkSampler normalSampler,
+                                 const VkImageView directionalVisibility, const VkSampler directionalSampler,
+                                 const RtContactShadowSettings& settings) {
+    if (!pipeline_ || !tlas || !depth || !normals || !directionalVisibility || frame >= FramesInFlight)
+        return;
     const VkWriteDescriptorSetAccelerationStructureKHR structureWrite{
         VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR, nullptr, 1, &tlas};
     const VkDescriptorImageInfo depthInfo{depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
     const VkDescriptorImageInfo normalInfo{normalSampler, normals, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    const VkDescriptorImageInfo directionalInfo{directionalSampler, directionalVisibility, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo directionalInfo{directionalSampler, directionalVisibility,
+                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     const std::array<VkWriteDescriptorSet, 4> writes{{
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &structureWrite, sets_[frame], 0, 0, 1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 5, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &directionalInfo},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &structureWrite, sets_[frame], 0, 0, 1,
+         VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 1, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 2, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 5, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &directionalInfo},
     }};
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     VkImageMemoryBarrier2 toStorage{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -148,14 +167,23 @@ void RtContactShadowPass::record(const VkCommandBuffer cmd, const std::uint32_t 
 
 void RtContactShadowPass::destroy() noexcept {
     if (device_) {
-        if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
-        if (pipelineLayout_) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
-        if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
-        if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
+        if (pipeline_)
+            vkDestroyPipeline(device_, pipeline_, nullptr);
+        if (pipelineLayout_)
+            vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
+        if (pool_)
+            vkDestroyDescriptorPool(device_, pool_, nullptr);
+        if (layout_)
+            vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
     }
-    for (auto& target : visibility_) target.destroy();
-    pipeline_ = VK_NULL_HANDLE; pipelineLayout_ = VK_NULL_HANDLE;
-    pool_ = VK_NULL_HANDLE; layout_ = VK_NULL_HANDLE; sets_ = {};
-    extent_ = {}; device_ = VK_NULL_HANDLE;
+    for (auto& target : visibility_)
+        target.destroy();
+    pipeline_ = VK_NULL_HANDLE;
+    pipelineLayout_ = VK_NULL_HANDLE;
+    pool_ = VK_NULL_HANDLE;
+    layout_ = VK_NULL_HANDLE;
+    sets_ = {};
+    extent_ = {};
+    device_ = VK_NULL_HANDLE;
 }
 } // namespace Engine

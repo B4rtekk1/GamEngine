@@ -9,54 +9,57 @@
 #include <utility>
 
 namespace Engine {
-    DynamicLibrary::~DynamicLibrary() { unload(); }
+DynamicLibrary::~DynamicLibrary() {
+    unload();
+}
 
-    DynamicLibrary::DynamicLibrary(DynamicLibrary &&other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {
-    }
+DynamicLibrary::DynamicLibrary(DynamicLibrary&& other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
 
-    DynamicLibrary &DynamicLibrary::operator=(DynamicLibrary &&other) noexcept {
-        if (this != &other) {
-            unload();
-            handle_ = std::exchange(other.handle_, nullptr);
-        }
-        return *this;
-    }
-
-    bool DynamicLibrary::load(const std::filesystem::path &path) {
+DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept {
+    if (this != &other) {
         unload();
-#ifdef _WIN32
-        handle_ = reinterpret_cast<void *>(LoadLibraryW(path.c_str()));
-#else
-        // A bare filename makes dlopen search system library directories rather
-        // than the current directory, unlike filesystem operations on the path.
-        const auto absolutePath = std::filesystem::absolute(path);
-        handle_ = dlopen(absolutePath.c_str(), RTLD_NOW | RTLD_LOCAL);
-#endif
-        return handle_ != nullptr;
+        handle_ = std::exchange(other.handle_, nullptr);
     }
+    return *this;
+}
 
-    void DynamicLibrary::unload() noexcept {
-        if (handle_ == nullptr) {
-            return;
-        }
+bool DynamicLibrary::load(const std::filesystem::path& path) {
+    unload();
 #ifdef _WIN32
-        FreeLibrary(static_cast<HMODULE>(handle_));
+    handle_ = reinterpret_cast<void*>(LoadLibraryW(path.c_str()));
 #else
-        dlclose(handle_);
+    // A bare filename makes dlopen search system library directories rather
+    // than the current directory, unlike filesystem operations on the path.
+    const auto absolutePath = std::filesystem::absolute(path);
+    handle_ = dlopen(absolutePath.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
-        handle_ = nullptr;
+    return handle_ != nullptr;
+}
+
+void DynamicLibrary::unload() noexcept {
+    if (handle_ == nullptr) {
+        return;
     }
-
-    bool DynamicLibrary::loaded() const noexcept { return handle_ != nullptr; }
-
-    void *DynamicLibrary::symbolRaw(const char *name) const noexcept {
-        if (handle_ == nullptr) {
-            return nullptr;
-        }
 #ifdef _WIN32
-        return reinterpret_cast<void *>(GetProcAddress(static_cast<HMODULE>(handle_), name));
+    FreeLibrary(static_cast<HMODULE>(handle_));
 #else
-        return dlsym(handle_, name);
+    dlclose(handle_);
 #endif
+    handle_ = nullptr;
+}
+
+bool DynamicLibrary::loaded() const noexcept {
+    return handle_ != nullptr;
+}
+
+void* DynamicLibrary::symbolRaw(const char* name) const noexcept {
+    if (handle_ == nullptr) {
+        return nullptr;
     }
+#ifdef _WIN32
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle_), name));
+#else
+    return dlsym(handle_, name);
+#endif
+}
 } // namespace Engine

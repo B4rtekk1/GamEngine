@@ -8,19 +8,19 @@
 #include <vulkan/vulkan.h>
 
 namespace Engine {
-namespace Assets { class AssetManager; }
+namespace Assets {
+class AssetManager;
+}
 
 class DirectionalVisibilityPass final {
-public:
+  public:
     ~DirectionalVisibilityPass();
     void create(VkPhysicalDevice physical, VkDevice device, VkExtent2D extent, VmaAllocator allocator,
-                Assets::AssetManager& assets, const ShadowMap& shadowMap,
-                std::span<const VkBuffer> frameBuffers, std::span<const VkBuffer> pageTables);
+                Assets::AssetManager& assets, const ShadowMap& shadowMap, std::span<const VkBuffer> frameBuffers,
+                std::span<const VkBuffer> pageTables);
     void destroy() noexcept;
-    void record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
-                VkImageView depth, VkSampler depthSampler,
-                VkImageView normals, VkSampler normalSampler,
-                bool manageOutputTransitions = true);
+    void record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot, VkImageView depth, VkSampler depthSampler,
+                VkImageView normals, VkSampler normalSampler, bool manageOutputTransitions = true);
     [[nodiscard]] VkImage resultImage(std::uint32_t frameSlot) const noexcept {
         return visibility_[frameSlot].image();
     }
@@ -30,9 +30,11 @@ public:
     [[nodiscard]] VkSampler resultSampler(std::uint32_t frameSlot) const noexcept {
         return visibility_[frameSlot].sampler();
     }
-    [[nodiscard]] VkExtent2D extent() const noexcept { return extent_; }
+    [[nodiscard]] VkExtent2D extent() const noexcept {
+        return extent_;
+    }
 
-private:
+  private:
     VkDevice device_{VK_NULL_HANDLE};
     VkExtent2D extent_{};
     std::array<HdrBuffer, 2> visibility_{};

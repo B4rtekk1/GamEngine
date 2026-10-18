@@ -6,23 +6,33 @@
 #include <stdexcept>
 
 namespace Engine {
-    Actor Script::actor() const {
-        if (scene_ == nullptr || registry_ == nullptr || entity_ == NullEntity) {
-            throw std::logic_error("Script is not attached to a live actor");
-        }
-        const auto *object = scene_->findByEntity(entity_);
-        if (object == nullptr) { throw std::logic_error("Script actor no longer exists"); }
-        return Actor{*scene_, object->objectId()};
+Actor Script::actor() const {
+    if (scene_ == nullptr || registry_ == nullptr || entity_ == NullEntity) {
+        throw std::logic_error("Script is not attached to a live actor");
     }
-
-    Actor Script::parent() const { return actor().parent(); }
-
-    std::vector<Actor> Script::children() const { return actor().children(); }
-
-    Scene &Script::scene() const {
-        if (scene_ == nullptr) { throw std::logic_error("Script is not attached to a scene"); }
-        return *scene_;
+    const auto* object = scene_->findByEntity(entity_);
+    if (object == nullptr) {
+        throw std::logic_error("Script actor no longer exists");
     }
+    return Actor{*scene_, object->objectId()};
+}
 
-    Physics &Script::physics() const { return scene().physics(); }
+Actor Script::parent() const {
+    return actor().parent();
+}
+
+std::vector<Actor> Script::children() const {
+    return actor().children();
+}
+
+Scene& Script::scene() const {
+    if (scene_ == nullptr) {
+        throw std::logic_error("Script is not attached to a scene");
+    }
+    return *scene_;
+}
+
+Physics& Script::physics() const {
+    return scene().physics();
+}
 } // namespace Engine

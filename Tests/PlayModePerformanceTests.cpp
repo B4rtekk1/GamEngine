@@ -1,9 +1,9 @@
-#include <gtest/gtest.h>
-
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/SceneEditor.h"
-#include "Engine/ECS/Components/TerrainGrassComponent.h"
+
+#include <gtest/gtest.h>
 
 namespace {
 
@@ -38,14 +38,11 @@ TEST(PhysXPhysics, CachedStaticColliderFollowsParentPoseScaleAndReplacement) {
     EXPECT_NEAR(replaced->distance, 7.0F, 1.0e-4F);
 }
 
-
 TEST(PlayModePhysics, ReplacingTransformDoesNotReuseStalePhysicsPose) {
     Engine::Scene scene;
     const auto actor = scene.createActor("Static");
     actor.addBoxCollider({1.0F, 1.0F, 1.0F});
-    const auto cast = [&] {
-        return scene.physics().raycast({0.0F, 10.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, 20.0F);
-    };
+    const auto cast = [&] { return scene.physics().raycast({0.0F, 10.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, 20.0F); };
     ASSERT_TRUE(cast());
     const auto entity = scene.findEntity(actor.id());
     scene.editor().remove<Engine::Transform>(entity);
@@ -63,7 +60,8 @@ TEST(PlayModePhysics, DynamicCommandsStillApplyWithoutWorldTrsDecomposition) {
     Engine::PhysicsSystem physics{{0.0F, 0.0F, 0.0F}};
     physics.update(scene, 1.0F / 60.0F);
     actor.setVelocity({6.0F, 0.0F, 0.0F});
-    for (int step = 0; step < 10; ++step) physics.update(scene, 1.0F / 60.0F);
+    for (int step = 0; step < 10; ++step)
+        physics.update(scene, 1.0F / 60.0F);
     EXPECT_GT(actor.position().x(), 0.8F);
     const auto entity = scene.findEntity(actor.id());
     EXPECT_FALSE(scene.editor().read<Engine::Transform>(entity).worldTrsValid);

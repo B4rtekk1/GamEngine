@@ -1,18 +1,17 @@
-#include <gtest/gtest.h>
-
-#include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Input/KeyCode.h"
 #include "Engine/Input/MouseButton.h"
-#include "Engine/UI/UIElement.h"
-#include "Engine/UI/UIVertex.h"
-#include "Engine/UI/Canvas.h"
+#include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/UI/ButtonElement.h"
+#include "Engine/UI/Canvas.h"
 #include "Engine/UI/PanelElement.h"
 #include "Engine/UI/TextElement.h"
+#include "Engine/UI/UIElement.h"
+#include "Engine/UI/UIVertex.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <gtest/gtest.h>
 #include <memory>
 #include <stdexcept>
 
@@ -60,8 +59,7 @@ TEST(UIElement, StoresVisualStateAndOwnsChildren) {
 }
 
 TEST(Canvas, LaysOutElementsAndTracksStructuralChanges) {
-    Engine::UI::Canvas canvas{Engine::UI::Canvas::Width{200},
-                              Engine::UI::Canvas::Height{100}};
+    Engine::UI::Canvas canvas{Engine::UI::Canvas::Width{200}, Engine::UI::Canvas::Height{100}};
     EXPECT_TRUE(canvas.empty());
     EXPECT_EQ(canvas.revision(), 1u);
 
@@ -191,7 +189,8 @@ TEST(CullingTypes, HaveExpectedGpuAlignmentAndContiguousMatrixStorage) {
     EXPECT_EQ(alignof(Engine::Culling::GPUMat4), 16u);
     EXPECT_EQ(sizeof(Engine::Culling::GPUMat4), 64u);
     Engine::Culling::GPUMat4 matrix{};
-    for (std::uint32_t i = 0; i < 16; ++i) matrix.data[i] = static_cast<float>(i);
+    for (std::uint32_t i = 0; i < 16; ++i)
+        matrix.data[i] = static_cast<float>(i);
     EXPECT_FLOAT_EQ(matrix.data[0], 0.0F);
     EXPECT_FLOAT_EQ(matrix.data[15], 15.0F);
 }

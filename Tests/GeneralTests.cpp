@@ -1,13 +1,11 @@
-#include <gtest/gtest.h>
-
 #include "Engine/Assets/AssetHandle.h"
 #include "Engine/Core/Camera.h"
 #include "Engine/ECS/Components/CameraComponent.h"
-#include "Engine/Renderer/Geometry/Cube.h"
+#include "Engine/Renderer/Culling/MeshletCulling.h"
 #include "Engine/Renderer/Geometry/Capsule.h"
+#include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/Meshlet.h"
-#include "Engine/Renderer/Culling/MeshletCulling.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/Geometry/Ramp.h"
 #include "Engine/Renderer/Geometry/Sphere.h"
@@ -15,6 +13,7 @@
 #include "Engine/UI/RectTransform.h"
 
 #include <algorithm>
+#include <gtest/gtest.h>
 #include <memory>
 #include <stdexcept>
 
@@ -40,12 +39,12 @@ void ExpectOutwardTriangleWinding(const Engine::Mesh& mesh) {
         const auto& first = mesh.vertices[mesh.indices[index]];
         const auto& second = mesh.vertices[mesh.indices[index + 1U]];
         const auto& third = mesh.vertices[mesh.indices[index + 2U]];
-        const Engine::Vec3 geometricNormal = Engine::cross(
-            second.position - first.position, third.position - first.position);
-        if (geometricNormal.length() <= 1.0e-6F) continue;
+        const Engine::Vec3 geometricNormal =
+            Engine::cross(second.position - first.position, third.position - first.position);
+        if (geometricNormal.length() <= 1.0e-6F)
+            continue;
         const Engine::Vec3 vertexNormal = first.normal + second.normal + third.normal;
-        const float alignment = geometricNormal.x() * vertexNormal.x() +
-                                geometricNormal.y() * vertexNormal.y() +
+        const float alignment = geometricNormal.x() * vertexNormal.x() + geometricNormal.y() * vertexNormal.y() +
                                 geometricNormal.z() * vertexNormal.z();
         EXPECT_GT(alignment, 0.0F) << "triangle " << index / 3U << " has inward winding";
     }
@@ -349,8 +348,7 @@ TEST(Meshlets, BuildsBoundedHierarchyWithContiguousChildren) {
             const auto& firstChild = mesh.meshletClusters[node.firstChild];
             const auto& lastChild = mesh.meshletClusters[node.firstChild + node.childCount - 1U];
             EXPECT_EQ(node.firstMeshlet, firstChild.firstMeshlet);
-            EXPECT_EQ(node.firstMeshlet + node.meshletCount,
-                      lastChild.firstMeshlet + lastChild.meshletCount);
+            EXPECT_EQ(node.firstMeshlet + node.meshletCount, lastChild.firstMeshlet + lastChild.meshletCount);
         }
     }
 }
@@ -374,7 +372,8 @@ TEST(Meshlets, SpatiallySubdividesOnlyLargeImportedSections) {
     EXPECT_EQ(mesh.renderSections[1].indexCount, Engine::MeshletBuildOptions::MaxTriangles * 3U);
     EXPECT_EQ(mesh.renderSections[2].indexCount, 3U);
     ASSERT_TRUE(Engine::build_meshlets(mesh));
-    for (const auto& section : mesh.renderSections) EXPECT_GT(section.meshletCount, 0U);
+    for (const auto& section : mesh.renderSections)
+        EXPECT_GT(section.meshletCount, 0U);
 }
 
 TEST(Meshlets, ProducesGlobalGpuPayloadWithoutChangingLocalGeometry) {
@@ -404,8 +403,8 @@ TEST(ViewportCamera, BuildsGameCameraFromComponentAndTransform) {
     const auto viewport = Engine::ViewportCamera::game(component, transform, 16.0F / 9.0F);
     EXPECT_EQ(viewport.type, Engine::ViewportCameraType::Game);
     ExpectVec3Near(viewport.camera.position(), 1.0F, 2.0F, 3.0F);
-    auto expectedProjection = Engine::Mat4::perspective(
-        Engine::Radians{Engine::Degrees{75.0F}}, 16.0F / 9.0F, 0.25F, 500.0F);
+    auto expectedProjection =
+        Engine::Mat4::perspective(Engine::Radians{Engine::Degrees{75.0F}}, 16.0F / 9.0F, 0.25F, 500.0F);
     expectedProjection.native()[1][1] *= -1.0F;
     ExpectMat4Near(viewport.camera.projectionMatrix(), expectedProjection);
     EXPECT_GT(viewport.camera.forward().z(), 0.9F);
@@ -416,8 +415,8 @@ TEST(ViewportCamera, BuildsStableSceneCameraDefaults) {
     const auto viewport = Engine::ViewportCamera::scene(4.0F / 3.0F);
     EXPECT_EQ(viewport.type, Engine::ViewportCameraType::Scene);
     ExpectVec3Near(viewport.camera.position(), 8.0F, 6.0F, 8.0F);
-    auto expectedProjection = Engine::Mat4::perspective(
-        Engine::Radians{Engine::Degrees{60.0F}}, 4.0F / 3.0F, 0.1F, 1000.0F);
+    auto expectedProjection =
+        Engine::Mat4::perspective(Engine::Radians{Engine::Degrees{60.0F}}, 4.0F / 3.0F, 0.1F, 1000.0F);
     expectedProjection.native()[1][1] *= -1.0F;
     ExpectMat4Near(viewport.camera.projectionMatrix(), expectedProjection);
     EXPECT_NEAR(viewport.camera.forward().length(), 1.0F, 1.0e-5F);

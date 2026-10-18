@@ -8,7 +8,7 @@ namespace Platform {
 
 /** Per-user locations owned by GamEngine rather than the executable directory. */
 class UserPaths final {
-public:
+  public:
     [[nodiscard]] static std::filesystem::path localData();
     [[nodiscard]] static std::filesystem::path documents();
     [[nodiscard]] static std::filesystem::path editorData();

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,21 +24,33 @@ struct TerminalCell final {
 
 /** A small VT screen model for the escape sequences emitted by common shells. */
 class TerminalBuffer final {
-public:
+  public:
     explicit TerminalBuffer(std::uint16_t columns = 120, std::uint16_t rows = 30);
 
     void resize(std::uint16_t columns, std::uint16_t rows);
     void feed(std::string_view utf8);
 
-    [[nodiscard]] std::uint16_t columns() const { return columns_; }
-    [[nodiscard]] std::uint16_t rows() const { return rows_; }
-    [[nodiscard]] std::uint16_t cursorColumn() const { return cursorX_; }
-    [[nodiscard]] std::uint16_t cursorRow() const { return cursorY_; }
-    [[nodiscard]] bool cursorVisible() const { return cursorVisible_; }
-    [[nodiscard]] bool applicationCursorMode() const { return applicationCursorMode_; }
+    [[nodiscard]] std::uint16_t columns() const {
+        return columns_;
+    }
+    [[nodiscard]] std::uint16_t rows() const {
+        return rows_;
+    }
+    [[nodiscard]] std::uint16_t cursorColumn() const {
+        return cursorX_;
+    }
+    [[nodiscard]] std::uint16_t cursorRow() const {
+        return cursorY_;
+    }
+    [[nodiscard]] bool cursorVisible() const {
+        return cursorVisible_;
+    }
+    [[nodiscard]] bool applicationCursorMode() const {
+        return applicationCursorMode_;
+    }
     [[nodiscard]] const TerminalCell& cell(std::uint16_t x, std::uint16_t y) const;
 
-private:
+  private:
     void put(char32_t character);
     void lineFeed();
     void scroll();

@@ -1,21 +1,20 @@
-#include <gtest/gtest.h>
-
-#include "Engine/Core/Transform.h"
 #include "Engine/Core/Diagnostics.h"
+#include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Registry.h"
+#include "Engine/Scene/Scene.h"
 #include "Engine/Scripting/Script.h"
 #include "Engine/Scripting/ScriptRegistry.h"
 #include "Engine/Scripting/ScriptSystem.h"
-#include "Engine/Scene/Scene.h"
 
-#include <string>
+#include <gtest/gtest.h>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
 class LifecycleTestScript final : public Engine::Script {
-public:
+  public:
     static inline int created = 0;
     static inline int updated = 0;
     static inline int destroyed = 0;
@@ -32,18 +31,26 @@ public:
         lastDeltaTime = 0.0F;
     }
 
-    void onCreate() override { ++created; }
+    void onCreate() override {
+        ++created;
+    }
     void onUpdate(const float deltaTime) override {
         ++updated;
         lastDeltaTime = deltaTime;
     }
-    void onDestroy() override { ++destroyed; }
-    void onEnable() override { ++enabled; }
-    void onDisable() override { ++disabled; }
+    void onDestroy() override {
+        ++destroyed;
+    }
+    void onEnable() override {
+        ++enabled;
+    }
+    void onDisable() override {
+        ++disabled;
+    }
 };
 
 class SceneAwareTestScript final : public Engine::Script {
-public:
+  public:
     static inline std::string actorName;
     static inline bool foundInScene = false;
     static inline Engine::Physics* scenePhysics = nullptr;
@@ -66,12 +73,14 @@ public:
 };
 
 class ThrowingTestScript final : public Engine::Script {
-public:
-    void onUpdate(float) override { throw std::runtime_error{"test failure"}; }
+  public:
+    void onUpdate(float) override {
+        throw std::runtime_error{"test failure"};
+    }
 };
 
 class SelfDestroyingTestScript final : public Engine::Script {
-public:
+  public:
     static inline int updates = 0;
 
     void onUpdate(float) override {
@@ -81,12 +90,12 @@ public:
 };
 
 class SpawningTestScript final : public Engine::Script {
-public:
+  public:
     static inline int updates = 0;
 
     void onUpdate(float) override {
         ++updates;
-        (void) actor().createChild("Spawned enemy");
+        (void)actor().createChild("Spawned enemy");
     }
 };
 
@@ -125,8 +134,7 @@ TEST(ScriptSystem, SkipsDisabledAndEmptyScriptComponents) {
     Engine::ScriptSystem system{scripts};
     Engine::Registry registry;
     const auto disabled = registry.create();
-    registry.add<Engine::ScriptComponent>(disabled,
-                                          Engine::ScriptComponent{"LifecycleTestScript", false});
+    registry.add<Engine::ScriptComponent>(disabled, Engine::ScriptComponent{"LifecycleTestScript", false});
     const auto empty = registry.create();
     registry.add<Engine::ScriptComponent>(empty);
 
@@ -142,8 +150,7 @@ TEST(ScriptSystem, PreservesScriptStateAcrossDisableAndEnable) {
     Engine::ScriptSystem system{scripts};
     Engine::Registry registry;
     const auto entity = registry.create();
-    registry.add<Engine::ScriptComponent>(entity,
-                                          Engine::ScriptComponent{"EnableDisableLifecycleTestScript"});
+    registry.add<Engine::ScriptComponent>(entity, Engine::ScriptComponent{"EnableDisableLifecycleTestScript"});
 
     system.update(registry, 0.1F);
     auto& component = registry.get<Engine::ScriptComponent>(entity);
@@ -180,7 +187,7 @@ TEST(ScriptSystem, ReportsMissingScriptWithContextOnlyOnce) {
 
 TEST(ScriptSystem, ReportsRuntimeScriptExceptionsInsteadOfPropagatingThem) {
     Engine::Diagnostics::instance().clear();
-    auto &scripts = Engine::ScriptRegistry::instance();
+    auto& scripts = Engine::ScriptRegistry::instance();
     scripts.registerClass<ThrowingTestScript>("ThrowingTestScript", "Tests/ScriptSystemTests.cpp");
     Engine::Scene scene;
     const auto actor = scene.createActor("Broken controller");

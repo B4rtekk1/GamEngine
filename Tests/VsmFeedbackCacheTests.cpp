@@ -1,24 +1,26 @@
 #include "Engine/Renderer/Lighting/VsmFeedbackCache.h"
+
 #include <gtest/gtest.h>
 
 namespace Engine {
 namespace {
-    VsmFeedbackKey coverage() {
-        VsmFeedbackKey key;
-        key.clipMatrices.fill(glm::mat4{1.0F});
-        key.width = 1920;
-        key.height = 1080;
-        key.quality = 2;
-        return key;
-    }
+VsmFeedbackKey coverage() {
+    VsmFeedbackKey key;
+    key.clipMatrices.fill(glm::mat4{1.0F});
+    key.width = 1920;
+    key.height = 1080;
+    key.quality = 2;
+    return key;
 }
+} // namespace
 
 TEST(VsmFeedbackCacheTests, UnchangedCoverageReusesCompletedRequests) {
     VsmFeedbackCache cache;
     const auto key = coverage();
     EXPECT_TRUE(cache.needsUpdate(key));
     cache.commit(key);
-    for (int frame = 0; frame < 120; ++frame) EXPECT_FALSE(cache.needsUpdate(key));
+    for (int frame = 0; frame < 120; ++frame)
+        EXPECT_FALSE(cache.needsUpdate(key));
 }
 
 TEST(VsmFeedbackCacheTests, CameraAndClipmapChangesRequireNewFeedback) {
@@ -75,4 +77,4 @@ TEST(VsmFeedbackCacheTests, FrameSlotsKeepIndependentCoverage) {
     second.commit(key);
     EXPECT_FALSE(second.needsUpdate(key));
 }
-}
+} // namespace Engine

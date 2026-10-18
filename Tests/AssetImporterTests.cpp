@@ -1,19 +1,18 @@
 #include "Editor/AssetImporter.h"
 
-#include <gtest/gtest.h>
-#include <miniz.h>
-
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
+#include <miniz.h>
 
 namespace {
 class AssetImporterTest : public testing::Test {
-protected:
+  protected:
     std::filesystem::path root;
     void SetUp() override {
-        root = std::filesystem::temp_directory_path() / ("ge-import-test-" + std::to_string(
-            std::chrono::steady_clock::now().time_since_epoch().count()));
+        root = std::filesystem::temp_directory_path() /
+               ("ge-import-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(root);
     }
     void TearDown() override {
@@ -27,7 +26,8 @@ protected:
             std::string writableName{name};
             // Miniz's writer disallows absolute names; patch an equal-length
             // filename below to exercise archives produced by other tools.
-            if (writableName.starts_with('/')) writableName.front() = '_';
+            if (writableName.starts_with('/'))
+                writableName.front() = '_';
             EXPECT_TRUE(mz_zip_writer_add_mem(&zip, writableName.c_str(), "asset", 5, MZ_DEFAULT_COMPRESSION));
         }
         EXPECT_TRUE(mz_zip_writer_finalize_archive(&zip));
@@ -36,11 +36,13 @@ protected:
         std::string bytes{std::istreambuf_iterator<char>{input}, {}};
         input.close();
         for (const auto* name : names) {
-            if (*name != '/') continue;
+            if (*name != '/')
+                continue;
             std::string writableName{name};
             writableName.front() = '_';
             for (auto offset = bytes.find(writableName); offset != std::string::npos;
-                 offset = bytes.find(writableName, offset + writableName.size())) bytes[offset] = '/';
+                 offset = bytes.find(writableName, offset + writableName.size()))
+                bytes[offset] = '/';
         }
         std::ofstream{root / "assets.zip", std::ios::binary | std::ios::trunc}.write(bytes.data(), bytes.size());
     }

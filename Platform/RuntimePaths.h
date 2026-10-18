@@ -18,4 +18,4 @@ inline constexpr const char* ExecutableSuffix = "";
 inline constexpr const char* RuntimeDirectory = "Runtime/Linux64/Release";
 inline constexpr const char* BuildPlatform = "Linux";
 #endif
-}
+} // namespace Platform

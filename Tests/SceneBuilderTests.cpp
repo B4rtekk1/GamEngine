@@ -1,7 +1,6 @@
-#include <gtest/gtest.h>
-
 #include "Engine/Scene/SceneBuilder.h"
 
+#include <gtest/gtest.h>
 #include <memory>
 
 namespace {
@@ -14,8 +13,7 @@ TEST(SceneBuilder, CreatesEntitiesWithNameAndUniqueIdentifier) {
     ASSERT_TRUE(registry.valid(first));
     EXPECT_EQ(registry.get<Engine::NameComponent>(first).value, "Player");
     EXPECT_NE(registry.get<Engine::UUIDComponent>(first).value, Engine::NullUUID);
-    EXPECT_NE(registry.get<Engine::UUIDComponent>(first).value,
-              registry.get<Engine::UUIDComponent>(second).value);
+    EXPECT_NE(registry.get<Engine::UUIDComponent>(first).value, registry.get<Engine::UUIDComponent>(second).value);
     EXPECT_EQ(registry.get<Engine::NameComponent>(second).value, "GameObject");
 }
 

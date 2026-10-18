@@ -21,7 +21,7 @@ struct Header {
     std::uint32_t samples{SampleCount};
 };
 static_assert(sizeof(Header) == 24);
-}
+} // namespace
 
 int main(const int argc, char** argv) {
     if (argc != 2) {
@@ -33,12 +33,14 @@ int main(const int argc, char** argv) {
         std::filesystem::create_directories(output.parent_path());
         const auto pixels = Engine::EnvironmentBaker::generateBrdfLut(LutSize, SampleCount);
         std::ofstream stream(output, std::ios::binary | std::ios::trunc);
-        if (!stream) throw std::runtime_error("could not open output");
+        if (!stream)
+            throw std::runtime_error("could not open output");
         const Header header{};
         stream.write(reinterpret_cast<const char*>(&header), sizeof(header));
         stream.write(reinterpret_cast<const char*>(pixels.data()),
                      static_cast<std::streamsize>(pixels.size() * sizeof(pixels.front())));
-        if (!stream) throw std::runtime_error("could not write output");
+        if (!stream)
+            throw std::runtime_error("could not write output");
         std::cout << "Generated " << output.string() << " (BRDF v" << BrdfVersion << ")\n";
     } catch (const std::exception& error) {
         std::cerr << "GenerateBRDFLut: " << error.what() << '\n';

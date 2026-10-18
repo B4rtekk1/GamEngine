@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Lighting/ImageBasedLighting.h"
+
 #include "Engine/Renderer/Lighting/EnvironmentBaker.h"
 #include "Engine/Renderer/Vulkan/upload_context.h"
 
@@ -6,8 +7,8 @@
 #include <array>
 #include <bit>
 #include <cmath>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -15,12 +16,11 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <stb_image.h>
 #include <string>
 #include <string_view>
-#include <vector>
-
-#include <stb_image.h>
 #include <tinyexr.h>
+#include <vector>
 
 namespace Engine {
 namespace {
@@ -56,12 +56,11 @@ std::uint64_t hashBytes(std::uint64_t hash, const std::byte* bytes, const std::s
 
 std::uint64_t hashEnvironment(const std::filesystem::path& path) {
     constexpr std::uint64_t OffsetBasis = 14695981039346656037ULL;
-    std::uint64_t hash = hashBytes(OffsetBasis, reinterpret_cast<const std::byte*>(&IblCacheVersion),
-                                   sizeof(IblCacheVersion));
-    const auto proceduralHash = [&]() {
-        return hashBytes(hash, reinterpret_cast<const std::byte*>("procedural"), 10);
-    };
-    if (path.empty()) return proceduralHash();
+    std::uint64_t hash =
+        hashBytes(OffsetBasis, reinterpret_cast<const std::byte*>(&IblCacheVersion), sizeof(IblCacheVersion));
+    const auto proceduralHash = [&]() { return hashBytes(hash, reinterpret_cast<const std::byte*>("procedural"), 10); };
+    if (path.empty())
+        return proceduralHash();
     std::ifstream input(path, std::ios::binary);
     if (!input) {
         // Keep the renderer's historical behaviour: a missing/corrupt source
@@ -96,17 +95,20 @@ std::size_t cubemapFloatCount(const std::uint32_t size, const std::uint32_t mipL
 bool loadCache(const std::filesystem::path& path, const IblCacheKind kind, const std::uint32_t size,
                const std::uint32_t mipLevels, const std::uint64_t sourceHash, std::vector<std::byte>& payload) {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
-    if (!input) return false;
+    if (!input)
+        return false;
     const auto length = input.tellg();
-    if (length < static_cast<std::streamoff>(sizeof(IblCacheHeader))) return false;
+    if (length < static_cast<std::streamoff>(sizeof(IblCacheHeader)))
+        return false;
     input.seekg(0);
     IblCacheHeader header{};
     input.read(reinterpret_cast<char*>(&header), sizeof(header));
     const auto expectedBytes = cubemapFloatCount(size, mipLevels) * sizeof(float);
     if (!input || std::string_view(header.magic, 4) != "GTEX" || header.version != IblCacheVersion ||
-        header.kind != static_cast<std::uint32_t>(kind) || header.size != size ||
-        header.mipLevels != mipLevels || header.sourceHash != sourceHash || header.payloadBytes != expectedBytes ||
-        length != static_cast<std::streamoff>(sizeof(header) + expectedBytes)) return false;
+        header.kind != static_cast<std::uint32_t>(kind) || header.size != size || header.mipLevels != mipLevels ||
+        header.sourceHash != sourceHash || header.payloadBytes != expectedBytes ||
+        length != static_cast<std::streamoff>(sizeof(header) + expectedBytes))
+        return false;
     payload.resize(expectedBytes);
     input.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
     return static_cast<bool>(input);
@@ -116,22 +118,31 @@ void saveCache(const std::filesystem::path& path, const IblCacheKind kind, const
                const std::uint32_t mipLevels, const std::uint64_t sourceHash, std::span<const std::byte> payload) {
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
-    if (error) throw std::runtime_error("Could not create IBL cache directory: " + error.message());
+    if (error)
+        throw std::runtime_error("Could not create IBL cache directory: " + error.message());
     const auto temporary = path.string() + ".tmp";
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    if (!output) throw std::runtime_error("Could not write IBL cache: " + path.string());
-    const IblCacheHeader header{{'G', 'T', 'E', 'X'}, static_cast<std::uint32_t>(IblCacheVersion),
-        static_cast<std::uint32_t>(kind), size, mipLevels, sourceHash, payload.size()};
+    if (!output)
+        throw std::runtime_error("Could not write IBL cache: " + path.string());
+    const IblCacheHeader header{{'G', 'T', 'E', 'X'},
+                                static_cast<std::uint32_t>(IblCacheVersion),
+                                static_cast<std::uint32_t>(kind),
+                                size,
+                                mipLevels,
+                                sourceHash,
+                                payload.size()};
     output.write(reinterpret_cast<const char*>(&header), sizeof(header));
     output.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
     output.close();
-    if (!output) throw std::runtime_error("Could not finish IBL cache: " + path.string());
+    if (!output)
+        throw std::runtime_error("Could not finish IBL cache: " + path.string());
     std::filesystem::rename(temporary, path, error);
     if (error) {
         std::filesystem::remove(path, error);
         error.clear();
         std::filesystem::rename(temporary, path, error);
-        if (error) throw std::runtime_error("Could not publish IBL cache: " + error.message());
+        if (error)
+            throw std::runtime_error("Could not publish IBL cache: " + error.message());
     }
 }
 
@@ -160,13 +171,14 @@ std::vector<std::byte> loadBrdfLutAsset(const std::filesystem::path& path) {
     input.seekg(0);
     BrdfLutHeader header{};
     input.read(reinterpret_cast<char*>(&header), sizeof(header));
-    if (!input || std::string_view(header.magic, 4) != "BRDF" || header.version != 3 ||
-        header.width != BrdfLutSize || header.height != BrdfLutSize || header.channels != 2 || header.samples != 1024) {
+    if (!input || std::string_view(header.magic, 4) != "BRDF" || header.version != 3 || header.width != BrdfLutSize ||
+        header.height != BrdfLutSize || header.channels != 2 || header.samples != 1024) {
         throw std::runtime_error("BRDF LUT asset has an incompatible BRDF version: " + path.string());
     }
     std::vector<std::byte> payload(payloadBytes);
     input.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
-    if (!input) throw std::runtime_error("Could not read cooked BRDF LUT asset: " + path.string());
+    if (!input)
+        throw std::runtime_error("Could not read cooked BRDF LUT asset: " + path.string());
     return payload;
 }
 
@@ -188,10 +200,13 @@ struct EnvironmentSource {
     };
     std::vector<Mip> mips;
 
-    [[nodiscard]] bool loaded() const noexcept { return !mips.empty(); }
+    [[nodiscard]] bool loaded() const noexcept {
+        return !mips.empty();
+    }
 
     [[nodiscard]] Vec3 sample(Vec3 direction, const float mip = 0.0F) const {
-        if (!loaded()) return proceduralRadiance(direction);
+        if (!loaded())
+            return proceduralRadiance(direction);
         const float clampedMip = std::clamp(mip, 0.0F, static_cast<float>(mips.size() - 1));
         const auto sampleMip = [direction](const Mip& level) {
             const int width = level.width;
@@ -206,7 +221,8 @@ struct EnvironmentSource {
             const int x1 = (x0 + 1) % width;
             const int y0 = std::clamp(static_cast<int>(std::floor(y)), 0, height - 1);
             const int y1 = std::min(y0 + 1, height - 1);
-            const float tx = x - std::floor(x); const float ty = y - std::floor(y);
+            const float tx = x - std::floor(x);
+            const float ty = y - std::floor(y);
             const auto pixel = [&pixels, width](int px, int py) {
                 const auto index = (static_cast<std::size_t>(py) * width + px) * 4;
                 return Vec3{pixels[index], pixels[index + 1], pixels[index + 2]};
@@ -235,8 +251,9 @@ struct EnvironmentSource {
                             for (int dx = 0; dx < 2; ++dx) {
                                 const int sourceX = (x0 + dx) % previous.width;
                                 const int sourceY = std::min(y0 + dy, previous.height - 1);
-                                sum += previous.pixels[
-                                    (static_cast<std::size_t>(sourceY) * previous.width + sourceX) * 4 + channel];
+                                sum +=
+                                    previous.pixels[(static_cast<std::size_t>(sourceY) * previous.width + sourceX) * 4 +
+                                                    channel];
                             }
                         }
                         next.pixels[(static_cast<std::size_t>(y) * next.width + x) * 4 + channel] = sum * 0.25F;
@@ -249,37 +266,46 @@ struct EnvironmentSource {
 };
 
 EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
-    if (path.empty()) return {};
+    if (path.empty())
+        return {};
     const auto extension = path.extension().string();
     if (extension == ".exr" || extension == ".EXR") {
         float* decoded = nullptr;
-        int width = 0; int height = 0;
+        int width = 0;
+        int height = 0;
         const char* error = nullptr;
         const std::string nativePath = path.string();
-        if (LoadEXR(&decoded, &width, &height, nativePath.c_str(), &error) != TINYEXR_SUCCESS ||
-            decoded == nullptr || width <= 0 || height <= 0) {
-            std::cerr << "[IBL] Could not load EXR panorama '" << path.string() << "': "
-                      << (error != nullptr ? error : "invalid EXR") << "; using procedural fallback.\n";
-            if (error != nullptr) FreeEXRErrorMessage(error);
-            if (decoded != nullptr) free(decoded);
+        if (LoadEXR(&decoded, &width, &height, nativePath.c_str(), &error) != TINYEXR_SUCCESS || decoded == nullptr ||
+            width <= 0 || height <= 0) {
+            std::cerr << "[IBL] Could not load EXR panorama '" << path.string()
+                      << "': " << (error != nullptr ? error : "invalid EXR") << "; using procedural fallback.\n";
+            if (error != nullptr)
+                FreeEXRErrorMessage(error);
+            if (decoded != nullptr)
+                free(decoded);
             return {};
         }
-        EnvironmentSource source; source.mips.push_back({width, height, {}});
+        EnvironmentSource source;
+        source.mips.push_back({width, height, {}});
         source.mips.front().pixels.assign(decoded, decoded + static_cast<std::size_t>(width) * height * 4);
         source.buildMipChain();
         free(decoded);
         return source;
     }
-    int width = 0; int height = 0; int channels = 0;
+    int width = 0;
+    int height = 0;
+    int channels = 0;
     const std::string nativePath = path.string();
     float* const decoded = stbi_loadf(nativePath.c_str(), &width, &height, &channels, 4);
     if (decoded == nullptr || width <= 0 || height <= 0) {
-        std::cerr << "[IBL] Could not load HDR panorama '" << path.string() << "': "
-                  << stbi_failure_reason() << "; using procedural fallback.\n";
-        if (decoded != nullptr) stbi_image_free(decoded);
+        std::cerr << "[IBL] Could not load HDR panorama '" << path.string() << "': " << stbi_failure_reason()
+                  << "; using procedural fallback.\n";
+        if (decoded != nullptr)
+            stbi_image_free(decoded);
         return {};
     }
-    EnvironmentSource source; source.mips.push_back({width, height, {}});
+    EnvironmentSource source;
+    source.mips.push_back({width, height, {}});
     source.mips.front().pixels.assign(decoded, decoded + static_cast<std::size_t>(width) * height * 4);
     source.buildMipChain();
     stbi_image_free(decoded);
@@ -287,7 +313,8 @@ EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
 }
 
 std::optional<ImageBasedLighting::EnvironmentSun> extractSun(const EnvironmentSource& source) {
-    if (!source.loaded()) return std::nullopt;
+    if (!source.loaded())
+        return std::nullopt;
     const auto& image = source.mips.front();
     const float longitudeStep = Tau / static_cast<float>(image.width);
     const float latitudeStep = Pi / static_cast<float>(image.height);
@@ -314,15 +341,14 @@ std::optional<ImageBasedLighting::EnvironmentSun> extractSun(const EnvironmentSo
         return 0.2126F * color.x() + 0.7152F * color.y() + 0.0722F * color.z();
     };
     const auto directionAt = [&](int x, int y) {
-        return Vec3{longitudeCos[x] * latitudeSin[y], latitudeCos[y],
-                    longitudeSin[x] * latitudeSin[y]};
+        return Vec3{longitudeCos[x] * latitudeSin[y], latitudeCos[y], longitudeSin[x] * latitudeSin[y]};
     };
     for (int y = 0; y < image.height; ++y) {
         const float solidAngle = longitudeStep * latitudeStep * latitudeSin[y];
         for (int x = 0; x < image.width; ++x) {
             const Vec3 radiance = radianceAt(x, y);
-            if (!std::isfinite(radiance.x()) || !std::isfinite(radiance.y()) ||
-                !std::isfinite(radiance.z())) continue;
+            if (!std::isfinite(radiance.x()) || !std::isfinite(radiance.y()) || !std::isfinite(radiance.z()))
+                continue;
             const float brightness = luminance(radiance);
             totalRadiance += radiance * solidAngle;
             if (brightness > peakLuminance) {
@@ -347,12 +373,13 @@ std::optional<ImageBasedLighting::EnvironmentSun> extractSun(const EnvironmentSo
         const float solidAngle = longitudeStep * latitudeStep * latitudeSin[y];
         for (int x = 0; x < image.width; ++x) {
             const Vec3 direction = directionAt(x, y);
-            if (dot(direction, peakDirection) < CosSunRadius) continue;
+            if (dot(direction, peakDirection) < CosSunRadius)
+                continue;
             const Vec3 radiance = radianceAt(x, y);
             const float brightness = luminance(radiance);
-            if (!std::isfinite(brightness) || brightness < cutoff) continue;
-            const Vec3 excess{std::max(0.0F, radiance.x() - ambient.x()),
-                              std::max(0.0F, radiance.y() - ambient.y()),
+            if (!std::isfinite(brightness) || brightness < cutoff)
+                continue;
+            const Vec3 excess{std::max(0.0F, radiance.x() - ambient.x()), std::max(0.0F, radiance.y() - ambient.y()),
                               std::max(0.0F, radiance.z() - ambient.z())};
             energy += excess * solidAngle;
             weightedDirection += direction * (luminance(excess) * solidAngle);
@@ -361,17 +388,14 @@ std::optional<ImageBasedLighting::EnvironmentSun> extractSun(const EnvironmentSo
     const float intensity = std::max({energy.x(), energy.y(), energy.z()});
     if (!std::isfinite(intensity) || intensity < 0.01F || weightedDirection.length() < 1.0e-6F)
         return std::nullopt;
-    return ImageBasedLighting::EnvironmentSun{weightedDirection.normalized(),
-        energy * (1.0F / intensity), intensity};
+    return ImageBasedLighting::EnvironmentSun{weightedDirection.normalized(), energy * (1.0F / intensity), intensity};
 }
 
-}
+} // namespace
 
 void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
-                                VkQueue queue, VmaAllocator allocator,
-                                const std::filesystem::path& equirectangularPath,
-                                const std::filesystem::path& libraryDirectory,
-                                const IblQualitySettings quality) {
+                                VkQueue queue, VmaAllocator allocator, const std::filesystem::path& equirectangularPath,
+                                const std::filesystem::path& libraryDirectory, const IblQualitySettings quality) {
     const auto environmentHash = hashEnvironment(equirectangularPath);
     const auto iblDirectory = cacheDirectory(libraryDirectory, environmentHash);
     const auto environmentCache = iblDirectory / "environment.gtex";
@@ -382,7 +406,8 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     auto brdfAsset = libraryDirectory.parent_path() / "Assets" / "BRDF" / "brdf_lut.bin";
     if (!std::filesystem::is_regular_file(brdfAsset)) {
         const auto packagedBrdfAsset = libraryDirectory.parent_path() / "Content" / "BRDF" / "brdf_lut.bin";
-        if (std::filesystem::is_regular_file(packagedBrdfAsset)) brdfAsset = packagedBrdfAsset;
+        if (std::filesystem::is_regular_file(packagedBrdfAsset))
+            brdfAsset = packagedBrdfAsset;
     }
     // Build every resource away from the live set. A decode, allocation or
     // upload failure must leave the active descriptor targets intact.
@@ -413,42 +438,59 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
 
     std::optional<EnvironmentSource> source;
     const auto getSource = [&]() -> const EnvironmentSource& {
-        if (!source) source.emplace(loadEquirectangular(equirectangularPath));
+        if (!source)
+            source.emplace(loadEquirectangular(equirectangularPath));
         return *source;
     };
     replacement.sun_ = extractSun(getSource());
-    uploadCubemap(environmentCache, quality.environmentResolution, environmentMips, [&] {
-        const auto& decoded = getSource();
-        return EnvironmentBaker::bakeCubemap(quality.environmentResolution, environmentMips,
-            [&decoded](const Vec3& direction, const std::uint32_t mip, std::uint32_t) {
-                return decoded.sample(direction, static_cast<float>(mip));
-            });
-    }, replacement.environment_);
-    uploadCubemap(irradianceCache, IrradianceSize, 1, [&] {
-        const auto& decoded = getSource();
-        return EnvironmentBaker::bakeCubemap(IrradianceSize, 1, [&decoded](const Vec3& direction, std::uint32_t, std::uint32_t) {
-            return EnvironmentBaker::diffuseIrradiance(direction,
-                [&decoded](const Vec3& sampleDirection) { return decoded.sample(sampleDirection); });
-        });
-    }, replacement.irradiance_);
-    uploadCubemap(prefilteredCache, quality.prefilterResolution, prefilterMips, [&] {
-        const auto& decoded = getSource();
-        return EnvironmentBaker::bakePrefilteredCubemap(quality.prefilterResolution, prefilterMips, quality.environmentResolution,
-            environmentMips, [&decoded](const Vec3& direction, const float mip) {
-                return decoded.sample(direction, mip);
-            });
-    }, replacement.prefiltered_);
+    uploadCubemap(
+        environmentCache, quality.environmentResolution, environmentMips,
+        [&] {
+            const auto& decoded = getSource();
+            return EnvironmentBaker::bakeCubemap(
+                quality.environmentResolution, environmentMips,
+                [&decoded](const Vec3& direction, const std::uint32_t mip, std::uint32_t) {
+                    return decoded.sample(direction, static_cast<float>(mip));
+                });
+        },
+        replacement.environment_);
+    uploadCubemap(
+        irradianceCache, IrradianceSize, 1,
+        [&] {
+            const auto& decoded = getSource();
+            return EnvironmentBaker::bakeCubemap(
+                IrradianceSize, 1, [&decoded](const Vec3& direction, std::uint32_t, std::uint32_t) {
+                    return EnvironmentBaker::diffuseIrradiance(
+                        direction, [&decoded](const Vec3& sampleDirection) { return decoded.sample(sampleDirection); });
+                });
+        },
+        replacement.irradiance_);
+    uploadCubemap(
+        prefilteredCache, quality.prefilterResolution, prefilterMips,
+        [&] {
+            const auto& decoded = getSource();
+            return EnvironmentBaker::bakePrefilteredCubemap(
+                quality.prefilterResolution, prefilterMips, quality.environmentResolution, environmentMips,
+                [&decoded](const Vec3& direction, const float mip) { return decoded.sample(direction, mip); });
+        },
+        replacement.prefiltered_);
 
     payload = loadBrdfLutAsset(brdfAsset);
-    const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size()};
+    const auto bytes =
+        std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size()};
     replacement.brdfLut_.create(physicalDevice, device, commandPool, queue, BrdfLutSize, BrdfLutSize, bytes,
                                 TextureColorSpace::Linear, false, allocator, TexturePixelFormat::RG16F);
-    if (uploadBatch) static_cast<void>(uploadBatch->submit());
+    if (uploadBatch)
+        static_cast<void>(uploadBatch->submit());
     swap(replacement);
 }
 
 void ImageBasedLighting::destroy() noexcept {
-    brdfLut_.destroy(); prefiltered_.destroy(); irradiance_.destroy(); environment_.destroy(); sun_.reset();
+    brdfLut_.destroy();
+    prefiltered_.destroy();
+    irradiance_.destroy();
+    environment_.destroy();
+    sun_.reset();
 }
 
 void ImageBasedLighting::swap(ImageBasedLighting& other) noexcept {

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "Engine/Scene/Scene.h"
-#include "Engine/Renderer/RenderConfig.h"
 #include "Engine/Assets/Content.h"
+#include "Engine/Renderer/RenderConfig.h"
+#include "Engine/Scene/Scene.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -14,7 +14,7 @@ namespace Engine {
 
 /** High-level lifecycle owned by an Application. */
 class Game {
-public:
+  public:
     virtual ~Game() = default;
 
     virtual void onStart(Scene& scene) {}
@@ -25,29 +25,37 @@ public:
 
 struct ApplicationConfig final {
     std::string title = "GamEngine Application";
-    std::int32_t width = 1280; //NOLINT
-    std::int32_t height = 720; //NOLINT
+    std::int32_t width = 1280; // NOLINT
+    std::int32_t height = 720; // NOLINT
     bool closeOnEscape = true;
-    float fixedDeltaTime = 1.0F / 60.0F; //NOLINT
+    float fixedDeltaTime = 1.0F / 60.0F; // NOLINT
     std::uint32_t maxFixedStepsPerFrame = 5;
-    float maxFrameDeltaTime = 0.25F; //NOLINT
+    float maxFrameDeltaTime = 0.25F; // NOLINT
     std::filesystem::path assetRoot{};
     RenderConfig render{};
 };
 
 /** High-level application entry point. Owns the window and the render loop. */
 class Application final {
-public:
+  public:
     explicit Application(ApplicationConfig config = {});
     ~Application();
 
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;
 
-    [[nodiscard]] Scene& scene() noexcept { return scene_; }
-    [[nodiscard]] const Scene& scene() const noexcept { return scene_; }
-    [[nodiscard]] Assets::Content& content() noexcept { return content_; }
-    [[nodiscard]] const Assets::Content& content() const noexcept { return content_; }
+    [[nodiscard]] Scene& scene() noexcept {
+        return scene_;
+    }
+    [[nodiscard]] const Scene& scene() const noexcept {
+        return scene_;
+    }
+    [[nodiscard]] Assets::Content& content() noexcept {
+        return content_;
+    }
+    [[nodiscard]] const Assets::Content& content() const noexcept {
+        return content_;
+    }
 
     /** Loads the scene and creates GPU resources derived from it. */
     void loadScene(const std::filesystem::path& path);
@@ -58,7 +66,9 @@ public:
     }
 
     /** Attaches a non-owning high-level game lifecycle to the application. */
-    void setGame(Game& game) noexcept { game_ = &game; }
+    void setGame(Game& game) noexcept {
+        game_ = &game;
+    }
 
     /** Requests that the main loop exits after the current frame. */
     void stop() const noexcept;
@@ -67,7 +77,7 @@ public:
     /** Starts the main loop and returns after the window is closed. */
     void run();
 
-private:
+  private:
     void initializeRuntime();
     void processEvents() const;
     void updateFrame(float deltaTime);

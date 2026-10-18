@@ -10,7 +10,8 @@
 namespace {
 
 void closeHandle(HANDLE& handle) {
-    if (handle != nullptr && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    if (handle != nullptr && handle != INVALID_HANDLE_VALUE)
+        CloseHandle(handle);
     handle = nullptr;
 }
 
@@ -20,11 +21,12 @@ bool existsOnPath(const wchar_t* name) {
 }
 
 class ConPtyTerminal final : public Platform::TerminalSession {
-public:
-    ~ConPtyTerminal() override { stop(); }
+  public:
+    ~ConPtyTerminal() override {
+        stop();
+    }
 
-    bool start(const std::filesystem::path& executable,
-               const std::filesystem::path& workingDirectory) override {
+    bool start(const std::filesystem::path& executable, const std::filesystem::path& workingDirectory) override {
         stop();
         if (!CreatePipe(&inputRead_, &inputWrite_, nullptr, 0) ||
             !CreatePipe(&outputRead_, &outputWrite_, nullptr, 0)) {
@@ -42,12 +44,10 @@ public:
 
         SIZE_T attributeListSize{};
         InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeListSize);
-        attributeList_ = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
-            HeapAlloc(GetProcessHeap(), 0, attributeListSize));
-        if (attributeList_ == nullptr ||
-            !InitializeProcThreadAttributeList(attributeList_, 1, 0, &attributeListSize) ||
-            !UpdateProcThreadAttribute(attributeList_, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                                        pseudoConsole_, sizeof(pseudoConsole_), nullptr, nullptr)) {
+        attributeList_ = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(HeapAlloc(GetProcessHeap(), 0, attributeListSize));
+        if (attributeList_ == nullptr || !InitializeProcThreadAttributeList(attributeList_, 1, 0, &attributeListSize) ||
+            !UpdateProcThreadAttribute(attributeList_, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, pseudoConsole_,
+                                       sizeof(pseudoConsole_), nullptr, nullptr)) {
             stop();
             return false;
         }
@@ -55,12 +55,12 @@ public:
         startup.StartupInfo.cb = sizeof(startup);
         startup.lpAttributeList = attributeList_;
         std::wstring command = L"\"" + executable.wstring() + L"\"";
-        if (_wcsicmp(executable.filename().c_str(), L"cmd.exe") != 0) command += L" -NoLogo";
+        if (_wcsicmp(executable.filename().c_str(), L"cmd.exe") != 0)
+            command += L" -NoLogo";
         PROCESS_INFORMATION process{};
-        if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE,
-                            EXTENDED_STARTUPINFO_PRESENT, nullptr,
-                            workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
-                            &startup.StartupInfo, &process)) {
+        if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, EXTENDED_STARTUPINFO_PRESENT, nullptr,
+                            workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup.StartupInfo,
+                            &process)) {
             stop();
             return false;
         }
@@ -71,7 +71,8 @@ public:
     }
 
     void write(const std::string_view data) override {
-        if (inputWrite_ == nullptr || data.empty()) return;
+        if (inputWrite_ == nullptr || data.empty())
+            return;
         DWORD written{};
         static_cast<void>(WriteFile(inputWrite_, data.data(), static_cast<DWORD>(data.size()), &written, nullptr));
     }
@@ -83,13 +84,14 @@ public:
 
     void resize(const std::uint16_t columns, const std::uint16_t rows) override {
         if (pseudoConsole_ != nullptr) {
-            static_cast<void>(ResizePseudoConsole(pseudoConsole_,
-                                                  {static_cast<SHORT>(columns), static_cast<SHORT>(rows)}));
+            static_cast<void>(
+                ResizePseudoConsole(pseudoConsole_, {static_cast<SHORT>(columns), static_cast<SHORT>(rows)}));
         }
     }
 
     [[nodiscard]] bool running() const override {
-        if (processHandle_ == nullptr) return false;
+        if (processHandle_ == nullptr)
+            return false;
         return WaitForSingleObject(processHandle_, 0) == WAIT_TIMEOUT;
     }
 
@@ -121,12 +123,13 @@ public:
         closeHandle(processHandle_);
     }
 
-private:
+  private:
     void readLoop(const std::stop_token stopToken) {
         std::array<char, 4096> buffer{};
         while (!stopToken.stop_requested()) {
             DWORD read{};
-            if (!ReadFile(outputRead_, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) || read == 0) break;
+            if (!ReadFile(outputRead_, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) || read == 0)
+                break;
             std::scoped_lock lock{outputMutex_};
             pendingOutput_.append(buffer.data(), read);
         }
@@ -153,8 +156,10 @@ std::unique_ptr<TerminalSession> createTerminalSession() {
 }
 
 std::filesystem::path defaultTerminalShell() {
-    if (existsOnPath(L"pwsh.exe")) return L"pwsh.exe";
-    if (existsOnPath(L"powershell.exe")) return L"powershell.exe";
+    if (existsOnPath(L"pwsh.exe"))
+        return L"pwsh.exe";
+    if (existsOnPath(L"powershell.exe"))
+        return L"powershell.exe";
     return L"cmd.exe";
 }
 

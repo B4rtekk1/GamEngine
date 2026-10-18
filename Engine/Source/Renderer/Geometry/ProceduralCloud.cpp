@@ -8,26 +8,26 @@
 
 namespace Engine {
 namespace {
-    constexpr std::uint32_t MinimumPuffs = 1U;
-    constexpr std::uint32_t MaximumPuffs = 128U;
-    constexpr float MinimumDimension = 0.1F;
-    constexpr float MinimumPuffRadius = 0.05F;
+constexpr std::uint32_t MinimumPuffs = 1U;
+constexpr std::uint32_t MaximumPuffs = 128U;
+constexpr float MinimumDimension = 0.1F;
+constexpr float MinimumPuffRadius = 0.05F;
 
-    class Random final {
-    public:
-        explicit Random(std::uint32_t seed) : state_(seed == 0U ? 1U : seed) {}
+class Random final {
+  public:
+    explicit Random(std::uint32_t seed) : state_(seed == 0U ? 1U : seed) {}
 
-        [[nodiscard]] float unit() {
-            state_ ^= state_ << 13U;
-            state_ ^= state_ >> 17U;
-            state_ ^= state_ << 5U;
-            return static_cast<float>(state_) / static_cast<float>(UINT32_MAX);
-        }
+    [[nodiscard]] float unit() {
+        state_ ^= state_ << 13U;
+        state_ ^= state_ >> 17U;
+        state_ ^= state_ << 5U;
+        return static_cast<float>(state_) / static_cast<float>(UINT32_MAX);
+    }
 
-    private:
-        std::uint32_t state_;
-    };
-}
+  private:
+    std::uint32_t state_;
+};
+} // namespace
 
 Mesh ProceduralCloud::createMesh(const ProceduralCloudComponent& settings) {
     const std::uint32_t puffCount = std::clamp(settings.puffCount, MinimumPuffs, MaximumPuffs);
@@ -48,11 +48,9 @@ Mesh ProceduralCloud::createMesh(const ProceduralCloudComponent& settings) {
         const float distance = std::sqrt(random.unit());
         const float x = std::cos(angle) * distance * dimensions.x() * 0.5F;
         const float z = std::sin(angle) * distance * dimensions.z() * 0.5F;
-        const float y = (random.unit() - 0.5F) * dimensions.y() *
-                        (1.0F - distance * 0.55F);
+        const float y = (random.unit() - 0.5F) * dimensions.y() * (1.0F - distance * 0.55F);
         const float scale = puffRadius * (0.65F + random.unit() * 0.70F);
-        const Vec3 puffScale{scale * (0.85F + random.unit() * 0.35F),
-                             scale * (0.65F + random.unit() * 0.30F),
+        const Vec3 puffScale{scale * (0.85F + random.unit() * 0.35F), scale * (0.65F + random.unit() * 0.30F),
                              scale * (0.85F + random.unit() * 0.35F)};
         const std::uint32_t firstVertex = static_cast<std::uint32_t>(cloud.vertices.size());
         for (const Vertex& vertex : puff.vertices) {
@@ -60,13 +58,14 @@ Mesh ProceduralCloud::createMesh(const ProceduralCloudComponent& settings) {
             transformed.position = {x + vertex.position.x() * puffScale.x() * 2.0F,
                                     y + vertex.position.y() * puffScale.y() * 2.0F,
                                     z + vertex.position.z() * puffScale.z() * 2.0F};
-            transformed.normal = Vec3{vertex.normal.x() / puffScale.x(),
-                                      vertex.normal.y() / puffScale.y(),
-                                      vertex.normal.z() / puffScale.z()}.normalized();
+            transformed.normal = Vec3{vertex.normal.x() / puffScale.x(), vertex.normal.y() / puffScale.y(),
+                                      vertex.normal.z() / puffScale.z()}
+                                     .normalized();
             transformed.color = {0.94F, 0.96F, 1.0F};
             cloud.vertices.push_back(transformed);
         }
-        for (const std::uint32_t index : puff.indices) cloud.indices.push_back(firstVertex + index);
+        for (const std::uint32_t index : puff.indices)
+            cloud.indices.push_back(firstVertex + index);
     }
     cloud.recalculateLocalBounds();
     return cloud;

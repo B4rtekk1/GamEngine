@@ -55,9 +55,7 @@ void PlayerController::onUpdate(const float deltaTime) {
         }
     }
 
-    Engine::Vec3 movement =
-        forward * input.y() +
-        right * input.x();
+    Engine::Vec3 movement = forward * input.y() + right * input.x();
 
     if (movement.length() > Epsilon) {
         movement = movement.normalized() * MovementSpeed;
@@ -68,19 +66,11 @@ void PlayerController::onUpdate(const float deltaTime) {
     velocity.setX(movement.x());
     velocity.setZ(movement.z());
 
-    const Engine::Vec3 groundProbeOrigin =
-        body.worldPosition() + Engine::Vec3{0.0F, -0.51F, 0.0F};
+    const Engine::Vec3 groundProbeOrigin = body.worldPosition() + Engine::Vec3{0.0F, -0.51F, 0.0F};
 
-    const auto groundHit = physics().raycast(
-        groundProbeOrigin,
-        {0.0F, -1.0F, 0.0F},
-        GroundCheckDistance
-    );
+    const auto groundHit = physics().raycast(groundProbeOrigin, {0.0F, -1.0F, 0.0F}, GroundCheckDistance);
 
-    const bool grounded =
-        groundHit.has_value() &&
-        groundHit->actor.id() != body.id() &&
-        velocity.y() <= 0.5F;
+    const bool grounded = groundHit.has_value() && groundHit->actor.id() != body.id() && velocity.y() <= 0.5F;
 
     if (grounded && Engine::Input::actionPressed("Jump")) {
         velocity.setY(JumpSpeed);

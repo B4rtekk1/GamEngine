@@ -7,20 +7,20 @@
 #define ENGINE_SCRIPT_API_VERSION 2U
 
 #ifdef _WIN32
-#  ifdef GAME_SCRIPTS_BUILD_DLL
-#    define GAME_SCRIPT_API __declspec(dllexport)
-#  else
-#    define GAME_SCRIPT_API __declspec(dllimport)
-#  endif
+#ifdef GAME_SCRIPTS_BUILD_DLL
+#define GAME_SCRIPT_API __declspec(dllexport)
 #else
-#  define GAME_SCRIPT_API __attribute__((visibility("default")))
+#define GAME_SCRIPT_API __declspec(dllimport)
+#endif
+#else
+#define GAME_SCRIPT_API __attribute__((visibility("default")))
 #endif
 
 namespace Engine {
-    class ScriptModuleRegistrar;
+class ScriptModuleRegistrar;
 }
 
 extern "C" {
-    GAME_SCRIPT_API std::uint32_t GE_GetScriptApiVersion();
-    GAME_SCRIPT_API void GE_RegisterGameScripts(Engine::ScriptModuleRegistrar *registrar);
+GAME_SCRIPT_API std::uint32_t GE_GetScriptApiVersion();
+GAME_SCRIPT_API void GE_RegisterGameScripts(Engine::ScriptModuleRegistrar* registrar);
 }

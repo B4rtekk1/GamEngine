@@ -3,108 +3,110 @@
 #include <stdexcept>
 
 namespace Engine {
-    HdrBuffer::~HdrBuffer() {
+HdrBuffer::~HdrBuffer() {
+    destroy();
+}
+
+void HdrBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice device, const VkExtent2D extent,
+                       const VmaAllocator allocator, const VkFilter filter, const VkFormat format, const bool storage,
+                       const std::span<const std::uint32_t> sharingFamilies) {
+    if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || extent.width == 0 || extent.height == 0 ||
+        allocator == VK_NULL_HANDLE) {
+        throw std::invalid_argument("HDR buffer requires a device and non-zero extent");
+    }
+
+    VkFormatProperties formatProperties{};
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProperties);
+    VkFormatFeatureFlags required = static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) |
+                                    static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+    if (storage) {
+        required |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+    }
+    if ((formatProperties.optimalTilingFeatures & required) != required) {
+        throw std::runtime_error("GPU does not support the requested floating-point sampled color attachment");
+    }
+
+    destroy();
+    device_ = device;
+    allocator_ = allocator;
+    try {
+        const VkImageCreateInfo imageInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = format,
+            .extent = {extent.width, extent.height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) |
+                     static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) |
+                     // Water copies the opaque HDR result before it draws
+                     // its refracting surface. Keeping this on every HDR
+                     // target also makes the attachment usable as a safe
+                     // source during a viewport transition.
+                     static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT) |
+                     // Temporal AA clears its ping-pong history before its
+                     // first use, which requires TRANSFER_DST usage.
+                     static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT) |
+                     (storage ? static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_STORAGE_BIT) : 0),
+            .sharingMode = sharingFamilies.size() > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount =
+                sharingFamilies.size() > 1 ? static_cast<std::uint32_t>(sharingFamilies.size()) : 0,
+            .pQueueFamilyIndices = sharingFamilies.size() > 1 ? sharingFamilies.data() : nullptr,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo allocationInfo{};
+        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS) {
+            throw std::runtime_error("Could not allocate HDR image memory");
+        }
+
+        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        viewInfo.image = image_;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = format;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &viewInfo, nullptr, &imageView_) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create HDR image view");
+        }
+
+        VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        samplerInfo.magFilter = filter;
+        samplerInfo.minFilter = filter;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.maxLod = 0.0F;
+        if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create HDR sampler");
+        }
+    } catch (...) {
         destroy();
+        throw;
     }
+}
 
-    void HdrBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
-                           const VkExtent2D extent, const VmaAllocator allocator,
-                           const VkFilter filter, const VkFormat format, const bool storage,
-                           const std::span<const std::uint32_t> sharingFamilies) {
-        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
-            extent.width == 0 || extent.height == 0 || allocator == VK_NULL_HANDLE) {
-            throw std::invalid_argument("HDR buffer requires a device and non-zero extent");
+void HdrBuffer::destroy() noexcept {
+    if (device_ != VK_NULL_HANDLE) {
+        if (sampler_ != VK_NULL_HANDLE) {
+            vkDestroySampler(device_, sampler_, nullptr);
         }
-
-        VkFormatProperties formatProperties{};
-        vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProperties);
-        VkFormatFeatureFlags required =
-                static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) |
-                static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
-        if (storage) {
-            required |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        if (imageView_ != VK_NULL_HANDLE) {
+            vkDestroyImageView(device_, imageView_, nullptr);
         }
-        if ((formatProperties.optimalTilingFeatures & required) != required) {
-            throw std::runtime_error("GPU does not support the requested floating-point sampled color attachment");
-        }
-
-        destroy();
-        device_ = device;
-        allocator_ = allocator;
-        try {
-            const VkImageCreateInfo imageInfo{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .imageType = VK_IMAGE_TYPE_2D,
-                .format = format,
-                .extent = {extent.width, extent.height, 1},
-                .mipLevels = 1,
-                .arrayLayers = 1,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                .tiling = VK_IMAGE_TILING_OPTIMAL,
-                .usage = static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) |
-                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) |
-                         // Water copies the opaque HDR result before it draws
-                         // its refracting surface. Keeping this on every HDR
-                         // target also makes the attachment usable as a safe
-                         // source during a viewport transition.
-                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT) |
-                         // Temporal AA clears its ping-pong history before its
-                         // first use, which requires TRANSFER_DST usage.
-                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT) |
-                         (storage ? static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_STORAGE_BIT) : 0),
-                .sharingMode = sharingFamilies.size() > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
-                .queueFamilyIndexCount = sharingFamilies.size() > 1
-                    ? static_cast<std::uint32_t>(sharingFamilies.size()) : 0,
-                .pQueueFamilyIndices = sharingFamilies.size() > 1 ? sharingFamilies.data() : nullptr,
-                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            };
-            VmaAllocationCreateInfo allocationInfo{};
-            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate HDR image memory");
-            }
-
-            VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            viewInfo.image = image_;
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            viewInfo.format = format;
-            viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            if (vkCreateImageView(device_, &viewInfo, nullptr, &imageView_) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create HDR image view");
-            }
-
-            VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-            samplerInfo.magFilter = filter;
-            samplerInfo.minFilter = filter;
-            samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            samplerInfo.maxLod = 0.0F;
-            if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create HDR sampler");
-            }
-        } catch (...) {
-            destroy();
-            throw;
+        if (image_ != VK_NULL_HANDLE) {
+            vmaDestroyImage(allocator_, image_, allocation_);
         }
     }
-
-    void HdrBuffer::destroy() noexcept {
-        if (device_ != VK_NULL_HANDLE) {
-            if (sampler_ != VK_NULL_HANDLE) {
-                vkDestroySampler(device_, sampler_, nullptr);
-            }
-            if (imageView_ != VK_NULL_HANDLE) { vkDestroyImageView(device_, imageView_, nullptr); }
-            if (image_ != VK_NULL_HANDLE) { vmaDestroyImage(allocator_, image_, allocation_); }
-        }
-        sampler_ = VK_NULL_HANDLE;
-        imageView_ = VK_NULL_HANDLE;
-        image_ = VK_NULL_HANDLE;
-        allocation_ = VK_NULL_HANDLE;
-        allocator_ = VK_NULL_HANDLE;
-        device_ = VK_NULL_HANDLE;
-    }
+    sampler_ = VK_NULL_HANDLE;
+    imageView_ = VK_NULL_HANDLE;
+    image_ = VK_NULL_HANDLE;
+    allocation_ = VK_NULL_HANDLE;
+    allocator_ = VK_NULL_HANDLE;
+    device_ = VK_NULL_HANDLE;
+}
 } // namespace Engine

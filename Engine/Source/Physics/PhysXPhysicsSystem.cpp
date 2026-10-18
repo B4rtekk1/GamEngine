@@ -1,29 +1,28 @@
-#include "Engine/Physics/PhysicsSystem.h"
-#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Core/Profiler.h"
-#include <chrono>
-#include "Engine/Core/Transform.h"
 #include "Engine/Core/TaskScheduler.h"
+#include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/Physics/GlassDestructionSystem.h"
+#include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/TransformSystem.h"
 
 #include <PxPhysicsAPI.h>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cooking/PxCooking.h>
+#include <cstdint>
 #include <extensions/PxDefaultStreams.h>
 #include <extensions/PxExtensionsAPI.h>
 #include <extensions/PxRigidBodyExt.h>
-
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <ranges>
-#include <optional>
 #include <mutex>
+#include <optional>
+#include <ranges>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
@@ -31,714 +30,689 @@
 #include <vector>
 
 namespace Engine {
-    namespace {
-        constexpr float DegreesToRadians = 0.01745329251994329577F;
-        constexpr float RadiansToDegrees = 57.295779513082320876F;
-        constexpr float MinimumDimension = 1.0e-4F;
-        constexpr physx::PxU32 PhysXVersion =
-                (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MAJOR) << 24U) +
-                (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MINOR) << 16U) +
-                (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_BUGFIX) << 8U);
+namespace {
+constexpr float DegreesToRadians = 0.01745329251994329577F;
+constexpr float RadiansToDegrees = 57.295779513082320876F;
+constexpr float MinimumDimension = 1.0e-4F;
+constexpr physx::PxU32 PhysXVersion = (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MAJOR) << 24U) +
+                                      (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MINOR) << 16U) +
+                                      (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_BUGFIX) << 8U);
 
-        physx::PxVec3 toPhysX(const Vec3 &value) noexcept {
-            return {value.x(), value.y(), value.z()};
-        }
+physx::PxVec3 toPhysX(const Vec3& value) noexcept {
+    return {value.x(), value.y(), value.z()};
+}
 
-        Vec3 fromPhysX(const physx::PxVec3 &value) noexcept {
-            return {value.x, value.y, value.z};
-        }
+Vec3 fromPhysX(const physx::PxVec3& value) noexcept {
+    return {value.x, value.y, value.z};
+}
 
-        struct GrassSphere final {
-            Entity entity{NullEntity};
-            Vec3 center;
-            Vec3 velocity;
-            float radius{};
-        };
+struct GrassSphere final {
+    Entity entity{NullEntity};
+    Vec3 center;
+    Vec3 velocity;
+    float radius{};
+};
 
-        void trampleTerrainGrass(Registry &registry, const float deltaTime) {
-            bool hasGrass = false;
-            registry.view<Transform, TerrainGrassComponent>(
-                [&](Entity, const Transform &, const TerrainGrassComponent &grass) {
-                    hasGrass = hasGrass || !grass.instances.empty();
-                });
-            if (!hasGrass) {
+void trampleTerrainGrass(Registry& registry, const float deltaTime) {
+    bool hasGrass = false;
+    registry.view<Transform, TerrainGrassComponent>([&](Entity, const Transform&, const TerrainGrassComponent& grass) {
+        hasGrass = hasGrass || !grass.instances.empty();
+    });
+    if (!hasGrass) {
+        return;
+    }
+    std::vector<GrassSphere> spheres;
+    registry.view<Transform, ColliderComponent>(
+        [&](const Entity entity, const Transform&, const ColliderComponent& collider) {
+            const Transform transform = TransformSystem::worldTransform(registry, entity);
+            const glm::vec3 center = glm::vec3{transform.matrix().native() * glm::vec4{collider.offset.native(), 1.0F}};
+            const float scale = std::max({
+                std::abs(transform.scale.x()),
+                std::abs(transform.scale.y()),
+                std::abs(transform.scale.z()),
+            });
+            const Vec3 velocity =
+                registry.has<RigidbodyState>(entity) ? registry.get<RigidbodyState>(entity).linearVelocity : Vec3{};
+            // Treat every collider as a conservative horizontal
+            // interaction volume.  This keeps the inexpensive spatial
+            // hash path while allowing the common player capsule,
+            // boxes, ramps and mesh-backed props to affect grass.
+            float localRadius = 0.0F;
+            if (const auto* sphere = std::get_if<SphereCollider>(&collider.shape)) {
+                localRadius = sphere->radius;
+            } else if (const auto* capsule = std::get_if<CapsuleCollider>(&collider.shape)) {
+                localRadius = std::max(capsule->radius, capsule->height * 0.5F);
+            } else if (const auto* box = std::get_if<BoxCollider>(&collider.shape)) {
+                localRadius = std::hypot(box->halfExtents.x(), box->halfExtents.z());
+            } else if (const auto* ramp = std::get_if<RampCollider>(&collider.shape)) {
+                localRadius = std::hypot(ramp->halfExtents.x(), ramp->halfExtents.z());
+            } else if (const auto* mesh = std::get_if<MeshCollider>(&collider.shape)) {
+                // MeshCollider has no cheap primitive bounds in this
+                // system; use its transform scale as a conservative
+                // contact radius until mesh overlap is GPU-driven.
+                (void)mesh;
+                localRadius = 0.5F;
+            }
+            if (localRadius <= 0.0F) {
                 return;
             }
-            std::vector<GrassSphere> spheres;
-            registry.view<Transform, ColliderComponent>(
-                [&](const Entity entity, const Transform &, const ColliderComponent &collider) {
-                    const Transform transform = TransformSystem::worldTransform(registry, entity);
-                    const glm::vec3 center = glm::vec3{
-                        transform.matrix().native() *
-                        glm::vec4{collider.offset.native(), 1.0F}
-                    };
-                    const float scale = std::max({
-                        std::abs(transform.scale.x()),
-                        std::abs(transform.scale.y()),
-                        std::abs(transform.scale.z()),
-                    });
-                    const Vec3 velocity = registry.has<RigidbodyState>(entity)
-                                              ? registry.get<RigidbodyState>(entity).linearVelocity
-                                              : Vec3{};
-                    // Treat every collider as a conservative horizontal
-                    // interaction volume.  This keeps the inexpensive spatial
-                    // hash path while allowing the common player capsule,
-                    // boxes, ramps and mesh-backed props to affect grass.
-                    float localRadius = 0.0F;
-                    if (const auto *sphere = std::get_if<SphereCollider>(&collider.shape)) {
-                        localRadius = sphere->radius;
-                    } else if (const auto *capsule = std::get_if<CapsuleCollider>(&collider.shape)) {
-                        localRadius = std::max(capsule->radius, capsule->height * 0.5F);
-                    } else if (const auto *box = std::get_if<BoxCollider>(&collider.shape)) {
-                        localRadius = std::hypot(box->halfExtents.x(), box->halfExtents.z());
-                    } else if (const auto *ramp = std::get_if<RampCollider>(&collider.shape)) {
-                        localRadius = std::hypot(ramp->halfExtents.x(), ramp->halfExtents.z());
-                    } else if (const auto *mesh = std::get_if<MeshCollider>(&collider.shape)) {
-                        // MeshCollider has no cheap primitive bounds in this
-                        // system; use its transform scale as a conservative
-                        // contact radius until mesh overlap is GPU-driven.
-                        (void) mesh;
-                        localRadius = 0.5F;
-                    }
-                    if (localRadius <= 0.0F) {
-                        return;
-                    }
-                    spheres.push_back({entity, Vec3{center}, velocity, localRadius * scale});
-                });
-            if (spheres.empty()) {
+            spheres.push_back({entity, Vec3{center}, velocity, localRadius * scale});
+        });
+    if (spheres.empty()) {
+        return;
+    }
+    std::vector<float> grassCoverage(spheres.size());
+
+    std::vector<Entity> changedTerrains;
+    registry.view<Transform, TerrainGrassComponent>(
+        [&](const Entity entity, const Transform&, TerrainGrassComponent& grass) {
+            if (grass.instances.empty()) {
                 return;
             }
-            std::vector<float> grassCoverage(spheres.size());
+            const Transform terrainTransform = TransformSystem::worldTransform(registry, entity);
+            grass.rebuildSpatialIndex();
+            const glm::mat4 terrainMatrix = terrainTransform.matrix().native();
+            const glm::mat4 inverseTerrain = glm::inverse(terrainMatrix);
+            const float terrainScale =
+                std::max(0.001F, std::min(std::abs(terrainTransform.scale.x()), std::abs(terrainTransform.scale.z())));
+            bool changed = false;
 
-            std::vector<Entity> changedTerrains;
-            registry.view<Transform, TerrainGrassComponent>(
-                [&](const Entity entity, const Transform &, TerrainGrassComponent &grass) {
-                    if (grass.instances.empty()) {
-                        return;
+            // Recover only blades which were previously pressed.  The
+            // exponential response is stable at any fixed timestep and
+            // makes a footprint soften naturally instead of remaining a
+            // hard, permanent decal.
+            constexpr float recoveryPerSecond = 0.75F;
+            const float recovery = std::exp(-recoveryPerSecond * deltaTime);
+            std::size_t recoveredCount = 0;
+            for (const std::size_t index : grass.recoveringInstances) {
+                if (index >= grass.instances.size()) {
+                    continue;
+                }
+                auto& instance = grass.instances[index];
+                instance.trampled *= recovery;
+                if (instance.trampled <= 0.01F) {
+                    instance.trampled = 0.0F;
+                    if (index < grass.recoveringInstanceMarks.size()) {
+                        grass.recoveringInstanceMarks[index] = 0;
                     }
-                    const Transform terrainTransform = TransformSystem::worldTransform(registry, entity);
-                    grass.rebuildSpatialIndex();
-                    const glm::mat4 terrainMatrix = terrainTransform.matrix().native();
-                    const glm::mat4 inverseTerrain = glm::inverse(terrainMatrix);
-                    const float terrainScale = std::max(0.001F, std::min(
-                                                            std::abs(terrainTransform.scale.x()),
-                                                            std::abs(terrainTransform.scale.z())));
-                    bool changed = false;
+                } else {
+                    grass.recoveringInstances[recoveredCount++] = index;
+                }
+                grass.markInstanceDirty(index);
+                changed = true;
+            }
+            grass.recoveringInstances.resize(recoveredCount);
 
-                    // Recover only blades which were previously pressed.  The
-                    // exponential response is stable at any fixed timestep and
-                    // makes a footprint soften naturally instead of remaining a
-                    // hard, permanent decal.
-                    constexpr float recoveryPerSecond = 0.75F;
-                    const float recovery = std::exp(-recoveryPerSecond * deltaTime);
-                    std::size_t recoveredCount = 0;
-                    for (const std::size_t index: grass.recoveringInstances) {
-                        if (index >= grass.instances.size()) {
+            for (std::size_t sphereIndex = 0; sphereIndex < spheres.size(); ++sphereIndex) {
+                const GrassSphere& sphere = spheres[sphereIndex];
+                constexpr float grassReach = 0.45F;
+                const Vec3 localCenter{glm::vec3{inverseTerrain * glm::vec4{sphere.center.native(), 1.0F}}};
+                const float localRadius = (sphere.radius + grassReach) / terrainScale;
+                const auto minimumX = static_cast<std::int32_t>(
+                    std::floor((localCenter.x() - localRadius) / TerrainGrassComponent::SpatialCellSize));
+                const auto maximumX = static_cast<std::int32_t>(
+                    std::floor((localCenter.x() + localRadius) / TerrainGrassComponent::SpatialCellSize));
+                const auto minimumZ = static_cast<std::int32_t>(
+                    std::floor((localCenter.z() - localRadius) / TerrainGrassComponent::SpatialCellSize));
+                const auto maximumZ = static_cast<std::int32_t>(
+                    std::floor((localCenter.z() + localRadius) / TerrainGrassComponent::SpatialCellSize));
+                const glm::vec3 localVelocity = glm::vec3{inverseTerrain * glm::vec4{sphere.velocity.native(), 0.0F}};
+                const float localSpeed = std::hypot(localVelocity.x, localVelocity.z);
+                for (std::int32_t cellX = minimumX; cellX <= maximumX; ++cellX) {
+                    for (std::int32_t cellZ = minimumZ; cellZ <= maximumZ; ++cellZ) {
+                        const auto cell = grass.spatialCells.find(TerrainGrassComponent::spatialKey(cellX, cellZ));
+                        if (cell == grass.spatialCells.end()) {
                             continue;
                         }
-                        auto &instance = grass.instances[index];
-                        instance.trampled *= recovery;
-                        if (instance.trampled <= 0.01F) {
-                            instance.trampled = 0.0F;
-                            if (index < grass.recoveringInstanceMarks.size()) {
-                                grass.recoveringInstanceMarks[index] = 0;
+                        for (const std::size_t index : cell->second) {
+                            auto& instance = grass.instances[index];
+                            const Vec3 worldPosition{
+                                glm::vec3{terrainMatrix * glm::vec4{instance.position.native(), 1.0F}}};
+                            const float influence = sphere.radius + grassReach;
+                            const Vec3 delta = worldPosition - sphere.center;
+                            const float horizontalDistance = std::hypot(delta.x(), delta.z());
+                            // Project the spherical contact volume onto
+                            // the terrain. This prevents objects high
+                            // above the grass from creating a footprint.
+                            const float footprintSquared = influence * influence - delta.y() * delta.y();
+                            if (footprintSquared <= 0.0F) {
+                                continue;
                             }
-                        } else {
-                            grass.recoveringInstances[recoveredCount++] = index;
-                        }
-                        grass.markInstanceDirty(index);
-                        changed = true;
-                    }
-                    grass.recoveringInstances.resize(recoveredCount);
+                            const float footprintRadius = std::sqrt(footprintSquared);
+                            if (horizontalDistance >= footprintRadius) {
+                                continue;
+                            }
+                            const float target =
+                                std::clamp((1.0F - horizontalDistance / footprintRadius) * 1.35F, 0.0F, 1.0F);
+                            grassCoverage[sphereIndex] += target;
 
-                    for (std::size_t sphereIndex = 0; sphereIndex < spheres.size(); ++sphereIndex) {
-                        const GrassSphere &sphere = spheres[sphereIndex];
-                        constexpr float grassReach = 0.45F;
-                        const Vec3 localCenter{
-                            glm::vec3{
-                                inverseTerrain *
-                                glm::vec4{sphere.center.native(), 1.0F}
+                            float directionX =
+                                localSpeed > 1.0e-4F ? localVelocity.x : instance.position.x() - localCenter.x();
+                            float directionZ =
+                                localSpeed > 1.0e-4F ? localVelocity.z : instance.position.z() - localCenter.z();
+                            float directionLength = std::hypot(directionX, directionZ);
+                            if (directionLength < 1.0e-4F) {
+                                directionX = 1.0F;
+                                directionZ = 0.0F;
+                            } else {
+                                directionX /= directionLength;
+                                directionZ /= directionLength;
                             }
-                        };
-                        const float localRadius = (sphere.radius + grassReach) / terrainScale;
-                        const auto minimumX = static_cast<std::int32_t>(std::floor(
-                            (localCenter.x() - localRadius) / TerrainGrassComponent::SpatialCellSize));
-                        const auto maximumX = static_cast<std::int32_t>(std::floor(
-                            (localCenter.x() + localRadius) / TerrainGrassComponent::SpatialCellSize));
-                        const auto minimumZ = static_cast<std::int32_t>(std::floor(
-                            (localCenter.z() - localRadius) / TerrainGrassComponent::SpatialCellSize));
-                        const auto maximumZ = static_cast<std::int32_t>(std::floor(
-                            (localCenter.z() + localRadius) / TerrainGrassComponent::SpatialCellSize));
-                        const glm::vec3 localVelocity = glm::vec3{
-                            inverseTerrain *
-                            glm::vec4{sphere.velocity.native(), 0.0F}
-                        };
-                        const float localSpeed = std::hypot(localVelocity.x, localVelocity.z);
-                        for (std::int32_t cellX = minimumX; cellX <= maximumX; ++cellX) {
-                            for (std::int32_t cellZ = minimumZ; cellZ <= maximumZ; ++cellZ) {
-                                const auto cell = grass.spatialCells.find(
-                                    TerrainGrassComponent::spatialKey(cellX, cellZ));
-                                if (cell == grass.spatialCells.end()) {
-                                    continue;
-                                }
-                                for (const std::size_t index: cell->second) {
-                                    auto &instance = grass.instances[index];
-                                    const Vec3 worldPosition{
-                                        glm::vec3{
-                                            terrainMatrix *
-                                            glm::vec4{instance.position.native(), 1.0F}
-                                        }
-                                    };
-                                    const float influence = sphere.radius + grassReach;
-                                    const Vec3 delta = worldPosition - sphere.center;
-                                    const float horizontalDistance = std::hypot(delta.x(), delta.z());
-                                    // Project the spherical contact volume onto
-                                    // the terrain. This prevents objects high
-                                    // above the grass from creating a footprint.
-                                    const float footprintSquared = influence * influence - delta.y() * delta.y();
-                                    if (footprintSquared <= 0.0F) {
-                                        continue;
-                                    }
-                                    const float footprintRadius = std::sqrt(footprintSquared);
-                                    if (horizontalDistance >= footprintRadius) {
-                                        continue;
-                                    }
-                                    const float target = std::clamp(
-                                        (1.0F - horizontalDistance / footprintRadius) * 1.35F, 0.0F, 1.0F);
-                                    grassCoverage[sphereIndex] += target;
-
-                                    float directionX = localSpeed > 1.0e-4F
-                                                           ? localVelocity.x
-                                                           : instance.position.x() - localCenter.x();
-                                    float directionZ = localSpeed > 1.0e-4F
-                                                           ? localVelocity.z
-                                                           : instance.position.z() - localCenter.z();
-                                    float directionLength = std::hypot(directionX, directionZ);
-                                    if (directionLength < 1.0e-4F) {
-                                        directionX = 1.0F;
-                                        directionZ = 0.0F;
-                                    } else {
-                                        directionX /= directionLength;
-                                        directionZ /= directionLength;
-                                    }
-                                    // Moving objects comb grass along their
-                                    // trajectory; stationary contacts retain a
-                                    // subtle radial response. Blend rather than
-                                    // snap to keep the trail visually stable.
-                                    const float blend = std::clamp(target * 1.5F, 0.2F, 1.0F);
-                                    directionX = instance.bendX * (1.0F - blend) + directionX * blend;
-                                    directionZ = instance.bendZ * (1.0F - blend) + directionZ * blend;
-                                    directionLength = std::hypot(directionX, directionZ);
-                                    if (directionLength > 1.0e-4F) {
-                                        instance.bendX = directionX / directionLength;
-                                        instance.bendZ = directionZ / directionLength;
-                                    }
-                                    instance.trampled = std::max(instance.trampled, target);
-                                    grass.markRecovering(index);
-                                    grass.markInstanceDirty(index);
-                                    changed = true;
-                                }
+                            // Moving objects comb grass along their
+                            // trajectory; stationary contacts retain a
+                            // subtle radial response. Blend rather than
+                            // snap to keep the trail visually stable.
+                            const float blend = std::clamp(target * 1.5F, 0.2F, 1.0F);
+                            directionX = instance.bendX * (1.0F - blend) + directionX * blend;
+                            directionZ = instance.bendZ * (1.0F - blend) + directionZ * blend;
+                            directionLength = std::hypot(directionX, directionZ);
+                            if (directionLength > 1.0e-4F) {
+                                instance.bendX = directionX / directionLength;
+                                instance.bendZ = directionZ / directionLength;
                             }
+                            instance.trampled = std::max(instance.trampled, target);
+                            grass.markRecovering(index);
+                            grass.markInstanceDirty(index);
+                            changed = true;
                         }
                     }
-                    if (changed) {
-                        changedTerrains.push_back(entity);
-                    }
-                });
-            for (const Entity entity: changedTerrains) {
-                registry.markChanged<TerrainGrassComponent>(entity);
-            }
-
-            // Grass applies rolling resistance only in the horizontal plane:
-            // falling, jumping, and gravity must retain their normal response.
-            constexpr float grassDragPerSecond = 1.2F;
-            for (std::size_t i = 0; i < spheres.size(); ++i) {
-                const float coverage = std::min(grassCoverage[i], 1.0F);
-                if (coverage <= 0.0F || !registry.has<RigidbodyComponent>(spheres[i].entity)) {
-                    continue;
                 }
-                if (!registry.has<RigidbodyState>(spheres[i].entity)) {
-                    continue;
-                }
-                auto &state = registry.get<RigidbodyState>(spheres[i].entity);
-                const float damping = std::exp(-grassDragPerSecond * coverage * deltaTime);
-                if (!registry.has<PhysicsCommandBuffer>(spheres[i].entity)) {
-                    registry.add<PhysicsCommandBuffer>(spheres[i].entity);
-                }
-                registry.modify<PhysicsCommandBuffer>(spheres[i].entity, [&](auto &commands) {
-                    Vec3 velocity = state.linearVelocity;
-                    velocity.setX(velocity.x() * damping);
-                    velocity.setZ(velocity.z() * damping);
-                    commands.linearVelocity = velocity;
-                    commands.angularVelocity = state.angularVelocity * damping;
-                });
             }
-        }
-
-        Quat transformRotation(const Transform &transform) {
-            return Quat::angleAxis(transform.rotation.x() * DegreesToRadians, {1.0F, 0.0F, 0.0F}) *
-                   Quat::angleAxis(transform.rotation.y() * DegreesToRadians, {0.0F, 1.0F, 0.0F}) *
-                   Quat::angleAxis(transform.rotation.z() * DegreesToRadians, {0.0F, 0.0F, 1.0F});
-        }
-
-        physx::PxQuat toPhysX(const Quat &value) noexcept {
-            return {value.x(), value.y(), value.z(), value.w()};
-        }
-
-        Quat fromPhysX(const physx::PxQuat &value) noexcept {
-            return Quat{value.w, value.x, value.y, value.z};
-        }
-
-        physx::PxTransform toPhysX(const Transform &transform) {
-            return {toPhysX(transform.position), toPhysX(transformRotation(transform))};
-        }
-
-        Vec3 eulerDegrees(const Quat &rotation) {
-            const Vec3 axisX = rotation * Vec3{1.0F, 0.0F, 0.0F};
-            const Vec3 axisY = rotation * Vec3{0.0F, 1.0F, 0.0F};
-            const Vec3 axisZ = rotation * Vec3{0.0F, 0.0F, 1.0F};
-            const float y = std::asin(std::clamp(axisZ.x(), -1.0F, 1.0F)); //NOLINT
-            const float cosY = std::cos(y);
-            const float x = std::abs(cosY) > 1.0e-5F //NOLINT
-                                ? std::atan2(-axisZ.y(), axisZ.z())
-                                : std::atan2(axisY.z(), axisY.y());
-            const float z = std::abs(cosY) > 1.0e-5F //NOLINT
-                                ? std::atan2(-axisY.x(), axisX.x())
-                                : 0.0F;
-            return {x * RadiansToDegrees, y * RadiansToDegrees, z * RadiansToDegrees};
-        }
-
-        Vec3 absoluteScale(const Transform &transform) noexcept {
-            return {
-                std::max(std::abs(transform.scale.x()), MinimumDimension),
-                std::max(std::abs(transform.scale.y()), MinimumDimension),
-                std::max(std::abs(transform.scale.z()), MinimumDimension)
-            };
-        }
-
-        bool same(const Vec3 &lhs, const Vec3 &rhs) noexcept {
-            constexpr float epsilon = 1.0e-4F;
-            return std::abs(lhs.x() - rhs.x()) <= epsilon &&
-                   std::abs(lhs.y() - rhs.y()) <= epsilon &&
-                   std::abs(lhs.z() - rhs.z()) <= epsilon;
-        }
-
-        bool samePose(const Transform &lhs, const Transform &rhs) noexcept {
-            return same(lhs.position, rhs.position) && same(lhs.rotation, rhs.rotation);
-        }
-
-        bool nonZero(const Vec3 &value) noexcept {
-            return value.x() != 0.0F || value.y() != 0.0F || value.z() != 0.0F;
-        }
-
-        physx::PxFilterFlags simulationFilter(physx::PxFilterObjectAttributes attributes0,
-            physx::PxFilterData filter0, physx::PxFilterObjectAttributes attributes1,
-            physx::PxFilterData filter1, physx::PxPairFlags &pairFlags,
-            const void *constantBlock, physx::PxU32 constantBlockSize) {
-            constexpr physx::PxU32 glassGroup = 0x474c4153U;
-            if (filter0.word2 == glassGroup && filter1.word2 == glassGroup &&
-                filter0.word0 == filter1.word0 && filter0.word1 == filter1.word1 &&
-                (filter0.word3 || filter1.word3)) return physx::PxFilterFlag::eSUPPRESS;
-            if (filter0.word2 == glassGroup) filter0 = {};
-            if (filter1.word2 == glassGroup) filter1 = {};
-            const auto result = physx::PxDefaultSimulationFilterShader(attributes0, filter0,
-                attributes1, filter1, pairFlags, constantBlock, constantBlockSize);
-            if (!physx::PxFilterObjectIsTrigger(attributes0) && !physx::PxFilterObjectIsTrigger(attributes1))
-                pairFlags |= physx::PxPairFlag::eDETECT_CCD_CONTACT;
-            return result;
-        }
-
-        /** Bridges PhysX task submission into the engine-wide CPU pool. */
-        class PhysicsDispatcher final : public physx::PxCpuDispatcher {
-        public:
-            explicit PhysicsDispatcher(TaskScheduler &scheduler) : scheduler_(scheduler) {
+            if (changed) {
+                changedTerrains.push_back(entity);
             }
+        });
+    for (const Entity entity : changedTerrains) {
+        registry.markChanged<TerrainGrassComponent>(entity);
+    }
 
-            void submitTask(physx::PxBaseTask &task) override {
-                static_cast<void>(scheduler_.schedule([&task] {
-                    try {
-                        task.run();
-                    } catch (...) {
-                        task.release();
-                        throw;
-                    }
+    // Grass applies rolling resistance only in the horizontal plane:
+    // falling, jumping, and gravity must retain their normal response.
+    constexpr float grassDragPerSecond = 1.2F;
+    for (std::size_t i = 0; i < spheres.size(); ++i) {
+        const float coverage = std::min(grassCoverage[i], 1.0F);
+        if (coverage <= 0.0F || !registry.has<RigidbodyComponent>(spheres[i].entity)) {
+            continue;
+        }
+        if (!registry.has<RigidbodyState>(spheres[i].entity)) {
+            continue;
+        }
+        auto& state = registry.get<RigidbodyState>(spheres[i].entity);
+        const float damping = std::exp(-grassDragPerSecond * coverage * deltaTime);
+        if (!registry.has<PhysicsCommandBuffer>(spheres[i].entity)) {
+            registry.add<PhysicsCommandBuffer>(spheres[i].entity);
+        }
+        registry.modify<PhysicsCommandBuffer>(spheres[i].entity, [&](auto& commands) {
+            Vec3 velocity = state.linearVelocity;
+            velocity.setX(velocity.x() * damping);
+            velocity.setZ(velocity.z() * damping);
+            commands.linearVelocity = velocity;
+            commands.angularVelocity = state.angularVelocity * damping;
+        });
+    }
+}
+
+Quat transformRotation(const Transform& transform) {
+    return Quat::angleAxis(transform.rotation.x() * DegreesToRadians, {1.0F, 0.0F, 0.0F}) *
+           Quat::angleAxis(transform.rotation.y() * DegreesToRadians, {0.0F, 1.0F, 0.0F}) *
+           Quat::angleAxis(transform.rotation.z() * DegreesToRadians, {0.0F, 0.0F, 1.0F});
+}
+
+physx::PxQuat toPhysX(const Quat& value) noexcept {
+    return {value.x(), value.y(), value.z(), value.w()};
+}
+
+Quat fromPhysX(const physx::PxQuat& value) noexcept {
+    return Quat{value.w, value.x, value.y, value.z};
+}
+
+physx::PxTransform toPhysX(const Transform& transform) {
+    return {toPhysX(transform.position), toPhysX(transformRotation(transform))};
+}
+
+Vec3 eulerDegrees(const Quat& rotation) {
+    const Vec3 axisX = rotation * Vec3{1.0F, 0.0F, 0.0F};
+    const Vec3 axisY = rotation * Vec3{0.0F, 1.0F, 0.0F};
+    const Vec3 axisZ = rotation * Vec3{0.0F, 0.0F, 1.0F};
+    const float y = std::asin(std::clamp(axisZ.x(), -1.0F, 1.0F)); // NOLINT
+    const float cosY = std::cos(y);
+    const float x = std::abs(cosY) > 1.0e-5F // NOLINT
+                        ? std::atan2(-axisZ.y(), axisZ.z())
+                        : std::atan2(axisY.z(), axisY.y());
+    const float z = std::abs(cosY) > 1.0e-5F // NOLINT
+                        ? std::atan2(-axisY.x(), axisX.x())
+                        : 0.0F;
+    return {x * RadiansToDegrees, y * RadiansToDegrees, z * RadiansToDegrees};
+}
+
+Vec3 absoluteScale(const Transform& transform) noexcept {
+    return {std::max(std::abs(transform.scale.x()), MinimumDimension),
+            std::max(std::abs(transform.scale.y()), MinimumDimension),
+            std::max(std::abs(transform.scale.z()), MinimumDimension)};
+}
+
+bool same(const Vec3& lhs, const Vec3& rhs) noexcept {
+    constexpr float epsilon = 1.0e-4F;
+    return std::abs(lhs.x() - rhs.x()) <= epsilon && std::abs(lhs.y() - rhs.y()) <= epsilon &&
+           std::abs(lhs.z() - rhs.z()) <= epsilon;
+}
+
+bool samePose(const Transform& lhs, const Transform& rhs) noexcept {
+    return same(lhs.position, rhs.position) && same(lhs.rotation, rhs.rotation);
+}
+
+bool nonZero(const Vec3& value) noexcept {
+    return value.x() != 0.0F || value.y() != 0.0F || value.z() != 0.0F;
+}
+
+physx::PxFilterFlags simulationFilter(physx::PxFilterObjectAttributes attributes0, physx::PxFilterData filter0,
+                                      physx::PxFilterObjectAttributes attributes1, physx::PxFilterData filter1,
+                                      physx::PxPairFlags& pairFlags, const void* constantBlock,
+                                      physx::PxU32 constantBlockSize) {
+    constexpr physx::PxU32 glassGroup = 0x474c4153U;
+    if (filter0.word2 == glassGroup && filter1.word2 == glassGroup && filter0.word0 == filter1.word0 &&
+        filter0.word1 == filter1.word1 && (filter0.word3 || filter1.word3))
+        return physx::PxFilterFlag::eSUPPRESS;
+    if (filter0.word2 == glassGroup)
+        filter0 = {};
+    if (filter1.word2 == glassGroup)
+        filter1 = {};
+    const auto result = physx::PxDefaultSimulationFilterShader(attributes0, filter0, attributes1, filter1, pairFlags,
+                                                               constantBlock, constantBlockSize);
+    if (!physx::PxFilterObjectIsTrigger(attributes0) && !physx::PxFilterObjectIsTrigger(attributes1))
+        pairFlags |= physx::PxPairFlag::eDETECT_CCD_CONTACT;
+    return result;
+}
+
+/** Bridges PhysX task submission into the engine-wide CPU pool. */
+class PhysicsDispatcher final : public physx::PxCpuDispatcher {
+  public:
+    explicit PhysicsDispatcher(TaskScheduler& scheduler) : scheduler_(scheduler) {}
+
+    void submitTask(physx::PxBaseTask& task) override {
+        static_cast<void>(scheduler_.schedule(
+            [&task] {
+                try {
+                    task.run();
+                } catch (...) {
                     task.release();
-                }, TaskPriority::High));
-            }
+                    throw;
+                }
+                task.release();
+            },
+            TaskPriority::High));
+    }
 
-            [[nodiscard]] physx::PxU32 getWorkerCount() const override {
-                return static_cast<physx::PxU32>(scheduler_.worker_count());
-            }
+    [[nodiscard]] physx::PxU32 getWorkerCount() const override {
+        return static_cast<physx::PxU32>(scheduler_.worker_count());
+    }
 
-        private:
-            TaskScheduler &scheduler_;
-        };
-    } // namespace
+  private:
+    TaskScheduler& scheduler_;
+};
+} // namespace
 
-    struct PhysXContext final {
-        physx::PxDefaultAllocator allocator;
-        physx::PxDefaultErrorCallback errorCallback;
-        physx::PxFoundation *foundation{};
-        physx::PxPhysics *physics{};
+struct PhysXContext final {
+    physx::PxDefaultAllocator allocator;
+    physx::PxDefaultErrorCallback errorCallback;
+    physx::PxFoundation* foundation{};
+    physx::PxPhysics* physics{};
 
-        PhysXContext() {
-            foundation = PxCreateFoundation(PhysXVersion, allocator, errorCallback);
-            if (foundation == nullptr) throw std::runtime_error("PxCreateFoundation failed");
-            physx::PxTolerancesScale scale;
-            scale.length = 1.0F; scale.speed = 9.81F;
-            physics = PxCreatePhysics(PhysXVersion, *foundation, scale, true, nullptr);
-            if (physics == nullptr) { foundation->release(); foundation = nullptr; throw std::runtime_error("PxCreatePhysics failed"); }
-            if (!PxInitExtensions(*physics, nullptr)) { physics->release(); foundation->release(); physics = nullptr; foundation = nullptr; throw std::runtime_error("PxInitExtensions failed"); }
+    PhysXContext() {
+        foundation = PxCreateFoundation(PhysXVersion, allocator, errorCallback);
+        if (foundation == nullptr)
+            throw std::runtime_error("PxCreateFoundation failed");
+        physx::PxTolerancesScale scale;
+        scale.length = 1.0F;
+        scale.speed = 9.81F;
+        physics = PxCreatePhysics(PhysXVersion, *foundation, scale, true, nullptr);
+        if (physics == nullptr) {
+            foundation->release();
+            foundation = nullptr;
+            throw std::runtime_error("PxCreatePhysics failed");
         }
-        ~PhysXContext() {
-            if (physics != nullptr) { PxCloseExtensions(); physics->release(); }
-            if (foundation != nullptr) foundation->release();
+        if (!PxInitExtensions(*physics, nullptr)) {
+            physics->release();
+            foundation->release();
+            physics = nullptr;
+            foundation = nullptr;
+            throw std::runtime_error("PxInitExtensions failed");
+        }
+    }
+    ~PhysXContext() {
+        if (physics != nullptr) {
+            PxCloseExtensions();
+            physics->release();
+        }
+        if (foundation != nullptr)
+            foundation->release();
+    }
+};
+
+[[nodiscard]] std::shared_ptr<PhysXContext> processPhysXContext() {
+    static std::mutex mutex;
+    static std::weak_ptr<PhysXContext> context;
+    std::scoped_lock lock{mutex};
+    auto shared = context.lock();
+    if (!shared) {
+        shared = std::make_shared<PhysXContext>();
+        context = shared;
+    }
+    return shared;
+}
+
+struct PhysicsSystem::BroadPhaseCache final {
+    mutable PhysicsDiagnostics diagnostics;
+    struct ActorRecord final {
+        physx::PxRigidActor* actor{};
+        Transform lastTransform{};
+        RigidbodyType bodyType{RigidbodyType::Static};
+        std::uint64_t scaleWorldRevision{};
+        std::uint64_t poseWorldRevision{};
+        Vec3 lastLinearVelocity;
+        Vec3 lastAngularVelocity;
+        std::vector<std::vector<physx::PxShape*>> glassShapes;
+        physx::PxShape* intactGlassShape{};
+        std::shared_ptr<const Mesh> glassGeometry;
+        float glassSeparationTime{};
+    };
+
+    struct CookedMeshKey final {
+        const Mesh* mesh{};
+        std::uint64_t revision{};
+        Vec3 scale{};
+
+        [[nodiscard]] bool operator==(const CookedMeshKey& other) const noexcept {
+            return mesh == other.mesh && revision == other.revision && scale.x() == other.scale.x() &&
+                   scale.y() == other.scale.y() && scale.z() == other.scale.z();
         }
     };
 
-    [[nodiscard]] std::shared_ptr<PhysXContext> processPhysXContext() {
-        static std::mutex mutex;
-        static std::weak_ptr<PhysXContext> context;
-        std::scoped_lock lock{mutex};
-        auto shared = context.lock();
-        if (!shared) { shared = std::make_shared<PhysXContext>(); context = shared; }
-        return shared;
+    struct CookedMeshKeyHash final {
+        [[nodiscard]] std::size_t operator()(const CookedMeshKey& key) const noexcept {
+            const auto combine = [](std::size_t seed, const std::size_t value) {
+                return seed ^ (value + 0x9e3779b9U + (seed << 6U) + (seed >> 2U));
+            };
+            std::size_t result = std::hash<const Mesh*>{}(key.mesh);
+            result = combine(result, std::hash<std::uint64_t>{}(key.revision));
+            result = combine(result, std::hash<float>{}(key.scale.x()));
+            result = combine(result, std::hash<float>{}(key.scale.y()));
+            return combine(result, std::hash<float>{}(key.scale.z()));
+        }
+    };
+
+    std::shared_ptr<PhysXContext> context;
+    physx::PxCookingParams cookingParameters{physx::PxTolerancesScale{}};
+    std::unique_ptr<PhysicsDispatcher> dispatcher;
+    physx::PxScene* physicsScene{};
+    Registry* registry{};
+    std::uint64_t structuralRevision{};
+    std::uint64_t colliderRevision{};
+    std::uint64_t rigidbodyRevision{};
+    std::unordered_map<Entity, ActorRecord> actors;
+    std::vector<Entity> scaleChanged;
+    std::unordered_map<CookedMeshKey, physx::PxConvexMesh*, CookedMeshKeyHash> convexMeshes;
+    std::unordered_map<CookedMeshKey, physx::PxTriangleMesh*, CookedMeshKeyHash> triangleMeshes;
+    std::unordered_map<CookedMeshKey, std::weak_ptr<const Mesh>, CookedMeshKeyHash> meshSources;
+
+    BroadPhaseCache() {
+        using namespace physx;
+        PxTolerancesScale scale;
+        scale.length = 1.0F;
+        scale.speed = 9.81F; // NOLINT g=9.81
+        context = processPhysXContext();
+
+        cookingParameters = PxCookingParams{scale};
+        cookingParameters.meshPreprocessParams |= PxMeshPreprocessingFlag::eWELD_VERTICES;
+        cookingParameters.meshWeldTolerance = 1.0e-4F; // NOLINT
+
+        dispatcher = std::make_unique<PhysicsDispatcher>(TaskScheduler::global());
+
+        PxSceneDesc sceneDescription{scale};
+        sceneDescription.gravity = {0.0F, -9.81F, 0.0F}; // NOLINT g=9.81
+        sceneDescription.cpuDispatcher = dispatcher.get();
+        sceneDescription.filterShader = simulationFilter;
+        sceneDescription.flags |= PxSceneFlag::eENABLE_ACTIVE_ACTORS;
+        sceneDescription.flags |= PxSceneFlag::eENABLE_CCD;
+        physicsScene = context->physics->createScene(sceneDescription);
+        if (physicsScene == nullptr) {
+            fail("PxPhysics::createScene failed");
+        }
     }
 
-    struct PhysicsSystem::BroadPhaseCache final {
-        mutable PhysicsDiagnostics diagnostics;
-        struct ActorRecord final {
-            physx::PxRigidActor *actor{};
-            Transform lastTransform{};
-            RigidbodyType bodyType{RigidbodyType::Static};
-            std::uint64_t scaleWorldRevision{};
-            std::uint64_t poseWorldRevision{};
-            Vec3 lastLinearVelocity;
-            Vec3 lastAngularVelocity;
-            std::vector<std::vector<physx::PxShape *>> glassShapes;
-            physx::PxShape *intactGlassShape{};
-            std::shared_ptr<const Mesh> glassGeometry;
-            float glassSeparationTime{};
-        };
+    ~BroadPhaseCache() {
+        shutdown();
+    }
 
-        struct CookedMeshKey final {
-            const Mesh *mesh{};
-            std::uint64_t revision{};
-            Vec3 scale{};
+    BroadPhaseCache(const BroadPhaseCache&) = delete;
 
-            [[nodiscard]] bool operator==(const CookedMeshKey &other) const noexcept {
-                return mesh == other.mesh && revision == other.revision && scale.x() == other.scale.x() &&
-                       scale.y() == other.scale.y() && scale.z() == other.scale.z();
-            }
-        };
+    BroadPhaseCache& operator=(const BroadPhaseCache&) = delete;
 
-        struct CookedMeshKeyHash final {
-            [[nodiscard]] std::size_t operator()(const CookedMeshKey &key) const noexcept {
-                const auto combine = [](std::size_t seed, const std::size_t value) {
-                    return seed ^ (value + 0x9e3779b9U + (seed << 6U) + (seed >> 2U));
-                };
-                std::size_t result = std::hash<const Mesh *>{}(key.mesh);
-                result = combine(result, std::hash<std::uint64_t>{}(key.revision));
-                result = combine(result, std::hash<float>{}(key.scale.x()));
-                result = combine(result, std::hash<float>{}(key.scale.y()));
-                return combine(result, std::hash<float>{}(key.scale.z()));
-            }
-        };
+    [[noreturn]] void fail(const char* message) {
+        shutdown();
+        throw std::runtime_error(message);
+    }
 
-        std::shared_ptr<PhysXContext> context;
-        physx::PxCookingParams cookingParameters{physx::PxTolerancesScale{}};
-        std::unique_ptr<PhysicsDispatcher> dispatcher;
-        physx::PxScene *physicsScene{};
-        Registry *registry{};
-        std::uint64_t structuralRevision{};
-        std::uint64_t colliderRevision{};
-        std::uint64_t rigidbodyRevision{};
-        std::unordered_map<Entity, ActorRecord> actors;
-        std::vector<Entity> scaleChanged;
-        std::unordered_map<CookedMeshKey, physx::PxConvexMesh *, CookedMeshKeyHash> convexMeshes;
-        std::unordered_map<CookedMeshKey, physx::PxTriangleMesh *, CookedMeshKeyHash> triangleMeshes;
-        std::unordered_map<CookedMeshKey, std::weak_ptr<const Mesh>, CookedMeshKeyHash> meshSources;
+    void shutdown() noexcept {
+        releaseActors();
+        releaseCookedMeshes();
+        if (physicsScene != nullptr) {
+            physicsScene->release();
+            physicsScene = nullptr;
+        }
+        dispatcher.reset();
+        context.reset();
+    }
 
-        BroadPhaseCache() {
-            using namespace physx;
-            PxTolerancesScale scale;
-            scale.length = 1.0F;
-            scale.speed = 9.81F; // NOLINT g=9.81
-            context = processPhysXContext();
-
-            cookingParameters = PxCookingParams{scale};
-            cookingParameters.meshPreprocessParams |= PxMeshPreprocessingFlag::eWELD_VERTICES;
-            cookingParameters.meshWeldTolerance = 1.0e-4F; //NOLINT
-
-            dispatcher = std::make_unique<PhysicsDispatcher>(TaskScheduler::global());
-
-            PxSceneDesc sceneDescription{scale};
-            sceneDescription.gravity = {0.0F, -9.81F, 0.0F}; // NOLINT g=9.81
-            sceneDescription.cpuDispatcher = dispatcher.get();
-            sceneDescription.filterShader = simulationFilter;
-            sceneDescription.flags |= PxSceneFlag::eENABLE_ACTIVE_ACTORS;
-            sceneDescription.flags |= PxSceneFlag::eENABLE_CCD;
-            physicsScene = context->physics->createScene(sceneDescription);
-            if (physicsScene == nullptr) {
-                fail("PxPhysics::createScene failed");
+    void releaseActors() noexcept {
+        for (auto& record : actors | std::views::values) {
+            if (record.actor != nullptr) {
+                record.actor->release();
             }
         }
+        actors.clear();
+    }
 
-        ~BroadPhaseCache() { shutdown(); }
+    void releaseCookedMeshes() noexcept {
+        for (const auto& mesh : convexMeshes | std::views::values) {
+            if (mesh != nullptr) {
+                mesh->release();
+            }
+        }
+        convexMeshes.clear();
+        meshSources.clear();
+        for (const auto& mesh : triangleMeshes | std::views::values) {
+            if (mesh != nullptr) {
+                mesh->release();
+            }
+        }
+        triangleMeshes.clear();
+    }
 
-        BroadPhaseCache(const BroadPhaseCache &) = delete;
+    [[nodiscard]] std::optional<Entity> entityForActor(const physx::PxRigidActor* actor) const {
+        if (actor == nullptr || actor->userData == nullptr) {
+            return std::nullopt;
+        }
+        return static_cast<Entity>(reinterpret_cast<std::uintptr_t>(actor->userData));
+    }
 
-        BroadPhaseCache &operator=(const BroadPhaseCache &) = delete;
+    static physx::PxShape* attachGeometry(physx::PxRigidActor& actor, const physx::PxGeometry& geometry,
+                                          const physx::PxMaterial& material, const physx::PxTransform& localPose,
+                                          const bool trigger) {
+        physx::PxShape* shape = physx::PxRigidActorExt::createExclusiveShape(actor, geometry, material);
+        if (shape == nullptr) {
+            return nullptr;
+        }
+        shape->setLocalPose(localPose);
+        shape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, !trigger);
+        shape->setFlag(physx::PxShapeFlag::eTRIGGER_SHAPE, trigger);
+        return shape;
+    }
 
-        [[noreturn]] void fail(const char *message) {
-            shutdown();
-            throw std::runtime_error(message);
+    physx::PxConvexMesh* cookConvex(const std::vector<physx::PxVec3>& points) const {
+        if (points.size() < 4) {
+            return nullptr;
+        }
+        physx::PxConvexMeshDesc description;
+        description.points.count = static_cast<physx::PxU32>(points.size());
+        description.points.stride = sizeof(physx::PxVec3);
+        description.points.data = points.data();
+        description.flags = physx::PxConvexFlag::eCOMPUTE_CONVEX;
+        description.vertexLimit = 255; // NOLINT uint8_t
+
+        GE_PROFILE_SCOPE("CollisionCookingCPU");
+        const auto cookStart = std::chrono::steady_clock::now();
+        ++diagnostics.convexCookCount;
+        physx::PxDefaultMemoryOutputStream output;
+        if (!PxCookConvexMesh(cookingParameters, description, output)) {
+            return nullptr;
+        }
+        physx::PxDefaultMemoryInputData input{output.getData(), output.getSize()};
+        auto* result = context->physics->createConvexMesh(input);
+        diagnostics.collisionCookingCpuMs +=
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cookStart).count();
+        return result;
+    }
+
+    physx::PxTriangleMesh* cookTriangleMesh(const Mesh& mesh, const Vec3& scale) const {
+        if (mesh.vertices.empty() || mesh.indices.size() < 3) {
+            return nullptr;
+        }
+        std::vector<physx::PxVec3> points;
+        points.reserve(mesh.vertices.size());
+        for (const Vertex& vertex : mesh.vertices) {
+            points.emplace_back(vertex.position.x() * scale.x(), vertex.position.y() * scale.y(),
+                                vertex.position.z() * scale.z());
         }
 
-        void shutdown() noexcept {
-            releaseActors();
-            releaseCookedMeshes();
-            if (physicsScene != nullptr) {
-                physicsScene->release();
-                physicsScene = nullptr;
-            }
-            dispatcher.reset();
-            context.reset();
+        physx::PxTriangleMeshDesc description;
+        description.points.count = static_cast<physx::PxU32>(points.size());
+        description.points.stride = sizeof(physx::PxVec3);
+        description.points.data = points.data();
+        description.triangles.count = static_cast<physx::PxU32>(mesh.indices.size() / 3);
+        description.triangles.stride = sizeof(std::uint32_t) * 3;
+        // Engine meshes are authored counter-clockwise.  Preserve their
+        // winding so PhysX contact normals point out of the rendered mesh.
+        description.triangles.data = mesh.indices.data();
+
+        GE_PROFILE_SCOPE("CollisionCookingCPU");
+        const auto cookStart = std::chrono::steady_clock::now();
+        ++diagnostics.triangleCookCount;
+        physx::PxDefaultMemoryOutputStream output;
+        if (!PxCookTriangleMesh(cookingParameters, description, output)) {
+            return nullptr;
+        }
+        physx::PxDefaultMemoryInputData input{output.getData(), output.getSize()};
+        auto* result = context->physics->createTriangleMesh(input);
+        diagnostics.collisionCookingCpuMs +=
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cookStart).count();
+        return result;
+    }
+
+    physx::PxConvexMesh* cachedConvexMesh(const std::shared_ptr<const Mesh>& source, const Vec3& scale) {
+        const Mesh& mesh = *source;
+        const CookedMeshKey key{.mesh = &mesh, .revision = mesh.geometryRevision, .scale = scale};
+        if (const auto existing = convexMeshes.find(key); existing != convexMeshes.end()) {
+            return existing->second;
+        }
+        std::vector<physx::PxVec3> points;
+        points.reserve(mesh.vertices.size());
+        for (const Vertex& vertex : mesh.vertices) {
+            points.emplace_back(vertex.position.x() * scale.x(), vertex.position.y() * scale.y(),
+                                vertex.position.z() * scale.z());
+        }
+        physx::PxConvexMesh* cooked = cookConvex(points);
+        if (cooked != nullptr) {
+            convexMeshes.emplace(key, cooked);
+            meshSources[key] = source;
+        }
+        return cooked;
+    }
+
+    physx::PxTriangleMesh* cachedTriangleMesh(const std::shared_ptr<const Mesh>& source, const Vec3& scale) {
+        const Mesh& mesh = *source;
+        const CookedMeshKey key{&mesh, mesh.geometryRevision, scale};
+        if (const auto existing = triangleMeshes.find(key); existing != triangleMeshes.end()) {
+            return existing->second;
+        }
+        physx::PxTriangleMesh* cooked = cookTriangleMesh(mesh, scale);
+        if (cooked != nullptr) {
+            triangleMeshes.emplace(key, cooked);
+            meshSources[key] = source;
+        }
+        return cooked;
+    }
+
+    static bool attachBoundsFallback(physx::PxRigidActor& actor, const Mesh& mesh, const Vec3& scale,
+                                     const ColliderComponent& collider, physx::PxMaterial& material) {
+        if (mesh.vertices.empty()) {
+            return false;
+        }
+        Vec3 minimum = mesh.vertices.front().position;
+        Vec3 maximum = minimum;
+        for (const Vertex& vertex : mesh.vertices) {
+            minimum = {std::min(minimum.x(), vertex.position.x()), std::min(minimum.y(), vertex.position.y()),
+                       std::min(minimum.z(), vertex.position.z())};
+            maximum = {std::max(maximum.x(), vertex.position.x()), std::max(maximum.y(), vertex.position.y()),
+                       std::max(maximum.z(), vertex.position.z())};
+        }
+        const Vec3 center = minimum + maximum * 0.5F;
+        const Vec3 extents = maximum - minimum * 0.5F * scale;
+        const physx::PxBoxGeometry geometry{std::max(extents.x(), MinimumDimension),
+                                            std::max(extents.y(), MinimumDimension),
+                                            std::max(extents.z(), MinimumDimension)};
+        return attachGeometry(actor, geometry, material,
+                              physx::PxTransform{toPhysX((center + collider.offset) * scale)}, // NOLINT
+                              collider.isTrigger) != nullptr;
+    }
+
+    // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+    bool attachCollider(physx::PxRigidActor& actor, const ColliderComponent& collider, const Transform& transform,
+                        const bool dynamic) {
+        using namespace physx;
+        PxMaterial* material =
+            context->physics->createMaterial(std::max(collider.friction, 0.0F), std::max(collider.friction, 0.0F),
+                                             std::clamp(collider.restitution, 0.0F, 1.0F));
+        if (material == nullptr) {
+            return false;
         }
 
-        void releaseActors() noexcept {
-            for (auto &record: actors | std::views::values) {
-                if (record.actor != nullptr) {
-                    record.actor->release();
-                }
-            }
-            actors.clear();
-        }
-
-        void releaseCookedMeshes() noexcept {
-            for (const auto &mesh: convexMeshes | std::views::values) {
-                if (mesh != nullptr) {
-                    mesh->release();
-                }
-            }
-            convexMeshes.clear();
-            meshSources.clear();
-            for (const auto &mesh: triangleMeshes | std::views::values) {
-                if (mesh != nullptr) {
-                    mesh->release();
-                }
-            }
-            triangleMeshes.clear();
-        }
-
-        [[nodiscard]] std::optional<Entity> entityForActor(const physx::PxRigidActor *actor) const {
-            if (actor == nullptr || actor->userData == nullptr) {
-                return std::nullopt;
-            }
-            return static_cast<Entity>(reinterpret_cast<std::uintptr_t>(actor->userData));
-        }
-
-        static physx::PxShape *attachGeometry(physx::PxRigidActor &actor,
-                                              const physx::PxGeometry &geometry,
-                                              const physx::PxMaterial &material,
-                                              const physx::PxTransform &localPose,
-                                              const bool trigger) {
-            physx::PxShape *shape = physx::PxRigidActorExt::createExclusiveShape(
-                actor, geometry, material);
-            if (shape == nullptr) {
-                return nullptr;
-            }
-            shape->setLocalPose(localPose);
-            shape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, !trigger);
-            shape->setFlag(physx::PxShapeFlag::eTRIGGER_SHAPE, trigger);
-            return shape;
-        }
-
-        physx::PxConvexMesh *cookConvex(const std::vector<physx::PxVec3> &points) const {
-            if (points.size() < 4) {
-                return nullptr;
-            }
-            physx::PxConvexMeshDesc description;
-            description.points.count = static_cast<physx::PxU32>(points.size());
-            description.points.stride = sizeof(physx::PxVec3);
-            description.points.data = points.data();
-            description.flags = physx::PxConvexFlag::eCOMPUTE_CONVEX;
-            description.vertexLimit = 255; //NOLINT uint8_t
-
-            GE_PROFILE_SCOPE("CollisionCookingCPU");
-            const auto cookStart = std::chrono::steady_clock::now();
-            ++diagnostics.convexCookCount;
-            physx::PxDefaultMemoryOutputStream output;
-            if (!PxCookConvexMesh(cookingParameters, description, output)) {
-                return nullptr;
-            }
-            physx::PxDefaultMemoryInputData input{output.getData(), output.getSize()};
-            auto *result = context->physics->createConvexMesh(input);
-            diagnostics.collisionCookingCpuMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-cookStart).count();
-            return result;
-        }
-
-        physx::PxTriangleMesh *cookTriangleMesh(const Mesh &mesh, const Vec3 &scale) const {
-            if (mesh.vertices.empty() || mesh.indices.size() < 3) {
-                return nullptr;
-            }
-            std::vector<physx::PxVec3> points;
-            points.reserve(mesh.vertices.size());
-            for (const Vertex &vertex: mesh.vertices) {
-                points.emplace_back(vertex.position.x() * scale.x(),
-                                    vertex.position.y() * scale.y(),
-                                    vertex.position.z() * scale.z());
-            }
-
-            physx::PxTriangleMeshDesc description;
-            description.points.count = static_cast<physx::PxU32>(points.size());
-            description.points.stride = sizeof(physx::PxVec3);
-            description.points.data = points.data();
-            description.triangles.count = static_cast<physx::PxU32>(mesh.indices.size() / 3);
-            description.triangles.stride = sizeof(std::uint32_t) * 3;
-            // Engine meshes are authored counter-clockwise.  Preserve their
-            // winding so PhysX contact normals point out of the rendered mesh.
-            description.triangles.data = mesh.indices.data();
-
-            GE_PROFILE_SCOPE("CollisionCookingCPU");
-            const auto cookStart = std::chrono::steady_clock::now();
-            ++diagnostics.triangleCookCount;
-            physx::PxDefaultMemoryOutputStream output;
-            if (!PxCookTriangleMesh(cookingParameters, description, output)) {
-                return nullptr;
-            }
-            physx::PxDefaultMemoryInputData input{output.getData(), output.getSize()};
-            auto *result = context->physics->createTriangleMesh(input);
-            diagnostics.collisionCookingCpuMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-cookStart).count();
-            return result;
-        }
-
-        physx::PxConvexMesh *cachedConvexMesh(const std::shared_ptr<const Mesh> &source, const Vec3 &scale) {
-            const Mesh &mesh = *source;
-            const CookedMeshKey key{.mesh = &mesh, .revision = mesh.geometryRevision, .scale = scale};
-            if (const auto existing = convexMeshes.find(key); existing != convexMeshes.end()) {
-                return existing->second;
-            }
-            std::vector<physx::PxVec3> points;
-            points.reserve(mesh.vertices.size());
-            for (const Vertex &vertex: mesh.vertices) {
-                points.emplace_back(vertex.position.x() * scale.x(), vertex.position.y() * scale.y(),
-                                    vertex.position.z() * scale.z());
-            }
-            physx::PxConvexMesh *cooked = cookConvex(points);
-            if (cooked != nullptr) {
-                convexMeshes.emplace(key, cooked);
-                meshSources[key] = source;
-            }
-            return cooked;
-        }
-
-        physx::PxTriangleMesh *cachedTriangleMesh(const std::shared_ptr<const Mesh> &source, const Vec3 &scale) {
-            const Mesh &mesh = *source;
-            const CookedMeshKey key{&mesh, mesh.geometryRevision, scale};
-            if (const auto existing = triangleMeshes.find(key); existing != triangleMeshes.end()) {
-                return existing->second;
-            }
-            physx::PxTriangleMesh *cooked = cookTriangleMesh(mesh, scale);
-            if (cooked != nullptr) {
-                triangleMeshes.emplace(key, cooked);
-                meshSources[key] = source;
-            }
-            return cooked;
-        }
-
-        static bool attachBoundsFallback(physx::PxRigidActor &actor, const Mesh &mesh,
-                                         const Vec3 &scale, const ColliderComponent &collider,
-                                         physx::PxMaterial &material) {
-            if (mesh.vertices.empty()) {
-                return false;
-            }
-            Vec3 minimum = mesh.vertices.front().position;
-            Vec3 maximum = minimum;
-            for (const Vertex &vertex: mesh.vertices) {
-                minimum = {
-                    std::min(minimum.x(), vertex.position.x()),
-                    std::min(minimum.y(), vertex.position.y()),
-                    std::min(minimum.z(), vertex.position.z())
-                };
-                maximum = {
-                    std::max(maximum.x(), vertex.position.x()),
-                    std::max(maximum.y(), vertex.position.y()),
-                    std::max(maximum.z(), vertex.position.z())
-                };
-            }
-            const Vec3 center = minimum + maximum * 0.5F;
-            const Vec3 extents = maximum - minimum * 0.5F * scale;
-            const physx::PxBoxGeometry geometry{
-                std::max(extents.x(), MinimumDimension),
-                std::max(extents.y(), MinimumDimension),
-                std::max(extents.z(), MinimumDimension)
-            };
-            return attachGeometry(actor, geometry, material,
-                                  physx::PxTransform{toPhysX((center + collider.offset) * scale)}, //NOLINT
-                                  collider.isTrigger) != nullptr;
-        }
-
-        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-        bool attachCollider(physx::PxRigidActor &actor, const ColliderComponent &collider,
-                            const Transform &transform, const bool dynamic) {
-            using namespace physx;
-            PxMaterial *material = context->physics->createMaterial(
-                std::max(collider.friction, 0.0F), std::max(collider.friction, 0.0F),
-                std::clamp(collider.restitution, 0.0F, 1.0F));
-            if (material == nullptr) {
-                return false;
-            }
-
-            const Vec3 scale = absoluteScale(transform);
-            const PxTransform localOffset{toPhysX(collider.offset * scale)};
-            bool attached = std::visit([&]<typename T>(const T &shape) {
+        const Vec3 scale = absoluteScale(transform);
+        const PxTransform localOffset{toPhysX(collider.offset * scale)};
+        bool attached = std::visit(
+            [&]<typename T>(const T& shape) {
                 using Shape = std::decay_t<T>;
                 if constexpr (std::is_same_v<Shape, BoxCollider>) {
                     const Vec3 extents = shape.halfExtents * scale;
-                    const PxBoxGeometry geometry{
-                        std::max(extents.x(), MinimumDimension),
-                        std::max(extents.y(), MinimumDimension),
-                        std::max(extents.z(), MinimumDimension)
-                    };
-                    return attachGeometry(actor, geometry, *material, localOffset,
-                                          collider.isTrigger) != nullptr;
+                    const PxBoxGeometry geometry{std::max(extents.x(), MinimumDimension),
+                                                 std::max(extents.y(), MinimumDimension),
+                                                 std::max(extents.z(), MinimumDimension)};
+                    return attachGeometry(actor, geometry, *material, localOffset, collider.isTrigger) != nullptr;
                 } else if constexpr (std::is_same_v<Shape, SphereCollider>) {
-                    const float radius = shape.radius *
-                                         std::max({scale.x(), scale.y(), scale.z()});
+                    const float radius = shape.radius * std::max({scale.x(), scale.y(), scale.z()});
                     const PxSphereGeometry geometry{std::max(radius, MinimumDimension)};
-                    return attachGeometry(actor, geometry, *material, localOffset,
-                                          collider.isTrigger) != nullptr;
+                    return attachGeometry(actor, geometry, *material, localOffset, collider.isTrigger) != nullptr;
                 } else if constexpr (std::is_same_v<Shape, CapsuleCollider>) {
                     const float radius = shape.radius * std::max(scale.x(), scale.z());
                     const float totalHeight = shape.height * scale.y();
                     const float halfHeight = std::max((totalHeight * 0.5F) - radius, MinimumDimension);
-                    const PxCapsuleGeometry geometry{
-                        std::max(radius, MinimumDimension), halfHeight
-                    };
-                    const PxTransform capsulePose{
-                        localOffset.p,
-                        PxQuat{PxHalfPi, PxVec3{0.0F, 0.0F, 1.0F}}
-                    };
-                    return attachGeometry(actor, geometry, *material, capsulePose,
-                                          collider.isTrigger) != nullptr;
+                    const PxCapsuleGeometry geometry{std::max(radius, MinimumDimension), halfHeight};
+                    const PxTransform capsulePose{localOffset.p, PxQuat{PxHalfPi, PxVec3{0.0F, 0.0F, 1.0F}}};
+                    return attachGeometry(actor, geometry, *material, capsulePose, collider.isTrigger) != nullptr;
                 } else if constexpr (std::is_same_v<Shape, RampCollider>) {
                     const Vec3 extent = shape.halfExtents * scale;
                     const std::vector<PxVec3> points{
-                        {-extent.x(), -extent.y(), -extent.z()},
-                        {extent.x(), -extent.y(), -extent.z()},
-                        {-extent.x(), -extent.y(), extent.z()},
-                        {extent.x(), -extent.y(), extent.z()},
-                        {-extent.x(), extent.y(), extent.z()},
-                        {extent.x(), extent.y(), extent.z()},
+                        {-extent.x(), -extent.y(), -extent.z()}, {extent.x(), -extent.y(), -extent.z()},
+                        {-extent.x(), -extent.y(), extent.z()},  {extent.x(), -extent.y(), extent.z()},
+                        {-extent.x(), extent.y(), extent.z()},   {extent.x(), extent.y(), extent.z()},
                     };
-                    PxConvexMesh *mesh = cookConvex(points);
+                    PxConvexMesh* mesh = cookConvex(points);
                     if (mesh == nullptr) {
                         return false;
                     }
                     const PxConvexMeshGeometry geometry{mesh};
-                    const bool result = attachGeometry(actor, geometry, *material, localOffset,
-                                                       collider.isTrigger) != nullptr;
+                    const bool result =
+                        attachGeometry(actor, geometry, *material, localOffset, collider.isTrigger) != nullptr;
                     mesh->release();
                     return result;
                 } else {
@@ -747,29 +721,31 @@ namespace Engine {
                     }
                     if (dynamic) {
                         if (!shape.mesh->convexCollisionParts.empty()) {
-                            bool success=true;
-                            for (const auto &part:shape.mesh->convexCollisionParts) {
-                                auto *mesh=cachedConvexMesh(part,scale);
-                                auto *attachedPart=mesh ? attachGeometry(actor,PxConvexMeshGeometry{mesh},*material,
-                                    localOffset,collider.isTrigger) : nullptr;
-                                if (!attachedPart) {success=false; break;}
-                                const float depth=shape.mesh->localBounds.max.z()-shape.mesh->localBounds.min.z();
-                                attachedPart->setContactOffset(std::clamp(depth*scale.z()*0.2F,0.0001F,0.02F));
+                            bool success = true;
+                            for (const auto& part : shape.mesh->convexCollisionParts) {
+                                auto* mesh = cachedConvexMesh(part, scale);
+                                auto* attachedPart = mesh ? attachGeometry(actor, PxConvexMeshGeometry{mesh}, *material,
+                                                                           localOffset, collider.isTrigger)
+                                                          : nullptr;
+                                if (!attachedPart) {
+                                    success = false;
+                                    break;
+                                }
+                                const float depth = shape.mesh->localBounds.max.z() - shape.mesh->localBounds.min.z();
+                                attachedPart->setContactOffset(std::clamp(depth * scale.z() * 0.2F, 0.0001F, 0.02F));
                             }
                             return success;
                         }
-                        if (PxConvexMesh *mesh = cachedConvexMesh(shape.mesh, scale); mesh != nullptr) {
+                        if (PxConvexMesh* mesh = cachedConvexMesh(shape.mesh, scale); mesh != nullptr) {
                             const PxConvexMeshGeometry geometry{mesh};
-                            const bool result = attachGeometry(
-                                                    actor, geometry, *material, localOffset,
-                                                    collider.isTrigger) != nullptr;
+                            const bool result =
+                                attachGeometry(actor, geometry, *material, localOffset, collider.isTrigger) != nullptr;
                             return result;
                         }
-                        return attachBoundsFallback(
-                            actor, *shape.mesh, scale, collider, *material);
+                        return attachBoundsFallback(actor, *shape.mesh, scale, collider, *material);
                     }
 
-                    PxTriangleMesh *mesh = cachedTriangleMesh(shape.mesh, scale);
+                    PxTriangleMesh* mesh = cachedTriangleMesh(shape.mesh, scale);
                     if (mesh == nullptr) {
                         return false;
                     }
@@ -778,610 +754,628 @@ namespace Engine {
                     // simulation contact orientation still comes from the
                     // counter-clockwise triangle winding supplied above.
                     geometry.meshFlags |= PxMeshGeometryFlag::eDOUBLE_SIDED;
-                    const bool result = attachGeometry(actor, geometry, *material, localOffset,
-                                                       collider.isTrigger) != nullptr;
+                    const bool result =
+                        attachGeometry(actor, geometry, *material, localOffset, collider.isTrigger) != nullptr;
                     return result;
                 }
-            }, collider.shape);
-            material->release();
-            return attached;
+            },
+            collider.shape);
+        material->release();
+        return attached;
+    }
+
+    static void configureRigidBody(physx::PxRigidDynamic& rigid, const RigidbodyComponent& body) {
+        using namespace physx;
+        rigid.setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, body.type == RigidbodyType::Kinematic);
+        rigid.setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !body.useGravity);
+        rigid.setLinearDamping(std::max(body.linearDamping, 0.0F));
+        rigid.setAngularDamping(std::max(body.angularDamping, 0.0F));
+        PxRigidDynamicLockFlags locks;
+        if (body.fixedRotation) {
+            locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_X;
+            locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Y;
+            locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z;
+        }
+        rigid.setRigidDynamicLockFlags(locks);
+        if (rigid.getNbShapes() == 0) {
+            rigid.setMass(std::max(body.mass, MinimumDimension));
+            rigid.setMassSpaceInertiaTensor({1.0F, 1.0F, 1.0F});
+        } else {
+            PxRigidBodyExt::setMassAndUpdateInertia(rigid, std::max(body.mass, MinimumDimension));
+        }
+    }
+
+    static void restoreRigidBodyState(Registry& owner, const Entity entity, physx::PxRigidDynamic& rigid) {
+        if (!owner.has<RigidbodyState>(entity)) {
+            return;
         }
 
-        static void configureRigidBody(physx::PxRigidDynamic &rigid,
-                                       const RigidbodyComponent &body) {
-            using namespace physx;
-            rigid.setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC,
-                                   body.type == RigidbodyType::Kinematic);
-            rigid.setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !body.useGravity);
-            rigid.setLinearDamping(std::max(body.linearDamping, 0.0F));
-            rigid.setAngularDamping(std::max(body.angularDamping, 0.0F));
-            PxRigidDynamicLockFlags locks;
-            if (body.fixedRotation) {
-                locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_X;
-                locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Y;
-                locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z;
-            }
-            rigid.setRigidDynamicLockFlags(locks);
-            if (rigid.getNbShapes() == 0) {
-                rigid.setMass(std::max(body.mass, MinimumDimension));
-                rigid.setMassSpaceInertiaTensor({1.0F, 1.0F, 1.0F});
-            } else {
-                PxRigidBodyExt::setMassAndUpdateInertia(rigid, std::max(body.mass, MinimumDimension));
-            }
+        const auto& state = owner.get<RigidbodyState>(entity);
+        rigid.setLinearVelocity(toPhysX(state.linearVelocity), false);
+        rigid.setAngularVelocity(toPhysX(state.angularVelocity * DegreesToRadians), false);
+    }
+
+    bool attachGlass(physx::PxRigidActor& actor, const GlassDestructionComponent& glass,
+                     const ColliderComponent& collider, const Transform& transform,
+                     std::vector<std::vector<physx::PxShape*>>& shapes, physx::PxShape*& intactShape) {
+        using namespace physx;
+        auto* material =
+            context->physics->createMaterial(std::max(collider.friction, 0.0F), std::max(collider.friction, 0.0F),
+                                             std::clamp(collider.restitution, 0.0F, 1.0F));
+        if (!material)
+            return false;
+        const auto scale = absoluteScale(transform);
+        // An intact pane has a continuous surface. Cooked shard hulls can
+        // shrink slightly at shared vertices and must not leak raycasts.
+        intactShape = attachGeometry(actor,
+                                     PxBoxGeometry{glass.size.x * scale.x() * 0.5F, glass.size.y * scale.y() * 0.5F,
+                                                   glass.thickness * scale.z() * 0.5F},
+                                     *material, PxTransform{PxIdentity}, collider.isTrigger);
+        bool success = intactShape != nullptr;
+        if (intactShape) {
+            intactShape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, !glass.fractured && !collider.isTrigger);
+            intactShape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, !glass.fractured);
+            intactShape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, !glass.fractured && collider.isTrigger);
         }
-
-        static void restoreRigidBodyState(Registry &owner, const Entity entity,
-                                          physx::PxRigidDynamic &rigid) {
-            if (!owner.has<RigidbodyState>(entity)) {
-                return;
-            }
-
-            const auto &state = owner.get<RigidbodyState>(entity);
-            rigid.setLinearVelocity(toPhysX(state.linearVelocity), false);
-            rigid.setAngularVelocity(
-                toPhysX(state.angularVelocity * DegreesToRadians), false);
-        }
-
-        bool attachGlass(physx::PxRigidActor &actor, const GlassDestructionComponent &glass,
-            const ColliderComponent &collider, const Transform &transform, std::vector<std::vector<physx::PxShape *>> &shapes,
-            physx::PxShape *&intactShape) {
-            using namespace physx;
-            auto *material = context->physics->createMaterial(std::max(collider.friction, 0.0F),
-                std::max(collider.friction, 0.0F), std::clamp(collider.restitution, 0.0F, 1.0F));
-            if (!material) return false;
-            const auto scale = absoluteScale(transform);
-            // An intact pane has a continuous surface. Cooked shard hulls can
-            // shrink slightly at shared vertices and must not leak raycasts.
-            intactShape = attachGeometry(actor, PxBoxGeometry{glass.size.x*scale.x()*0.5F,
-                glass.size.y*scale.y()*0.5F, glass.thickness*scale.z()*0.5F},
-                *material, PxTransform{PxIdentity}, collider.isTrigger);
-            bool success = intactShape != nullptr;
-            if (intactShape) {
-                intactShape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, !glass.fractured && !collider.isTrigger);
-                intactShape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, !glass.fractured);
-                intactShape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, !glass.fractured && collider.isTrigger);
-            }
-            for (const auto &fragment : glass.fragments) {
-                shapes.emplace_back();
-                auto attachPart = [&](const std::shared_ptr<const Mesh> &part) {
-                    auto *convex=part ? cachedConvexMesh(part,scale) : nullptr;
-                    auto *shape=convex ? attachGeometry(actor,PxConvexMeshGeometry{convex},*material,
-                        PxTransform{toPhysX(Vec3{fragment.center.x,fragment.center.y,0}*scale)},collider.isTrigger) : nullptr;
-                    if (!shape) return false;
-                    const bool active=glass.fractured && fragment.attached;
-                    shape->setContactOffset(std::clamp(glass.thickness*scale.z()*0.2F,0.0001F,0.02F));
-                    shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE,active && !collider.isTrigger);
-                    shape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE,active);
-                    shape->setFlag(PxShapeFlag::eTRIGGER_SHAPE,active && collider.isTrigger);
-                    shapes.back().push_back(shape);
-                    return true;
-                };
-                if (fragment.collisionGeometry && !fragment.collisionGeometry->convexCollisionParts.empty()) {
-                    for (const auto &part:fragment.collisionGeometry->convexCollisionParts)
-                        success=attachPart(part) && success;
-                } else success=attachPart(fragment.collisionGeometry) && success;
-                if (!success) break;
-            }
-            material->release();
-            return success;
-        }
-
-        ActorRecord createActor(const Entity entity, Registry &owner, Transform &transform) {
-            ++diagnostics.actorCreations;
-            using namespace physx;
-            RigidbodyComponent *body = owner.has<RigidbodyComponent>(entity)
-                                           ? &owner.get<RigidbodyComponent>(entity)
-                                           : nullptr;
-            const bool dynamic = body != nullptr && body->type != RigidbodyType::Static;
-            if (body != nullptr && body->type == RigidbodyType::Dynamic && owner.has<ParentComponent>(entity)) {
-                throw std::logic_error("Dynamic rigid bodies cannot be parented; PhysX owns their world pose");
-            }
-
-            PxRigidActor *actor = dynamic
-                                      ? static_cast<PxRigidActor *>(context->physics->createRigidDynamic(toPhysX(transform)))
-                                      : static_cast<PxRigidActor *>(context->physics->createRigidStatic(toPhysX(transform)));
-            if (actor == nullptr) {
-                throw std::runtime_error("PhysX rigid actor creation failed");
-            }
-            actor->userData = reinterpret_cast<void *>(static_cast<std::uintptr_t>(entity));
-            std::vector<std::vector<PxShape *>> glassShapes;
-            PxShape *intactGlassShape = nullptr;
-            if (owner.has<ColliderComponent>(entity)) {
-                const ColliderComponent &collider = owner.get<ColliderComponent>(entity);
-                const bool compoundGlass = !dynamic && owner.has<GlassDestructionComponent>(entity);
-                bool attached = true;
-                if (compoundGlass) {
-                    const auto &glass = owner.get<GlassDestructionComponent>(entity);
-                    // Reserve both intact and fractured shapes before gameplay.
-                    attached = attached && attachGlass(*actor, glass, collider, transform, glassShapes, intactGlassShape);
-                } else attached = attachCollider(*actor, collider, transform, dynamic);
-                if (!attached) {
-                    actor->release();
-                    throw std::runtime_error("PhysX collider creation/cooking failed");
-                }
-            }
-
-            ActorRecord record{
-                .actor = actor,
-                .lastTransform = transform,
-                .bodyType = body == nullptr ? RigidbodyType::Static : body->type,
-                .scaleWorldRevision = owner.get<Transform>(entity).worldRevision(),
-                .poseWorldRevision = owner.get<Transform>(entity).worldRevision(),
+        for (const auto& fragment : glass.fragments) {
+            shapes.emplace_back();
+            auto attachPart = [&](const std::shared_ptr<const Mesh>& part) {
+                auto* convex = part ? cachedConvexMesh(part, scale) : nullptr;
+                auto* shape =
+                    convex ? attachGeometry(actor, PxConvexMeshGeometry{convex}, *material,
+                                            PxTransform{toPhysX(Vec3{fragment.center.x, fragment.center.y, 0} * scale)},
+                                            collider.isTrigger)
+                           : nullptr;
+                if (!shape)
+                    return false;
+                const bool active = glass.fractured && fragment.attached;
+                shape->setContactOffset(std::clamp(glass.thickness * scale.z() * 0.2F, 0.0001F, 0.02F));
+                shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, active && !collider.isTrigger);
+                shape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, active);
+                shape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, active && collider.isTrigger);
+                shapes.back().push_back(shape);
+                return true;
             };
-            record.glassShapes = std::move(glassShapes);
-            record.intactGlassShape = intactGlassShape;
-            if (owner.has<GlassDestructionComponent>(entity))
-                record.glassGeometry = owner.get<GlassDestructionComponent>(entity).fractureRenderGeometry;
-            Entity sourcePane = owner.has<GlassDestructionComponent>(entity) ? entity : NullEntity;
-            if (owner.has<GlassFragmentBindingComponent>(entity))
-                sourcePane = owner.get<GlassFragmentBindingComponent>(entity).paneEntity;
-            if (sourcePane != NullEntity) {
-                const bool debris = owner.has<GlassDebrisComponent>(entity);
-                record.glassSeparationTime = debris ? 0.08F : 0.0F;
-                const PxFilterData filter{PxU32(sourcePane), PxU32(sourcePane >> 32), 0x474c4153U, debris ? 1U : 0U};
-                std::vector<PxShape *> shapes(actor->getNbShapes());
-                actor->getShapes(shapes.data(), PxU32(shapes.size()));
-                for (auto *shape : shapes) shape->setSimulationFilterData(filter);
+            if (fragment.collisionGeometry && !fragment.collisionGeometry->convexCollisionParts.empty()) {
+                for (const auto& part : fragment.collisionGeometry->convexCollisionParts)
+                    success = attachPart(part) && success;
+            } else
+                success = attachPart(fragment.collisionGeometry) && success;
+            if (!success)
+                break;
+        }
+        material->release();
+        return success;
+    }
+
+    ActorRecord createActor(const Entity entity, Registry& owner, Transform& transform) {
+        ++diagnostics.actorCreations;
+        using namespace physx;
+        RigidbodyComponent* body =
+            owner.has<RigidbodyComponent>(entity) ? &owner.get<RigidbodyComponent>(entity) : nullptr;
+        const bool dynamic = body != nullptr && body->type != RigidbodyType::Static;
+        if (body != nullptr && body->type == RigidbodyType::Dynamic && owner.has<ParentComponent>(entity)) {
+            throw std::logic_error("Dynamic rigid bodies cannot be parented; PhysX owns their world pose");
+        }
+
+        PxRigidActor* actor = dynamic
+                                  ? static_cast<PxRigidActor*>(context->physics->createRigidDynamic(toPhysX(transform)))
+                                  : static_cast<PxRigidActor*>(context->physics->createRigidStatic(toPhysX(transform)));
+        if (actor == nullptr) {
+            throw std::runtime_error("PhysX rigid actor creation failed");
+        }
+        actor->userData = reinterpret_cast<void*>(static_cast<std::uintptr_t>(entity));
+        std::vector<std::vector<PxShape*>> glassShapes;
+        PxShape* intactGlassShape = nullptr;
+        if (owner.has<ColliderComponent>(entity)) {
+            const ColliderComponent& collider = owner.get<ColliderComponent>(entity);
+            const bool compoundGlass = !dynamic && owner.has<GlassDestructionComponent>(entity);
+            bool attached = true;
+            if (compoundGlass) {
+                const auto& glass = owner.get<GlassDestructionComponent>(entity);
+                // Reserve both intact and fractured shapes before gameplay.
+                attached = attached && attachGlass(*actor, glass, collider, transform, glassShapes, intactGlassShape);
+            } else
+                attached = attachCollider(*actor, collider, transform, dynamic);
+            if (!attached) {
+                actor->release();
+                throw std::runtime_error("PhysX collider creation/cooking failed");
             }
-            if (dynamic) {
-                auto &rigid = *static_cast<PxRigidDynamic *>(actor);
-                configureRigidBody(rigid, *body);
-                if (owner.has<GlassDebrisComponent>(entity)) {
-                    float thickness = 0.006F;
-                    if (owner.has<GlassFragmentBindingComponent>(entity)) {
-                        const auto pane = owner.get<GlassFragmentBindingComponent>(entity).paneEntity;
-                        if (owner.valid(pane) && owner.has<GlassDestructionComponent>(pane))
-                            thickness = owner.get<GlassDestructionComponent>(pane).thickness;
-                    }
-                    PxShape *shape = nullptr;
-                    if (rigid.getShapes(&shape, 1) && shape)
-                        shape->setContactOffset(std::clamp(thickness * absoluteScale(transform).z() * 0.2F, 0.0001F, 0.02F));
-                    // Sweep thin shards rather than inflating coplanar contacts;
-                    // speculative contacts can lock fresh splinters in a pane.
-                    rigid.setRigidBodyFlag(PxRigidBodyFlag::eENABLE_CCD, true);
-                    rigid.setSolverIterationCounts(8, 2);
+        }
+
+        ActorRecord record{
+            .actor = actor,
+            .lastTransform = transform,
+            .bodyType = body == nullptr ? RigidbodyType::Static : body->type,
+            .scaleWorldRevision = owner.get<Transform>(entity).worldRevision(),
+            .poseWorldRevision = owner.get<Transform>(entity).worldRevision(),
+        };
+        record.glassShapes = std::move(glassShapes);
+        record.intactGlassShape = intactGlassShape;
+        if (owner.has<GlassDestructionComponent>(entity))
+            record.glassGeometry = owner.get<GlassDestructionComponent>(entity).fractureRenderGeometry;
+        Entity sourcePane = owner.has<GlassDestructionComponent>(entity) ? entity : NullEntity;
+        if (owner.has<GlassFragmentBindingComponent>(entity))
+            sourcePane = owner.get<GlassFragmentBindingComponent>(entity).paneEntity;
+        if (sourcePane != NullEntity) {
+            const bool debris = owner.has<GlassDebrisComponent>(entity);
+            record.glassSeparationTime = debris ? 0.08F : 0.0F;
+            const PxFilterData filter{PxU32(sourcePane), PxU32(sourcePane >> 32), 0x474c4153U, debris ? 1U : 0U};
+            std::vector<PxShape*> shapes(actor->getNbShapes());
+            actor->getShapes(shapes.data(), PxU32(shapes.size()));
+            for (auto* shape : shapes)
+                shape->setSimulationFilterData(filter);
+        }
+        if (dynamic) {
+            auto& rigid = *static_cast<PxRigidDynamic*>(actor);
+            configureRigidBody(rigid, *body);
+            if (owner.has<GlassDebrisComponent>(entity)) {
+                float thickness = 0.006F;
+                if (owner.has<GlassFragmentBindingComponent>(entity)) {
+                    const auto pane = owner.get<GlassFragmentBindingComponent>(entity).paneEntity;
+                    if (owner.valid(pane) && owner.has<GlassDestructionComponent>(pane))
+                        thickness = owner.get<GlassDestructionComponent>(pane).thickness;
                 }
-                restoreRigidBodyState(owner, entity, rigid);
+                PxShape* shape = nullptr;
+                if (rigid.getShapes(&shape, 1) && shape)
+                    shape->setContactOffset(
+                        std::clamp(thickness * absoluteScale(transform).z() * 0.2F, 0.0001F, 0.02F));
+                // Sweep thin shards rather than inflating coplanar contacts;
+                // speculative contacts can lock fresh splinters in a pane.
+                rigid.setRigidBodyFlag(PxRigidBodyFlag::eENABLE_CCD, true);
+                rigid.setSolverIterationCounts(8, 2);
             }
-            physicsScene->addActor(*actor);
-            return record;
+            restoreRigidBodyState(owner, entity, rigid);
         }
+        physicsScene->addActor(*actor);
+        return record;
+    }
 
-        void rebuild(Registry &owner) {
-            releaseActors();
-            registry = &owner;
-            owner.view<Transform>([&](const Entity entity, Transform &) {
-                if (!owner.has<ColliderComponent>(entity) &&
-                    !owner.has<RigidbodyComponent>(entity)) {
-                    return;
-                }
-                Transform world = TransformSystem::worldTransform(owner, entity);
-                actors.emplace(entity, createActor(entity, owner, world));
-            });
-            structuralRevision = owner.structuralRevision();
-            colliderRevision = owner.componentRevision<ColliderComponent>();
-            rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
-        }
-
-        void removeActor(const Entity entity) noexcept {
-            const auto record = actors.find(entity);
-            if (record == actors.end()) {
-                return;
-            }
-            if (record->second.actor != nullptr) {
-                record->second.actor->release();
-            }
-            actors.erase(record);
-        }
-
-        void synchronizeActor(Registry &owner, const Entity entity) {
-            if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
-                (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
-                removeActor(entity);
+    void rebuild(Registry& owner) {
+        releaseActors();
+        registry = &owner;
+        owner.view<Transform>([&](const Entity entity, Transform&) {
+            if (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity)) {
                 return;
             }
             Transform world = TransformSystem::worldTransform(owner, entity);
-            const auto existing = actors.find(entity);
-            if (existing != actors.end() && owner.has<GlassDestructionComponent>(entity) &&
-                owner.has<ColliderComponent>(entity) && existing->second.bodyType == RigidbodyType::Static &&
-                same(existing->second.lastTransform.scale, world.scale)) {
-                auto &record = existing->second;
-                const auto &glass = owner.get<GlassDestructionComponent>(entity);
-                const auto &collider = owner.get<ColliderComponent>(entity);
-                if (record.glassShapes.size() == glass.fragments.size() &&
-                    record.glassGeometry == glass.fractureRenderGeometry) {
-                    ++diagnostics.glassShapeUpdates;
-                    if (record.intactGlassShape) {
-                        auto flags = record.intactGlassShape->getFlags();
+            actors.emplace(entity, createActor(entity, owner, world));
+        });
+        structuralRevision = owner.structuralRevision();
+        colliderRevision = owner.componentRevision<ColliderComponent>();
+        rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
+    }
+
+    void removeActor(const Entity entity) noexcept {
+        const auto record = actors.find(entity);
+        if (record == actors.end()) {
+            return;
+        }
+        if (record->second.actor != nullptr) {
+            record->second.actor->release();
+        }
+        actors.erase(record);
+    }
+
+    void synchronizeActor(Registry& owner, const Entity entity) {
+        if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
+            (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
+            removeActor(entity);
+            return;
+        }
+        Transform world = TransformSystem::worldTransform(owner, entity);
+        const auto existing = actors.find(entity);
+        if (existing != actors.end() && owner.has<GlassDestructionComponent>(entity) &&
+            owner.has<ColliderComponent>(entity) && existing->second.bodyType == RigidbodyType::Static &&
+            same(existing->second.lastTransform.scale, world.scale)) {
+            auto& record = existing->second;
+            const auto& glass = owner.get<GlassDestructionComponent>(entity);
+            const auto& collider = owner.get<ColliderComponent>(entity);
+            if (record.glassShapes.size() == glass.fragments.size() &&
+                record.glassGeometry == glass.fractureRenderGeometry) {
+                ++diagnostics.glassShapeUpdates;
+                if (record.intactGlassShape) {
+                    auto flags = record.intactGlassShape->getFlags();
+                    flags.clear(physx::PxShapeFlag::eSIMULATION_SHAPE);
+                    flags.clear(physx::PxShapeFlag::eSCENE_QUERY_SHAPE);
+                    flags.clear(physx::PxShapeFlag::eTRIGGER_SHAPE);
+                    if (!glass.fractured) {
+                        flags |= physx::PxShapeFlag::eSCENE_QUERY_SHAPE;
+                        flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE
+                                                    : physx::PxShapeFlag::eSIMULATION_SHAPE;
+                    }
+                    if (flags != record.intactGlassShape->getFlags())
+                        record.intactGlassShape->setFlags(flags);
+                }
+                for (std::size_t i = 0; i < record.glassShapes.size(); ++i) {
+                    const bool active = glass.fractured && glass.fragments[i].attached;
+                    for (auto* shape : record.glassShapes[i]) {
+                        auto flags = shape->getFlags();
                         flags.clear(physx::PxShapeFlag::eSIMULATION_SHAPE);
                         flags.clear(physx::PxShapeFlag::eSCENE_QUERY_SHAPE);
                         flags.clear(physx::PxShapeFlag::eTRIGGER_SHAPE);
-                        if (!glass.fractured) {
+                        if (active) {
                             flags |= physx::PxShapeFlag::eSCENE_QUERY_SHAPE;
-                            flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE : physx::PxShapeFlag::eSIMULATION_SHAPE;
+                            flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE
+                                                        : physx::PxShapeFlag::eSIMULATION_SHAPE;
                         }
-                        if (flags != record.intactGlassShape->getFlags()) record.intactGlassShape->setFlags(flags);
+                        if (flags != shape->getFlags())
+                            shape->setFlags(flags);
                     }
-                    for (std::size_t i = 0; i < record.glassShapes.size(); ++i) {
-                        const bool active = glass.fractured && glass.fragments[i].attached;
-                        for (auto *shape : record.glassShapes[i]) {
-                            auto flags = shape->getFlags();
-                            flags.clear(physx::PxShapeFlag::eSIMULATION_SHAPE);
-                            flags.clear(physx::PxShapeFlag::eSCENE_QUERY_SHAPE);
-                            flags.clear(physx::PxShapeFlag::eTRIGGER_SHAPE);
-                            if (active) {
-                                flags |= physx::PxShapeFlag::eSCENE_QUERY_SHAPE;
-                                flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE : physx::PxShapeFlag::eSIMULATION_SHAPE;
-                            }
-                            if (flags != shape->getFlags()) shape->setFlags(flags);
-                        }
-                    }
-                    return;
                 }
-            }
-            removeActor(entity);
-            actors.emplace(entity, createActor(entity, owner, world));
-        }
-
-        void reconcileStructure(Registry &owner) {
-            std::vector<Entity> stale;
-            stale.reserve(actors.size());
-            for (auto &[entity, record]: actors) {
-                if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
-                    (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
-                    stale.push_back(entity);
-                } else {
-                    // A Transform can be removed and re-added between physics
-                    // calls, restarting its world revision at the same value.
-                    record.scaleWorldRevision = 0;
-                    record.poseWorldRevision = 0;
-                }
-            }
-            for (const Entity entity: stale) {
-                removeActor(entity);
-            }
-            owner.view<Transform>([&](const Entity entity, Transform &) {
-                if (actors.contains(entity) ||
-                    (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
-                    return;
-                }
-                Transform world = TransformSystem::worldTransform(owner, entity);
-                actors.emplace(entity, createActor(entity, owner, world));
-            });
-        }
-
-        void pruneCookedMeshes() {
-            // Procedural meshes are replaced frequently. Retire stale entries
-            // before an allocator can reuse their source address as a cache key.
-            for (auto it = meshSources.begin(); it != meshSources.end();) {
-                if (!it->second.expired()) { ++it; continue; }
-                if (auto convex = convexMeshes.find(it->first); convex != convexMeshes.end()) {
-                    convex->second->release();
-                    convexMeshes.erase(convex);
-                }
-                if (auto triangle = triangleMeshes.find(it->first); triangle != triangleMeshes.end()) {
-                    triangle->second->release();
-                    triangleMeshes.erase(triangle);
-                }
-                it = meshSources.erase(it);
-            }
-        }
-
-        void ensureWorld(Registry &owner) {
-            GE_PROFILE_SCOPE("PhysicsActorSyncCPU");
-            pruneCookedMeshes();
-            if (registry != &owner) {
-                rebuild(owner);
                 return;
             }
-
-            if (structuralRevision != owner.structuralRevision()) {
-                reconcileStructure(owner);
-                structuralRevision = owner.structuralRevision();
-            }
-            if (colliderRevision != owner.componentRevision<ColliderComponent>()) {
-                for (const Entity entity: owner.componentEntitiesChangedSince<ColliderComponent>(colliderRevision)) {
-                    synchronizeActor(owner, entity);
-                }
-                colliderRevision = owner.componentRevision<ColliderComponent>();
-            }
-            if (rigidbodyRevision != owner.componentRevision<RigidbodyComponent>()) {
-                for (const Entity entity: owner.componentEntitiesChangedSince<RigidbodyComponent>(rigidbodyRevision)) {
-                    const auto record = actors.find(entity);
-                    if (!owner.valid(entity) || !owner.has<RigidbodyComponent>(entity) ||
-                        record == actors.end() ||
-                        record->second.bodyType != owner.get<RigidbodyComponent>(entity).type) {
-                        synchronizeActor(owner, entity);
-                    } else if (record->second.bodyType != RigidbodyType::Static) {
-                        const RigidbodyComponent &body = owner.get<RigidbodyComponent>(entity);
-                        configureRigidBody(*static_cast<physx::PxRigidDynamic *>(record->second.actor), body);
-                    }
-                }
-                rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
-            }
-
-            scaleChanged.clear();
-            for (auto &[entity, record]: actors) {
-                const Transform &local = owner.get<Transform>(entity);
-                if (record.scaleWorldRevision == local.worldRevision()) {
-                    continue;
-                }
-                const Vec3 currentScale = record.bodyType == RigidbodyType::Dynamic
-                                              ? local.scale
-                                              : local.worldScale();
-                if (!same(record.lastTransform.scale, currentScale)) {
-                    scaleChanged.push_back(entity);
-                } else {
-                    record.scaleWorldRevision = local.worldRevision();
-                }
-            }
-            for (const Entity entity: scaleChanged) {
-                synchronizeActor(owner, entity);
-            }
         }
-
-        void pushEcsState(Registry &owner) {
-            GE_PROFILE_SCOPE("PhysicsStatePushCPU");
-            using namespace physx;
-            for (auto &[entity, record]: actors) {
-                // Transform owns Static and Kinematic poses. Dynamic poses are
-                // owned by PhysX and cross this boundary only through teleport.
-                if (record.bodyType != RigidbodyType::Dynamic) {
-                    const Transform &local = owner.get<Transform>(entity);
-                    if (record.poseWorldRevision != local.worldRevision()) {
-                        const Transform transform = local.worldTransform();
-                        if (!samePose(transform, record.lastTransform)) {
-                            if (record.bodyType == RigidbodyType::Static) {
-                                record.actor->setGlobalPose(toPhysX(transform), true);
-                            } else {
-                                static_cast<PxRigidDynamic *>(record.actor)->setKinematicTarget(toPhysX(transform));
-                            }
-                            record.lastTransform = transform;
-                        }
-                        record.poseWorldRevision = local.worldRevision();
-                    }
-                    continue;
-                }
-                auto &rigid = *static_cast<PxRigidDynamic *>(record.actor);
-                PhysicsCommandBuffer *commands = owner.has<PhysicsCommandBuffer>(entity)
-                                                     ? &owner.get<PhysicsCommandBuffer>(entity)
-                                                     : nullptr;
-                if (commands != nullptr &&
-                    (commands->teleportPosition.has_value() || commands->teleportRotation.has_value())) {
-                    PxTransform pose = rigid.getGlobalPose();
-                    if (commands->teleportPosition) {
-                        pose.p = toPhysX(*commands->teleportPosition);
-                    }
-                    if (commands->teleportRotation) {
-                        pose.q = toPhysX(transformRotation(Transform{.rotation = *commands->teleportRotation}));
-                    }
-                    rigid.setGlobalPose(pose, true);
-                }
-                if (commands != nullptr) {
-                    if (commands->linearVelocity) {
-                        rigid.setLinearVelocity(toPhysX(*commands->linearVelocity));
-                    }
-                    if (commands->angularVelocity) {
-                        rigid.setAngularVelocity(
-                            toPhysX(*commands->angularVelocity * DegreesToRadians));
-                    }
-                    if (nonZero(commands->force)) {
-                        rigid.addForce(toPhysX(commands->force), PxForceMode::eFORCE);
-                    }
-                    if (nonZero(commands->torque)) {
-                        rigid.addTorque(toPhysX(commands->torque), PxForceMode::eFORCE);
-                    }
-                    if (nonZero(commands->impulse)) {
-                        rigid.addForce(toPhysX(commands->impulse), PxForceMode::eIMPULSE);
-                    }
-                    if (nonZero(commands->angularImpulse)) {
-                        rigid.addTorque(
-                            toPhysX(commands->angularImpulse), PxForceMode::eIMPULSE);
-                    }
-                    commands->clear();
-                }
-            }
-        }
-
-        void pullPhysXState(Registry &owner) {
-            physx::PxU32 activeCount = 0;
-            physx::PxActor **activeActors = physicsScene->getActiveActors(activeCount);
-            for (physx::PxU32 index = 0; index < activeCount; ++index) {
-                const auto entity = entityForActor(
-                    static_cast<physx::PxRigidActor *>(activeActors[index]));
-                if (!entity || !owner.valid(*entity) || !owner.has<RigidbodyComponent>(*entity)) {
-                    continue;
-                }
-                const auto recordIt = actors.find(*entity);
-                if (recordIt == actors.end() || recordIt->second.actor != activeActors[index]) continue;
-                ActorRecord &record = recordIt->second;
-                auto &body = owner.get<RigidbodyComponent>(*entity);
-                if (body.type != RigidbodyType::Dynamic) {
-                    continue;
-                }
-                const auto &rigid = *static_cast<physx::PxRigidDynamic *>(record.actor);
-                const physx::PxTransform pose = rigid.getGlobalPose();
-                Transform &transform = owner.get<Transform>(*entity);
-                transform.position = fromPhysX(pose.p);
-                transform.rotation = eulerDegrees(fromPhysX(pose.q).normalized());
-                if (!owner.has<RigidbodyState>(*entity)) owner.add<RigidbodyState>(*entity);
-                auto &state = owner.get<RigidbodyState>(*entity);
-                state.linearVelocity = fromPhysX(rigid.getLinearVelocity());
-                state.angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
-                if (body.fixedRotation) state.angularVelocity = {};
-                record.lastTransform = transform;
-                owner.markChanged<Transform>(*entity);
-            }
-        }
-
-        void updateGlassSeparation(float deltaTime) {
-            for (auto &[entity, record] : actors) {
-                if (record.glassSeparationTime <= 0) continue;
-                record.glassSeparationTime -= deltaTime;
-                if (record.glassSeparationTime > 0) continue;
-                // Fresh coplanar fracture faces need a few integration steps to
-                // separate before colliding with their own pane and siblings.
-                // Contacts with floors, props and other panes remain enabled.
-                std::vector<physx::PxShape *> shapes(record.actor->getNbShapes());
-                record.actor->getShapes(shapes.data(), physx::PxU32(shapes.size()));
-                for (auto *shape : shapes) {
-                    auto filter = shape->getSimulationFilterData();
-                    filter.word3 = 0;
-                    shape->setSimulationFilterData(filter);
-                }
-                physicsScene->resetFiltering(*record.actor);
-            }
-        }
-    };
-
-    PhysicsDiagnostics PhysicsSystem::diagnostics() const noexcept {
-        return broadPhaseCache_ ? broadPhaseCache_->diagnostics : PhysicsDiagnostics{};
+        removeActor(entity);
+        actors.emplace(entity, createActor(entity, owner, world));
     }
 
-    void PhysicsSystem::reset() const noexcept {
-        broadPhaseCache_.reset();
+    void reconcileStructure(Registry& owner) {
+        std::vector<Entity> stale;
+        stale.reserve(actors.size());
+        for (auto& [entity, record] : actors) {
+            if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
+                (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
+                stale.push_back(entity);
+            } else {
+                // A Transform can be removed and re-added between physics
+                // calls, restarting its world revision at the same value.
+                record.scaleWorldRevision = 0;
+                record.poseWorldRevision = 0;
+            }
+        }
+        for (const Entity entity : stale) {
+            removeActor(entity);
+        }
+        owner.view<Transform>([&](const Entity entity, Transform&) {
+            if (actors.contains(entity) ||
+                (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
+                return;
+            }
+            Transform world = TransformSystem::worldTransform(owner, entity);
+            actors.emplace(entity, createActor(entity, owner, world));
+        });
     }
 
-    void PhysicsSystem::update(Scene &scene, const float deltaTime) const {
-        if (deltaTime <= 0.0F) {
+    void pruneCookedMeshes() {
+        // Procedural meshes are replaced frequently. Retire stale entries
+        // before an allocator can reuse their source address as a cache key.
+        for (auto it = meshSources.begin(); it != meshSources.end();) {
+            if (!it->second.expired()) {
+                ++it;
+                continue;
+            }
+            if (auto convex = convexMeshes.find(it->first); convex != convexMeshes.end()) {
+                convex->second->release();
+                convexMeshes.erase(convex);
+            }
+            if (auto triangle = triangleMeshes.find(it->first); triangle != triangleMeshes.end()) {
+                triangle->second->release();
+                triangleMeshes.erase(triangle);
+            }
+            it = meshSources.erase(it);
+        }
+    }
+
+    void ensureWorld(Registry& owner) {
+        GE_PROFILE_SCOPE("PhysicsActorSyncCPU");
+        pruneCookedMeshes();
+        if (registry != &owner) {
+            rebuild(owner);
             return;
         }
-        if (!broadPhaseCache_) {
-            broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
-        }
-        BroadPhaseCache &runtime = *broadPhaseCache_;
-        Registry &registry = scene.registry();
-        TransformSystem::updateDirty(registry);
-        runtime.ensureWorld(registry);
-        runtime.pushEcsState(registry);
-        GlassDestructionSystem::update(scene, deltaTime, this);
-        TransformSystem::updateDirty(registry);
-        runtime.ensureWorld(registry);
-        runtime.physicsScene->setGravity(toPhysX(gravity_));
-        runtime.pushEcsState(registry);
-        {
-            GE_PROFILE_SCOPE("PhysXSimulationCPU");
-            runtime.updateGlassSeparation(deltaTime);
-            const auto simulationStart = std::chrono::steady_clock::now();
-            runtime.physicsScene->simulate(deltaTime);
-            runtime.physicsScene->fetchResults(true);
-            scene.reportGlassPhysicsCost(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-simulationStart).count());
-        }
-        runtime.pullPhysXState(registry);
-        trampleTerrainGrass(registry, deltaTime);
-    }
 
-    std::optional<RaycastHit> PhysicsSystem::raycast(
-        Scene &scene, const Vec3 origin, Vec3 direction, const float maxDistance,
-        const ObjectId ignoredActor) const {
-        const float directionLength = direction.length();
-        if (directionLength <= 0.0F || maxDistance <= 0.0F) {
-            return std::nullopt;
+        if (structuralRevision != owner.structuralRevision()) {
+            reconcileStructure(owner);
+            structuralRevision = owner.structuralRevision();
         }
-        direction *= 1.0F / directionLength;
-
-        if (!broadPhaseCache_) {
-            broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
-        }
-        BroadPhaseCache &runtime = *broadPhaseCache_;
-        Registry &registry = scene.registry();
-        TransformSystem::updateDirty(registry);
-        runtime.ensureWorld(registry);
-        runtime.pushEcsState(registry);
-
-        return raycastPrepared(scene, origin, direction, maxDistance, ignoredActor);
-    }
-
-    std::optional<RaycastHit> PhysicsSystem::raycastPrepared(
-        Scene &scene, const Vec3 origin, const Vec3 direction, const float maxDistance,
-        const ObjectId ignoredActor) const {
-        if (!broadPhaseCache_ || !broadPhaseCache_->physicsScene) return std::nullopt;
-        BroadPhaseCache &runtime = *broadPhaseCache_;
-        physx::PxRaycastBuffer hit;
-        const physx::PxHitFlags hitFlags =
-                physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
-        struct IgnoreActorFilter final : physx::PxQueryFilterCallback {
-            const physx::PxRigidActor* ignored{};
-            physx::PxQueryHitType::Enum preFilter(const physx::PxFilterData&, const physx::PxShape*,
-                const physx::PxRigidActor* candidate, physx::PxHitFlags&) override {
-                return candidate == ignored ? physx::PxQueryHitType::eNONE : physx::PxQueryHitType::eBLOCK;
+        if (colliderRevision != owner.componentRevision<ColliderComponent>()) {
+            for (const Entity entity : owner.componentEntitiesChangedSince<ColliderComponent>(colliderRevision)) {
+                synchronizeActor(owner, entity);
             }
-            physx::PxQueryHitType::Enum postFilter(const physx::PxFilterData&, const physx::PxQueryHit&,
-                const physx::PxShape*, const physx::PxRigidActor*) override {
-                return physx::PxQueryHitType::eBLOCK;
+            colliderRevision = owner.componentRevision<ColliderComponent>();
+        }
+        if (rigidbodyRevision != owner.componentRevision<RigidbodyComponent>()) {
+            for (const Entity entity : owner.componentEntitiesChangedSince<RigidbodyComponent>(rigidbodyRevision)) {
+                const auto record = actors.find(entity);
+                if (!owner.valid(entity) || !owner.has<RigidbodyComponent>(entity) || record == actors.end() ||
+                    record->second.bodyType != owner.get<RigidbodyComponent>(entity).type) {
+                    synchronizeActor(owner, entity);
+                } else if (record->second.bodyType != RigidbodyType::Static) {
+                    const RigidbodyComponent& body = owner.get<RigidbodyComponent>(entity);
+                    configureRigidBody(*static_cast<physx::PxRigidDynamic*>(record->second.actor), body);
+                }
             }
-        } filter;
-        if (const auto record = runtime.actors.find(scene.findEntity(ignoredActor)); record != runtime.actors.end())
-            filter.ignored = record->second.actor;
-        physx::PxQueryFilterData queryFilter;
-        if (filter.ignored) queryFilter.flags |= physx::PxQueryFlag::ePREFILTER;
-        if (!runtime.physicsScene->raycast(
-                toPhysX(origin), toPhysX(direction), maxDistance, hit, hitFlags, queryFilter, &filter) ||
-            !hit.hasBlock || hit.block.actor == nullptr) {
+            rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
+        }
+
+        scaleChanged.clear();
+        for (auto& [entity, record] : actors) {
+            const Transform& local = owner.get<Transform>(entity);
+            if (record.scaleWorldRevision == local.worldRevision()) {
+                continue;
+            }
+            const Vec3 currentScale = record.bodyType == RigidbodyType::Dynamic ? local.scale : local.worldScale();
+            if (!same(record.lastTransform.scale, currentScale)) {
+                scaleChanged.push_back(entity);
+            } else {
+                record.scaleWorldRevision = local.worldRevision();
+            }
+        }
+        for (const Entity entity : scaleChanged) {
+            synchronizeActor(owner, entity);
+        }
+    }
+
+    void pushEcsState(Registry& owner) {
+        GE_PROFILE_SCOPE("PhysicsStatePushCPU");
+        using namespace physx;
+        for (auto& [entity, record] : actors) {
+            // Transform owns Static and Kinematic poses. Dynamic poses are
+            // owned by PhysX and cross this boundary only through teleport.
+            if (record.bodyType != RigidbodyType::Dynamic) {
+                const Transform& local = owner.get<Transform>(entity);
+                if (record.poseWorldRevision != local.worldRevision()) {
+                    const Transform transform = local.worldTransform();
+                    if (!samePose(transform, record.lastTransform)) {
+                        if (record.bodyType == RigidbodyType::Static) {
+                            record.actor->setGlobalPose(toPhysX(transform), true);
+                        } else {
+                            static_cast<PxRigidDynamic*>(record.actor)->setKinematicTarget(toPhysX(transform));
+                        }
+                        record.lastTransform = transform;
+                    }
+                    record.poseWorldRevision = local.worldRevision();
+                }
+                continue;
+            }
+            auto& rigid = *static_cast<PxRigidDynamic*>(record.actor);
+            PhysicsCommandBuffer* commands =
+                owner.has<PhysicsCommandBuffer>(entity) ? &owner.get<PhysicsCommandBuffer>(entity) : nullptr;
+            if (commands != nullptr &&
+                (commands->teleportPosition.has_value() || commands->teleportRotation.has_value())) {
+                PxTransform pose = rigid.getGlobalPose();
+                if (commands->teleportPosition) {
+                    pose.p = toPhysX(*commands->teleportPosition);
+                }
+                if (commands->teleportRotation) {
+                    pose.q = toPhysX(transformRotation(Transform{.rotation = *commands->teleportRotation}));
+                }
+                rigid.setGlobalPose(pose, true);
+            }
+            if (commands != nullptr) {
+                if (commands->linearVelocity) {
+                    rigid.setLinearVelocity(toPhysX(*commands->linearVelocity));
+                }
+                if (commands->angularVelocity) {
+                    rigid.setAngularVelocity(toPhysX(*commands->angularVelocity * DegreesToRadians));
+                }
+                if (nonZero(commands->force)) {
+                    rigid.addForce(toPhysX(commands->force), PxForceMode::eFORCE);
+                }
+                if (nonZero(commands->torque)) {
+                    rigid.addTorque(toPhysX(commands->torque), PxForceMode::eFORCE);
+                }
+                if (nonZero(commands->impulse)) {
+                    rigid.addForce(toPhysX(commands->impulse), PxForceMode::eIMPULSE);
+                }
+                if (nonZero(commands->angularImpulse)) {
+                    rigid.addTorque(toPhysX(commands->angularImpulse), PxForceMode::eIMPULSE);
+                }
+                commands->clear();
+            }
+        }
+    }
+
+    void pullPhysXState(Registry& owner) {
+        physx::PxU32 activeCount = 0;
+        physx::PxActor** activeActors = physicsScene->getActiveActors(activeCount);
+        for (physx::PxU32 index = 0; index < activeCount; ++index) {
+            const auto entity = entityForActor(static_cast<physx::PxRigidActor*>(activeActors[index]));
+            if (!entity || !owner.valid(*entity) || !owner.has<RigidbodyComponent>(*entity)) {
+                continue;
+            }
+            const auto recordIt = actors.find(*entity);
+            if (recordIt == actors.end() || recordIt->second.actor != activeActors[index])
+                continue;
+            ActorRecord& record = recordIt->second;
+            auto& body = owner.get<RigidbodyComponent>(*entity);
+            if (body.type != RigidbodyType::Dynamic) {
+                continue;
+            }
+            const auto& rigid = *static_cast<physx::PxRigidDynamic*>(record.actor);
+            const physx::PxTransform pose = rigid.getGlobalPose();
+            Transform& transform = owner.get<Transform>(*entity);
+            transform.position = fromPhysX(pose.p);
+            transform.rotation = eulerDegrees(fromPhysX(pose.q).normalized());
+            if (!owner.has<RigidbodyState>(*entity))
+                owner.add<RigidbodyState>(*entity);
+            auto& state = owner.get<RigidbodyState>(*entity);
+            state.linearVelocity = fromPhysX(rigid.getLinearVelocity());
+            state.angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
+            if (body.fixedRotation)
+                state.angularVelocity = {};
+            record.lastTransform = transform;
+            owner.markChanged<Transform>(*entity);
+        }
+    }
+
+    void updateGlassSeparation(float deltaTime) {
+        for (auto& [entity, record] : actors) {
+            if (record.glassSeparationTime <= 0)
+                continue;
+            record.glassSeparationTime -= deltaTime;
+            if (record.glassSeparationTime > 0)
+                continue;
+            // Fresh coplanar fracture faces need a few integration steps to
+            // separate before colliding with their own pane and siblings.
+            // Contacts with floors, props and other panes remain enabled.
+            std::vector<physx::PxShape*> shapes(record.actor->getNbShapes());
+            record.actor->getShapes(shapes.data(), physx::PxU32(shapes.size()));
+            for (auto* shape : shapes) {
+                auto filter = shape->getSimulationFilterData();
+                filter.word3 = 0;
+                shape->setSimulationFilterData(filter);
+            }
+            physicsScene->resetFiltering(*record.actor);
+        }
+    }
+};
+
+PhysicsDiagnostics PhysicsSystem::diagnostics() const noexcept {
+    return broadPhaseCache_ ? broadPhaseCache_->diagnostics : PhysicsDiagnostics{};
+}
+
+void PhysicsSystem::reset() const noexcept {
+    broadPhaseCache_.reset();
+}
+
+void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
+    if (deltaTime <= 0.0F) {
+        return;
+    }
+    if (!broadPhaseCache_) {
+        broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
+    }
+    BroadPhaseCache& runtime = *broadPhaseCache_;
+    Registry& registry = scene.registry();
+    TransformSystem::updateDirty(registry);
+    runtime.ensureWorld(registry);
+    runtime.pushEcsState(registry);
+    GlassDestructionSystem::update(scene, deltaTime, this);
+    TransformSystem::updateDirty(registry);
+    runtime.ensureWorld(registry);
+    runtime.physicsScene->setGravity(toPhysX(gravity_));
+    runtime.pushEcsState(registry);
+    {
+        GE_PROFILE_SCOPE("PhysXSimulationCPU");
+        runtime.updateGlassSeparation(deltaTime);
+        const auto simulationStart = std::chrono::steady_clock::now();
+        runtime.physicsScene->simulate(deltaTime);
+        runtime.physicsScene->fetchResults(true);
+        scene.reportGlassPhysicsCost(
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - simulationStart).count());
+    }
+    runtime.pullPhysXState(registry);
+    trampleTerrainGrass(registry, deltaTime);
+}
+
+std::optional<RaycastHit> PhysicsSystem::raycast(Scene& scene, const Vec3 origin, Vec3 direction,
+                                                 const float maxDistance, const ObjectId ignoredActor) const {
+    const float directionLength = direction.length();
+    if (directionLength <= 0.0F || maxDistance <= 0.0F) {
+        return std::nullopt;
+    }
+    direction *= 1.0F / directionLength;
+
+    if (!broadPhaseCache_) {
+        broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
+    }
+    BroadPhaseCache& runtime = *broadPhaseCache_;
+    Registry& registry = scene.registry();
+    TransformSystem::updateDirty(registry);
+    runtime.ensureWorld(registry);
+    runtime.pushEcsState(registry);
+
+    return raycastPrepared(scene, origin, direction, maxDistance, ignoredActor);
+}
+
+std::optional<RaycastHit> PhysicsSystem::raycastPrepared(Scene& scene, const Vec3 origin, const Vec3 direction,
+                                                         const float maxDistance, const ObjectId ignoredActor) const {
+    if (!broadPhaseCache_ || !broadPhaseCache_->physicsScene)
+        return std::nullopt;
+    BroadPhaseCache& runtime = *broadPhaseCache_;
+    physx::PxRaycastBuffer hit;
+    const physx::PxHitFlags hitFlags = physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
+    struct IgnoreActorFilter final : physx::PxQueryFilterCallback {
+        const physx::PxRigidActor* ignored{};
+        physx::PxQueryHitType::Enum preFilter(const physx::PxFilterData&, const physx::PxShape*,
+                                              const physx::PxRigidActor* candidate, physx::PxHitFlags&) override {
+            return candidate == ignored ? physx::PxQueryHitType::eNONE : physx::PxQueryHitType::eBLOCK;
+        }
+        physx::PxQueryHitType::Enum postFilter(const physx::PxFilterData&, const physx::PxQueryHit&,
+                                               const physx::PxShape*, const physx::PxRigidActor*) override {
+            return physx::PxQueryHitType::eBLOCK;
+        }
+    } filter;
+    if (const auto record = runtime.actors.find(scene.findEntity(ignoredActor)); record != runtime.actors.end())
+        filter.ignored = record->second.actor;
+    physx::PxQueryFilterData queryFilter;
+    if (filter.ignored)
+        queryFilter.flags |= physx::PxQueryFlag::ePREFILTER;
+    if (!runtime.physicsScene->raycast(toPhysX(origin), toPhysX(direction), maxDistance, hit, hitFlags, queryFilter,
+                                       &filter) ||
+        !hit.hasBlock || hit.block.actor == nullptr) {
+        return std::nullopt;
+    }
+
+    const std::optional<Entity> entity = runtime.entityForActor(hit.block.actor);
+    if (!entity.has_value()) {
+        return std::nullopt;
+    }
+    GameObject* object = scene.findByEntity(*entity);
+    if (object == nullptr) {
+        return std::nullopt;
+    }
+    return RaycastHit{
+        .actor = Actor{scene, object->objectId()},
+        .point = fromPhysX(hit.block.position),
+        .normal = fromPhysX(hit.block.normal),
+        .distance = hit.block.distance,
+    };
+}
+
+void Physics::update(const float deltaTime) const {
+    system_.update(*scene_, deltaTime);
+}
+
+std::optional<RaycastHit> Physics::raycast(const Vec3 origin, const Vec3 direction, const float maxDistance) const {
+    return system_.raycast(*scene_, origin, direction, maxDistance);
+}
+
+std::optional<RaycastHit> Physics::shootRay(const Vec3 origin, const Vec3 direction, const float maxDistance,
+                                            const ObjectId ignoredActor) {
+    return shootRay(origin, direction, maxDistance, ignoredActor, 40.0F, 0.18F);
+}
+
+std::optional<RaycastHit> Physics::shootRay(const Vec3 origin, const Vec3 direction, const float maxDistance,
+                                            const ObjectId ignoredActor, const float energy, const float radius) {
+    const float directionLength = direction.length();
+    if (directionLength <= 0.0F || maxDistance <= 0.0F)
+        return std::nullopt;
+    const Vec3 normalizedDirection = direction * (1.0F / directionLength);
+    constexpr float RayEpsilon = 0.001F;
+    constexpr unsigned MaxIgnoredGlassDebris = 32;
+    Vec3 rayOrigin = origin;
+    float remainingDistance = maxDistance;
+    ObjectId ignored = ignoredActor;
+    std::optional<RaycastHit> hit;
+    for (unsigned skipped = 0; skipped <= MaxIgnoredGlassDebris; ++skipped) {
+        hit = system_.raycast(*scene_, rayOrigin, normalizedDirection, remainingDistance, ignored);
+        if (!hit)
             return std::nullopt;
-        }
-
-        const std::optional<Entity> entity = runtime.entityForActor(hit.block.actor);
-        if (!entity.has_value()) {
+        const Entity hitEntity = scene_->findEntity(hit->actor.id());
+        if (!scene_->registry().has<GlassDebrisComponent>(hitEntity))
+            break;
+        const float travelled = hit->distance + RayEpsilon;
+        if (travelled >= remainingDistance)
             return std::nullopt;
-        }
-        GameObject *object = scene.findByEntity(*entity);
-        if (object == nullptr) {
-            return std::nullopt;
-        }
-        return RaycastHit{
-            .actor = Actor{scene, object->objectId()}, .point = fromPhysX(hit.block.position),
-            .normal = fromPhysX(hit.block.normal), .distance = hit.block.distance,
-        };
+        rayOrigin = hit->point + normalizedDirection * RayEpsilon;
+        remainingDistance -= travelled;
+        ignored = hit->actor.id();
     }
-
-    void Physics::update(const float deltaTime) const {
-        system_.update(*scene_, deltaTime);
+    if (hit) {
+        constexpr std::size_t MaxBulletImpacts = 128;
+        if (bulletImpacts_.size() == MaxBulletImpacts)
+            bulletImpacts_.erase(bulletImpacts_.begin());
+        bulletImpacts_.push_back({origin, hit->point, hit->normal, hit->actor.id()});
+        GlassDestructionSystem::onImpact(*scene_, scene_->findEntity(hit->actor.id()),
+                                         GlassImpact{.worldPosition = hit->point,
+                                                     .worldDirection = normalizedDirection,
+                                                     .worldNormal = hit->normal,
+                                                     .energy = energy,
+                                                     .radius = radius});
     }
-
-    std::optional<RaycastHit> Physics::raycast(
-        const Vec3 origin, const Vec3 direction, const float maxDistance) const {
-        return system_.raycast(*scene_, origin, direction, maxDistance);
-    }
-
-    std::optional<RaycastHit> Physics::shootRay(
-        const Vec3 origin, const Vec3 direction, const float maxDistance, const ObjectId ignoredActor) {
-        return shootRay(origin, direction, maxDistance, ignoredActor, 40.0F, 0.18F);
-    }
-
-    std::optional<RaycastHit> Physics::shootRay(
-        const Vec3 origin, const Vec3 direction, const float maxDistance,
-        const ObjectId ignoredActor, const float energy, const float radius) {
-        const float directionLength = direction.length();
-        if (directionLength <= 0.0F || maxDistance <= 0.0F) return std::nullopt;
-        const Vec3 normalizedDirection = direction * (1.0F / directionLength);
-        constexpr float RayEpsilon = 0.001F;
-        constexpr unsigned MaxIgnoredGlassDebris = 32;
-        Vec3 rayOrigin = origin;
-        float remainingDistance = maxDistance;
-        ObjectId ignored = ignoredActor;
-        std::optional<RaycastHit> hit;
-        for (unsigned skipped = 0; skipped <= MaxIgnoredGlassDebris; ++skipped) {
-            hit = system_.raycast(*scene_, rayOrigin, normalizedDirection,
-                remainingDistance, ignored);
-            if (!hit) return std::nullopt;
-            const Entity hitEntity = scene_->findEntity(hit->actor.id());
-            if (!scene_->registry().has<GlassDebrisComponent>(hitEntity)) break;
-            const float travelled = hit->distance + RayEpsilon;
-            if (travelled >= remainingDistance) return std::nullopt;
-            rayOrigin = hit->point + normalizedDirection * RayEpsilon;
-            remainingDistance -= travelled;
-            ignored = hit->actor.id();
-        }
-        if (hit) {
-            constexpr std::size_t MaxBulletImpacts = 128;
-            if (bulletImpacts_.size() == MaxBulletImpacts) bulletImpacts_.erase(bulletImpacts_.begin());
-            bulletImpacts_.push_back({origin, hit->point, hit->normal, hit->actor.id()});
-            GlassDestructionSystem::onImpact(*scene_, scene_->findEntity(hit->actor.id()),
-                GlassImpact{.worldPosition = hit->point, .worldDirection = normalizedDirection,
-                    .worldNormal = hit->normal,
-                    .energy = energy, .radius = radius});
-        }
-        return hit;
-    }
+    return hit;
+}
 } // namespace Engine

@@ -1,19 +1,19 @@
 #include "Engine/Renderer/Passes/ShadowPass.h"
-#include <gtest/gtest.h>
 
 #include <algorithm>
+#include <gtest/gtest.h>
 
 namespace Engine {
 namespace {
-    std::array<Mat4, ShadowMap::ClipLevelCount> clipmaps() {
-        std::array<Mat4, ShadowMap::ClipLevelCount> result;
-        result.fill(Mat4{glm::mat4{1.0F}});
-        return result;
-    }
-    bool unmapped(const ShadowPass& pass) {
-        return std::ranges::all_of(pass.pageTable(), [](auto page) { return page == ShadowMap::InvalidPage; });
-    }
+std::array<Mat4, ShadowMap::ClipLevelCount> clipmaps() {
+    std::array<Mat4, ShadowMap::ClipLevelCount> result;
+    result.fill(Mat4{glm::mat4{1.0F}});
+    return result;
 }
+bool unmapped(const ShadowPass& pass) {
+    return std::ranges::all_of(pass.pageTable(), [](auto page) { return page == ShadowMap::InvalidPage; });
+}
+} // namespace
 
 TEST(VsmPageCacheTests, NewCacheHasNoPublishedMappings) {
     ShadowPass pass;
@@ -71,7 +71,8 @@ TEST(VsmPageCacheTests, FineLevelBorrowsUnusedQuotasWhilePreservingFallback) {
     ShadowPass pass;
     const auto matrices = clipmaps();
     std::vector<std::uint32_t> requests(100);
-    for (std::uint32_t i = 0; i < requests.size(); ++i) requests[i] = i;
+    for (std::uint32_t i = 0; i < requests.size(); ++i)
+        requests[i] = i;
     pass.preparePages(matrices, Mat4{glm::mat4{1.0F}}, {}, {}, requests, true, 0, 256);
     EXPECT_EQ(pass.grassPageMatrices(matrices).size(), ShadowMap::FallbackPageCount + 100);
     EXPECT_FALSE(pass.hasPendingPageUpdates());
@@ -81,10 +82,11 @@ TEST(VsmPageCacheTests, BorrowingNeverExceedsPhysicalAtlasCapacity) {
     ShadowPass pass;
     const auto matrices = clipmaps();
     std::vector<std::uint32_t> requests(ShadowMap::VirtualPageCount);
-    for (std::uint32_t i = 0; i < requests.size(); ++i) requests[i] = i;
+    for (std::uint32_t i = 0; i < requests.size(); ++i)
+        requests[i] = i;
     pass.preparePages(matrices, Mat4{glm::mat4{1.0F}}, {}, {}, requests, true, 0, 256);
     EXPECT_EQ(pass.grassPageMatrices(matrices).size(), ShadowMap::PhysicalPageCount);
     EXPECT_FALSE(pass.hasPendingPageUpdates());
 }
 
-}
+} // namespace Engine

@@ -4,13 +4,9 @@
 
 namespace Engine::Culling {
 
-void IndexedIndirectDrawCount::create(
-    VkBuffer commandBuffer,
-    VkBuffer countBuffer,
-    const std::uint32_t maxDrawCount,
-    const VkDeviceSize commandOffset,
-    const VkDeviceSize countOffset,
-    const std::uint32_t stride) {
+void IndexedIndirectDrawCount::create(VkBuffer commandBuffer, VkBuffer countBuffer, const std::uint32_t maxDrawCount,
+                                      const VkDeviceSize commandOffset, const VkDeviceSize countOffset,
+                                      const std::uint32_t stride) {
     if (commandBuffer == VK_NULL_HANDLE || countBuffer == VK_NULL_HANDLE) {
         throw std::invalid_argument("Indirect draw buffers cannot be null");
     }
@@ -41,8 +37,7 @@ void IndexedIndirectDrawCount::destroy() noexcept {
     stride_ = sizeof(VkDrawIndexedIndirectCommand);
 }
 
-void IndexedIndirectDrawCount::record(const VkCommandBuffer commandBuffer,
-                                      const VkDeviceSize commandOffset,
+void IndexedIndirectDrawCount::record(const VkCommandBuffer commandBuffer, const VkDeviceSize commandOffset,
                                       const VkDeviceSize countOffset) const {
     if (commandBuffer == VK_NULL_HANDLE) {
         throw std::invalid_argument("Command buffer cannot be null");
@@ -51,20 +46,12 @@ void IndexedIndirectDrawCount::record(const VkCommandBuffer commandBuffer,
         throw std::logic_error("IndexedIndirectDrawCount is not initialized");
     }
 
-    vkCmdDrawIndexedIndirectCount(
-        commandBuffer,
-        commandBuffer_,
-        commandOffset_ + commandOffset,
-        countBuffer_,
-        countOffset_ + countOffset,
-        maxDrawCount_,
-        stride_);
+    vkCmdDrawIndexedIndirectCount(commandBuffer, commandBuffer_, commandOffset_ + commandOffset, countBuffer_,
+                                  countOffset_ + countOffset, maxDrawCount_, stride_);
 }
 
 bool IndexedIndirectDrawCount::valid() const noexcept {
-    return commandBuffer_ != VK_NULL_HANDLE &&
-           countBuffer_ != VK_NULL_HANDLE &&
-           maxDrawCount_ != 0;
+    return commandBuffer_ != VK_NULL_HANDLE && countBuffer_ != VK_NULL_HANDLE && maxDrawCount_ != 0;
 }
 
 } // namespace Engine::Culling

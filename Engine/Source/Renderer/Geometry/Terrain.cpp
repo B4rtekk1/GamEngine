@@ -10,53 +10,52 @@ namespace Engine {
 namespace {
 
 [[nodiscard]] std::size_t checkedSampleCount(const std::uint32_t resolution) {
-    if (resolution < TerrainComponent::MinimumResolution ||
-        resolution > TerrainComponent::MaximumResolution) {
+    if (resolution < TerrainComponent::MinimumResolution || resolution > TerrainComponent::MaximumResolution) {
         throw std::invalid_argument("Terrain resolution must be between 2 and 513");
     }
     return static_cast<std::size_t>(resolution) * resolution;
 }
 
-[[nodiscard]] float brushFalloff(const float normalizedDistance,
-                                 const TerrainBrushFalloff falloff) noexcept {
+[[nodiscard]] float brushFalloff(const float normalizedDistance, const TerrainBrushFalloff falloff) noexcept {
     const float value = std::clamp(1.0F - normalizedDistance, 0.0F, 1.0F);
-    if (falloff == TerrainBrushFalloff::Linear) return value;
-    if (falloff == TerrainBrushFalloff::Sharp) return value * value;
+    if (falloff == TerrainBrushFalloff::Linear)
+        return value;
+    if (falloff == TerrainBrushFalloff::Sharp)
+        return value * value;
     return value * value * (3.0F - 2.0F * value);
 }
 
 } // namespace
 
-TerrainComponent::TerrainComponent()
-    : heights(checkedSampleCount(resolution), 0.0F),
-      colors(sampleCount()) {}
+TerrainComponent::TerrainComponent() : heights(checkedSampleCount(resolution), 0.0F), colors(sampleCount()) {}
 
-TerrainComponent::TerrainComponent(const std::uint32_t requestedResolution,
-                                   const float requestedWidth,
-                                   const float requestedDepth,
-                                   const float requestedMinimumHeight,
+TerrainComponent::TerrainComponent(const std::uint32_t requestedResolution, const float requestedWidth,
+                                   const float requestedDepth, const float requestedMinimumHeight,
                                    const float requestedMaximumHeight)
     : resolution(requestedResolution), width(requestedWidth), depth(requestedDepth),
       minimumHeight(requestedMinimumHeight), maximumHeight(requestedMaximumHeight),
-      heights(checkedSampleCount(requestedResolution), 0.0F),
-      colors(sampleCount()) {
-    if (!valid()) throw std::invalid_argument("Terrain dimensions or height range are invalid");
+      heights(checkedSampleCount(requestedResolution), 0.0F), colors(sampleCount()) {
+    if (!valid())
+        throw std::invalid_argument("Terrain dimensions or height range are invalid");
 }
 
 bool TerrainComponent::valid() const noexcept {
-    return resolution >= MinimumResolution && resolution <= MaximumResolution &&
-           width > 0.0F && depth > 0.0F && minimumHeight < maximumHeight &&
-           std::isfinite(width) && std::isfinite(depth) &&
-           std::isfinite(minimumHeight) && std::isfinite(maximumHeight) &&
-           heights.size() == sampleCount() &&
+    return resolution >= MinimumResolution && resolution <= MaximumResolution && width > 0.0F && depth > 0.0F &&
+           minimumHeight < maximumHeight && std::isfinite(width) && std::isfinite(depth) &&
+           std::isfinite(minimumHeight) && std::isfinite(maximumHeight) && heights.size() == sampleCount() &&
            colors.size() == sampleCount() &&
-           std::ranges::all_of(heights, [this](const float value) {
-               return std::isfinite(value) && value >= minimumHeight && value <= maximumHeight;
-           }) && std::ranges::all_of(colors, [](const Vec3& value) {
-               return std::isfinite(value.x()) && std::isfinite(value.y()) && std::isfinite(value.z()) &&
-                      value.x() >= 0.0F && value.x() <= 1.0F && value.y() >= 0.0F && value.y() <= 1.0F &&
-                      value.z() >= 0.0F && value.z() <= 1.0F;
-           });
+           std::ranges::all_of(
+               heights,
+               [this](const float value) {
+                   return std::isfinite(value) && value >= minimumHeight && value <= maximumHeight;
+               }) &&
+           std::ranges::all_of(
+               colors,
+               [](const Vec3& value) {
+                   return std::isfinite(value.x()) && std::isfinite(value.y()) && std::isfinite(value.z()) &&
+                          value.x() >= 0.0F && value.x() <= 1.0F && value.y() >= 0.0F && value.y() <= 1.0F &&
+                          value.z() >= 0.0F && value.z() <= 1.0F;
+               });
 }
 
 std::size_t TerrainComponent::sampleCount() const noexcept {
@@ -64,16 +63,18 @@ std::size_t TerrainComponent::sampleCount() const noexcept {
 }
 
 float TerrainComponent::height(const std::uint32_t x, const std::uint32_t z) const {
-    if (x >= resolution || z >= resolution) throw std::out_of_range("Terrain sample is outside the heightmap");
+    if (x >= resolution || z >= resolution)
+        throw std::out_of_range("Terrain sample is outside the heightmap");
     return heights[static_cast<std::size_t>(z) * resolution + x];
 }
 
 float TerrainComponent::sampleHeight(const float localX, const float localZ) const noexcept {
-    if (!valid()) return 0.0F;
-    const float gridX = std::clamp((localX / width + 0.5F) * static_cast<float>(resolution - 1),
-                                   0.0F, static_cast<float>(resolution - 1));
-    const float gridZ = std::clamp((localZ / depth + 0.5F) * static_cast<float>(resolution - 1),
-                                   0.0F, static_cast<float>(resolution - 1));
+    if (!valid())
+        return 0.0F;
+    const float gridX = std::clamp((localX / width + 0.5F) * static_cast<float>(resolution - 1), 0.0F,
+                                   static_cast<float>(resolution - 1));
+    const float gridZ = std::clamp((localZ / depth + 0.5F) * static_cast<float>(resolution - 1), 0.0F,
+                                   static_cast<float>(resolution - 1));
     const auto x0 = static_cast<std::uint32_t>(std::floor(gridX));
     const auto z0 = static_cast<std::uint32_t>(std::floor(gridZ));
     const auto x1 = std::min(x0 + 1, resolution - 1);
@@ -86,16 +87,18 @@ float TerrainComponent::sampleHeight(const float localX, const float localZ) con
 }
 
 Mesh TerrainComponent::createMesh(const std::uint32_t lodLevel) const {
-    if (!valid()) throw std::logic_error("Cannot build an invalid terrain");
+    if (!valid())
+        throw std::logic_error("Cannot build an invalid terrain");
 
     Mesh mesh;
     const std::uint32_t cellCount = resolution - 1;
-    const std::uint32_t maximumLod = static_cast<std::uint32_t>(
-        std::floor(std::log2(static_cast<float>(cellCount))));
+    const std::uint32_t maximumLod = static_cast<std::uint32_t>(std::floor(std::log2(static_cast<float>(cellCount))));
     const std::uint32_t step = 1U << std::min(lodLevel, maximumLod);
     std::vector<std::uint32_t> samples;
-    for (std::uint32_t sample = 0; sample < cellCount; sample += step) samples.push_back(sample);
-    if (samples.empty() || samples.back() != cellCount) samples.push_back(cellCount);
+    for (std::uint32_t sample = 0; sample < cellCount; sample += step)
+        samples.push_back(sample);
+    if (samples.empty() || samples.back() != cellCount)
+        samples.push_back(cellCount);
     const std::uint32_t meshResolution = static_cast<std::uint32_t>(samples.size());
     mesh.vertices.reserve(static_cast<std::size_t>(meshResolution) * meshResolution);
     mesh.indices.reserve(static_cast<std::size_t>(meshResolution - 1) * (meshResolution - 1) * 6);
@@ -121,8 +124,7 @@ Mesh TerrainComponent::createMesh(const std::uint32_t lodLevel) const {
             mesh.vertices.push_back(Vertex{
                 .position = {px, height(sampleX, sampleZ), pz},
                 .color = colors[static_cast<std::size_t>(sampleZ) * resolution + sampleX],
-                .texCoord = {static_cast<float>(sampleX) / cellCount,
-                             static_cast<float>(sampleZ) / cellCount},
+                .texCoord = {static_cast<float>(sampleX) / cellCount, static_cast<float>(sampleZ) / cellCount},
                 .normal = normalAt(sampleX, sampleZ),
                 .tangent = {1.0F, 0.0F, 0.0F, 1.0F},
             });
@@ -132,9 +134,13 @@ Mesh TerrainComponent::createMesh(const std::uint32_t lodLevel) const {
         for (std::uint32_t x = 0; x + 1 < meshResolution; ++x) {
             const std::uint32_t first = z * meshResolution + x;
             mesh.indices.insert(mesh.indices.end(), {
-                first, first + meshResolution + 1, first + 1,
-                first, first + meshResolution, first + meshResolution + 1,
-            });
+                                                        first,
+                                                        first + meshResolution + 1,
+                                                        first + 1,
+                                                        first,
+                                                        first + meshResolution,
+                                                        first + meshResolution + 1,
+                                                    });
         }
     }
     mesh.recalculateLocalBounds();
@@ -157,7 +163,8 @@ void TerrainComponent::applyMaterialLayers(Mesh& mesh, PBRMaterial& material) co
 }
 
 bool TerrainComponent::updateMeshRegion(Mesh& mesh, const TerrainRegion& region) const {
-    if (!valid() || !region.valid || mesh.vertices.size() != sampleCount()) return false;
+    if (!valid() || !region.valid || mesh.vertices.size() != sampleCount())
+        return false;
     const float spacingX = width / static_cast<float>(resolution - 1);
     const float spacingZ = depth / static_cast<float>(resolution - 1);
     const std::uint32_t minX = region.minimumX == 0 ? 0 : region.minimumX - 1;
@@ -170,10 +177,10 @@ bool TerrainComponent::updateMeshRegion(Mesh& mesh, const TerrainRegion& region)
             const std::uint32_t right = std::min(x + 1, resolution - 1);
             const std::uint32_t near = z == 0 ? z : z - 1;
             const std::uint32_t far = std::min(z + 1, resolution - 1);
-            const float slopeX = (height(right, z) - height(left, z)) /
-                std::max(static_cast<float>(right - left) * spacingX, 1.0e-6F);
-            const float slopeZ = (height(x, far) - height(x, near)) /
-                std::max(static_cast<float>(far - near) * spacingZ, 1.0e-6F);
+            const float slopeX =
+                (height(right, z) - height(left, z)) / std::max(static_cast<float>(right - left) * spacingX, 1.0e-6F);
+            const float slopeZ =
+                (height(x, far) - height(x, near)) / std::max(static_cast<float>(far - near) * spacingZ, 1.0e-6F);
             Vertex& vertex = mesh.vertices[static_cast<std::size_t>(z) * resolution + x];
             vertex.position.setY(height(x, z));
             vertex.normal = Vec3{-slopeX, 1.0F, -slopeZ}.normalized();
@@ -184,29 +191,29 @@ bool TerrainComponent::updateMeshRegion(Mesh& mesh, const TerrainRegion& region)
     return true;
 }
 
-bool TerrainComponent::sculpt(const float localX, const float localZ, const float radius,
-                              const float amount, const TerrainSculptMode mode,
-                              const float flattenHeight, const TerrainBrushFalloff falloff,
-                              TerrainRegion* changedRegion) {
-    if (!valid() || radius <= 0.0F || amount <= 0.0F || !std::isfinite(localX) ||
-        !std::isfinite(localZ) || !std::isfinite(radius) || !std::isfinite(amount)) return false;
+bool TerrainComponent::sculpt(const float localX, const float localZ, const float radius, const float amount,
+                              const TerrainSculptMode mode, const float flattenHeight,
+                              const TerrainBrushFalloff falloff, TerrainRegion* changedRegion) {
+    if (!valid() || radius <= 0.0F || amount <= 0.0F || !std::isfinite(localX) || !std::isfinite(localZ) ||
+        !std::isfinite(radius) || !std::isfinite(amount))
+        return false;
 
     const float spacingX = width / static_cast<float>(resolution - 1);
     const float spacingZ = depth / static_cast<float>(resolution - 1);
     const auto gridX = [this, spacingX](const float value) {
-        return std::clamp(static_cast<int>(std::floor((value + width * 0.5F) / spacingX)),
-                          0, static_cast<int>(resolution - 1));
+        return std::clamp(static_cast<int>(std::floor((value + width * 0.5F) / spacingX)), 0,
+                          static_cast<int>(resolution - 1));
     };
     const auto gridZ = [this, spacingZ](const float value) {
-        return std::clamp(static_cast<int>(std::floor((value + depth * 0.5F) / spacingZ)),
-                          0, static_cast<int>(resolution - 1));
+        return std::clamp(static_cast<int>(std::floor((value + depth * 0.5F) / spacingZ)), 0,
+                          static_cast<int>(resolution - 1));
     };
     const std::uint32_t minimumX = static_cast<std::uint32_t>(gridX(localX - radius));
-    const std::uint32_t maximumX = static_cast<std::uint32_t>(
-        std::min(gridX(localX + radius) + 1, static_cast<int>(resolution - 1)));
+    const std::uint32_t maximumX =
+        static_cast<std::uint32_t>(std::min(gridX(localX + radius) + 1, static_cast<int>(resolution - 1)));
     const std::uint32_t minimumZ = static_cast<std::uint32_t>(gridZ(localZ - radius));
-    const std::uint32_t maximumZ = static_cast<std::uint32_t>(
-        std::min(gridZ(localZ + radius) + 1, static_cast<int>(resolution - 1)));
+    const std::uint32_t maximumZ =
+        static_cast<std::uint32_t>(std::min(gridZ(localZ + radius) + 1, static_cast<int>(resolution - 1)));
     const std::uint32_t smoothMinimumX = minimumX == 0 ? 0 : minimumX - 1;
     const std::uint32_t smoothMinimumZ = minimumZ == 0 ? 0 : minimumZ - 1;
     const std::uint32_t smoothMaximumX = std::min(maximumX + 1, resolution - 1);
@@ -214,16 +221,14 @@ bool TerrainComponent::sculpt(const float localX, const float localZ, const floa
     const std::uint32_t smoothWidth = smoothMaximumX - smoothMinimumX + 1;
     std::vector<float> smoothSource;
     if (mode == TerrainSculptMode::Smooth) {
-        smoothSource.reserve(static_cast<std::size_t>(smoothWidth) *
-                             (smoothMaximumZ - smoothMinimumZ + 1));
+        smoothSource.reserve(static_cast<std::size_t>(smoothWidth) * (smoothMaximumZ - smoothMinimumZ + 1));
         for (std::uint32_t z = smoothMinimumZ; z <= smoothMaximumZ; ++z) {
             const auto begin = heights.begin() + static_cast<std::ptrdiff_t>(z) * resolution + smoothMinimumX;
             smoothSource.insert(smoothSource.end(), begin, begin + smoothWidth);
         }
     }
     const auto smoothHeight = [&](const std::uint32_t x, const std::uint32_t z) {
-        return smoothSource[static_cast<std::size_t>(z - smoothMinimumZ) * smoothWidth +
-                            (x - smoothMinimumX)];
+        return smoothSource[static_cast<std::size_t>(z - smoothMinimumZ) * smoothWidth + (x - smoothMinimumX)];
     };
     bool changed = false;
     TerrainRegion dirty{};
@@ -232,11 +237,11 @@ bool TerrainComponent::sculpt(const float localX, const float localZ, const floa
         for (std::uint32_t x = minimumX; x <= maximumX; ++x) {
             const float sampleX = -width * 0.5F + static_cast<float>(x) * spacingX;
             const float distance = std::hypot(sampleX - localX, sampleZ - localZ);
-            if (distance > radius) continue;
+            if (distance > radius)
+                continue;
             const float weight = brushFalloff(distance / radius, falloff);
             const std::size_t index = static_cast<std::size_t>(z) * resolution + x;
-            const float sourceHeight = mode == TerrainSculptMode::Smooth
-                                           ? smoothHeight(x, z) : heights[index];
+            const float sourceHeight = mode == TerrainSculptMode::Smooth ? smoothHeight(x, z) : heights[index];
             float target = sourceHeight;
             if (mode == TerrainSculptMode::Raise) {
                 target += amount * weight;
@@ -251,11 +256,11 @@ bool TerrainComponent::sculpt(const float localX, const float localZ, const floa
                     for (int offsetX = -1; offsetX <= 1; ++offsetX) {
                         const int neighborX = static_cast<int>(x) + offsetX;
                         const int neighborZ = static_cast<int>(z) + offsetZ;
-                        if (neighborX < 0 || neighborZ < 0 ||
-                            neighborX >= static_cast<int>(resolution) ||
-                            neighborZ >= static_cast<int>(resolution)) continue;
-                        sum += smoothHeight(static_cast<std::uint32_t>(neighborX),
-                                            static_cast<std::uint32_t>(neighborZ));
+                        if (neighborX < 0 || neighborZ < 0 || neighborX >= static_cast<int>(resolution) ||
+                            neighborZ >= static_cast<int>(resolution))
+                            continue;
+                        sum +=
+                            smoothHeight(static_cast<std::uint32_t>(neighborX), static_cast<std::uint32_t>(neighborZ));
                         ++samples;
                     }
                 }
@@ -277,45 +282,61 @@ bool TerrainComponent::sculpt(const float localX, const float localZ, const floa
             }
         }
     }
-    if (changedRegion) *changedRegion = dirty;
+    if (changedRegion)
+        *changedRegion = dirty;
     return changed;
 }
 
-bool TerrainComponent::paint(const float localX, const float localZ, const float radius,
-                             const Vec3& color, const float opacity,
-                             const TerrainBrushFalloff falloff, TerrainRegion* changedRegion) {
-    if (!valid() || radius <= 0.0F || opacity <= 0.0F || !std::isfinite(localX) ||
-        !std::isfinite(localZ) || !std::isfinite(radius) || !std::isfinite(opacity)) return false;
+bool TerrainComponent::paint(const float localX, const float localZ, const float radius, const Vec3& color,
+                             const float opacity, const TerrainBrushFalloff falloff, TerrainRegion* changedRegion) {
+    if (!valid() || radius <= 0.0F || opacity <= 0.0F || !std::isfinite(localX) || !std::isfinite(localZ) ||
+        !std::isfinite(radius) || !std::isfinite(opacity))
+        return false;
     const Vec3 target{std::clamp(color.x(), 0.0F, 1.0F), std::clamp(color.y(), 0.0F, 1.0F),
                       std::clamp(color.z(), 0.0F, 1.0F)};
     const float spacingX = width / static_cast<float>(resolution - 1);
     const float spacingZ = depth / static_cast<float>(resolution - 1);
-    const auto gridX = [this, spacingX](const float value) { return std::clamp(
-        static_cast<int>(std::floor((value + width * 0.5F) / spacingX)), 0, static_cast<int>(resolution - 1)); };
-    const auto gridZ = [this, spacingZ](const float value) { return std::clamp(
-        static_cast<int>(std::floor((value + depth * 0.5F) / spacingZ)), 0, static_cast<int>(resolution - 1)); };
+    const auto gridX = [this, spacingX](const float value) {
+        return std::clamp(static_cast<int>(std::floor((value + width * 0.5F) / spacingX)), 0,
+                          static_cast<int>(resolution - 1));
+    };
+    const auto gridZ = [this, spacingZ](const float value) {
+        return std::clamp(static_cast<int>(std::floor((value + depth * 0.5F) / spacingZ)), 0,
+                          static_cast<int>(resolution - 1));
+    };
     const std::uint32_t minX = static_cast<std::uint32_t>(gridX(localX - radius));
-    const std::uint32_t maxX = static_cast<std::uint32_t>(std::min(gridX(localX + radius) + 1, static_cast<int>(resolution - 1)));
+    const std::uint32_t maxX =
+        static_cast<std::uint32_t>(std::min(gridX(localX + radius) + 1, static_cast<int>(resolution - 1)));
     const std::uint32_t minZ = static_cast<std::uint32_t>(gridZ(localZ - radius));
-    const std::uint32_t maxZ = static_cast<std::uint32_t>(std::min(gridZ(localZ + radius) + 1, static_cast<int>(resolution - 1)));
+    const std::uint32_t maxZ =
+        static_cast<std::uint32_t>(std::min(gridZ(localZ + radius) + 1, static_cast<int>(resolution - 1)));
     bool changed = false;
     TerrainRegion dirty{};
-    for (std::uint32_t z = minZ; z <= maxZ; ++z) for (std::uint32_t x = minX; x <= maxX; ++x) {
-        const float sampleX = -width * 0.5F + static_cast<float>(x) * spacingX;
-        const float sampleZ = -depth * 0.5F + static_cast<float>(z) * spacingZ;
-        const float distance = std::hypot(sampleX - localX, sampleZ - localZ);
-        if (distance > radius) continue;
-        const std::size_t index = static_cast<std::size_t>(z) * resolution + x;
-        const float weight = std::clamp(opacity * brushFalloff(distance / radius, falloff), 0.0F, 1.0F);
-        const Vec3 painted = colors[index] * (1.0F - weight) + target * weight;
-        if ((painted - colors[index]).length() <= std::numeric_limits<float>::epsilon()) continue;
-        colors[index] = painted;
-        changed = true;
-        if (!dirty.valid) dirty = {x, z, x, z, true};
-        else { dirty.minimumX = std::min(dirty.minimumX, x); dirty.minimumZ = std::min(dirty.minimumZ, z);
-               dirty.maximumX = std::max(dirty.maximumX, x); dirty.maximumZ = std::max(dirty.maximumZ, z); }
-    }
-    if (changedRegion) *changedRegion = dirty;
+    for (std::uint32_t z = minZ; z <= maxZ; ++z)
+        for (std::uint32_t x = minX; x <= maxX; ++x) {
+            const float sampleX = -width * 0.5F + static_cast<float>(x) * spacingX;
+            const float sampleZ = -depth * 0.5F + static_cast<float>(z) * spacingZ;
+            const float distance = std::hypot(sampleX - localX, sampleZ - localZ);
+            if (distance > radius)
+                continue;
+            const std::size_t index = static_cast<std::size_t>(z) * resolution + x;
+            const float weight = std::clamp(opacity * brushFalloff(distance / radius, falloff), 0.0F, 1.0F);
+            const Vec3 painted = colors[index] * (1.0F - weight) + target * weight;
+            if ((painted - colors[index]).length() <= std::numeric_limits<float>::epsilon())
+                continue;
+            colors[index] = painted;
+            changed = true;
+            if (!dirty.valid)
+                dirty = {x, z, x, z, true};
+            else {
+                dirty.minimumX = std::min(dirty.minimumX, x);
+                dirty.minimumZ = std::min(dirty.minimumZ, z);
+                dirty.maximumX = std::max(dirty.maximumX, x);
+                dirty.maximumZ = std::max(dirty.maximumZ, z);
+            }
+        }
+    if (changedRegion)
+        *changedRegion = dirty;
     return changed;
 }
 

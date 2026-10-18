@@ -3,17 +3,17 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 #include <shlobj_core.h>
-
 #include <stdexcept>
+#include <windows.h>
 
 namespace Platform {
 
 std::filesystem::path UserPaths::localData() {
     PWSTR value = nullptr;
     const HRESULT result = SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &value);
-    if (FAILED(result) || value == nullptr) throw std::runtime_error("Could not determine LocalAppData directory");
+    if (FAILED(result) || value == nullptr)
+        throw std::runtime_error("Could not determine LocalAppData directory");
     const std::filesystem::path path{value};
     CoTaskMemFree(value);
     return path;
@@ -22,20 +22,33 @@ std::filesystem::path UserPaths::localData() {
 std::filesystem::path UserPaths::documents() {
     PWSTR value = nullptr;
     const HRESULT result = SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_CREATE, nullptr, &value);
-    if (FAILED(result) || value == nullptr) throw std::runtime_error("Could not determine Documents directory");
+    if (FAILED(result) || value == nullptr)
+        throw std::runtime_error("Could not determine Documents directory");
     const std::filesystem::path path{value};
     CoTaskMemFree(value);
     return path;
 }
 
-std::filesystem::path UserPaths::editorData() { return localData() / "GamEngine" / "Editor"; }
-std::filesystem::path UserPaths::editorLogs() { return editorData() / "Logs"; }
-std::filesystem::path UserPaths::editorCrashes() { return editorData() / "Crashes"; }
-std::filesystem::path UserPaths::editorState() { return editorData() / "State"; }
+std::filesystem::path UserPaths::editorData() {
+    return localData() / "GamEngine" / "Editor";
+}
+std::filesystem::path UserPaths::editorLogs() {
+    return editorData() / "Logs";
+}
+std::filesystem::path UserPaths::editorCrashes() {
+    return editorData() / "Crashes";
+}
+std::filesystem::path UserPaths::editorState() {
+    return editorData() / "State";
+}
 std::filesystem::path UserPaths::gameData(const std::string_view gameName) {
     return localData() / "GamEngine" / "Games" / std::filesystem::path{std::string{gameName}};
 }
-std::filesystem::path UserPaths::gameLogs(const std::string_view gameName) { return gameData(gameName) / "Logs"; }
-std::filesystem::path UserPaths::gameCrashes(const std::string_view gameName) { return gameData(gameName) / "Crashes"; }
+std::filesystem::path UserPaths::gameLogs(const std::string_view gameName) {
+    return gameData(gameName) / "Logs";
+}
+std::filesystem::path UserPaths::gameCrashes(const std::string_view gameName) {
+    return gameData(gameName) / "Crashes";
+}
 
 } // namespace Platform

@@ -5,7 +5,7 @@
 
 /** Attach to a GameObject or camera; shots follow the primary game camera. */
 class PlayerShooter final : public Engine::Script {
-public:
+  public:
     void onUpdate(float deltaTime) override;
 
     GE_PROPERTY(Header("Shooting"), Range(1.0F, 1000.0F), Tooltip("Maximum hitscan distance in metres."))
@@ -14,6 +14,6 @@ public:
     GE_PROPERTY(Range(1.0F, 30.0F), Tooltip("Shots per second while holding the left mouse button."))
     float FireRate = 5.0F;
 
-private:
+  private:
     float cooldown_{};
 };

@@ -13,7 +13,7 @@ namespace Engine {
  * project can be moved without changing source code or build definitions.
  */
 class Project final {
-public:
+  public:
     /** Loads a `key = value` GamEngine project manifest. */
     [[nodiscard]] static Project load(const std::filesystem::path& manifestPath);
 
@@ -33,14 +33,23 @@ public:
      * The created project contains only game-owned files; the engine executable
      * and its source tree remain external dependencies.
      */
-    [[nodiscard]] static Project create(const std::filesystem::path& rootDirectory,
-                                        std::string name = {});
+    [[nodiscard]] static Project create(const std::filesystem::path& rootDirectory, std::string name = {});
 
-    [[nodiscard]] const std::string& name() const noexcept { return name_; }
-    [[nodiscard]] const std::filesystem::path& manifestPath() const noexcept { return manifestPath_; }
-    [[nodiscard]] const std::filesystem::path& rootPath() const noexcept { return rootPath_; }
-    [[nodiscard]] const std::filesystem::path& assetRoot() const noexcept { return assetRoot_; }
-    [[nodiscard]] const std::filesystem::path& startupScene() const noexcept { return startupScene_; }
+    [[nodiscard]] const std::string& name() const noexcept {
+        return name_;
+    }
+    [[nodiscard]] const std::filesystem::path& manifestPath() const noexcept {
+        return manifestPath_;
+    }
+    [[nodiscard]] const std::filesystem::path& rootPath() const noexcept {
+        return rootPath_;
+    }
+    [[nodiscard]] const std::filesystem::path& assetRoot() const noexcept {
+        return assetRoot_;
+    }
+    [[nodiscard]] const std::filesystem::path& startupScene() const noexcept {
+        return startupScene_;
+    }
 
     /** Returns every `.scene` file stored next to the startup scene. */
     [[nodiscard]] std::vector<std::filesystem::path> scenes() const;
@@ -48,7 +57,7 @@ public:
     /** Resolves a project-relative path; absolute paths are returned unchanged. */
     [[nodiscard]] std::filesystem::path resolve(const std::filesystem::path& path) const;
 
-private:
+  private:
     std::string name_;
     std::filesystem::path manifestPath_;
     std::filesystem::path rootPath_;

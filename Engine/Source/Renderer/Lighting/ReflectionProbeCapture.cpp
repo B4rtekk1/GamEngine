@@ -8,7 +8,8 @@
 namespace Engine {
 
 Mat4 ReflectionProbeCapture::viewMatrix(const Vec3& position, const std::uint32_t face) {
-    if (face >= FaceCount) throw std::out_of_range("Reflection-probe cubemap face is out of range");
+    if (face >= FaceCount)
+        throw std::out_of_range("Reflection-probe cubemap face is out of range");
     const ReflectionProbeCaptureFace camera = faces()[face];
     return Mat4::lookAt(position, position + camera.direction, camera.up);
 }

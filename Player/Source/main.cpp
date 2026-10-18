@@ -1,12 +1,11 @@
 #include "Platform/RuntimePaths.h"
-#include <Engine/Engine.h>
+
 #include <Engine/Core/Diagnostics.h>
+#include <Engine/Engine.h>
 #include <Engine/Scripting/ScriptModuleManager.h>
 #include <Engine/Scripting/ScriptRegistry.h>
 #include <Platform/UserPaths.h>
-
 #include <SDL3/SDL.h>
-
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -19,42 +18,45 @@
 
 int main(int argc, char** argv) {
     struct DiagnosticsGuard final {
-        ~DiagnosticsGuard() { Engine::Diagnostics::instance().shutdown(); }
+        ~DiagnosticsGuard() {
+            Engine::Diagnostics::instance().shutdown();
+        }
     };
     DiagnosticsGuard diagnosticsGuard;
 
     try {
         const char* const basePath = SDL_GetBasePath();
-        if (basePath == nullptr) throw std::runtime_error("Could not determine executable directory");
+        if (basePath == nullptr)
+            throw std::runtime_error("Could not determine executable directory");
         const std::filesystem::path executableRoot{basePath};
-        std::filesystem::path executablePath = argc > 0 && argv[0] != nullptr
-                                                   ? std::filesystem::path{argv[0]}
-                                                   : executableRoot / Platform::PlayerFilename;
+        std::filesystem::path executablePath =
+            argc > 0 && argv[0] != nullptr ? std::filesystem::path{argv[0]} : executableRoot / Platform::PlayerFilename;
         std::string gameName = executablePath.stem().string();
-        if (gameName.empty()) gameName = "Game";
-        Engine::Diagnostics::instance().initialize(
-            Platform::UserPaths::gameLogs(gameName), Engine::DiagnosticApplication::Game, gameName);
+        if (gameName.empty())
+            gameName = "Game";
+        Engine::Diagnostics::instance().initialize(Platform::UserPaths::gameLogs(gameName),
+                                                   Engine::DiagnosticApplication::Game, gameName);
 
         std::optional<std::filesystem::path> projectPath;
         std::optional<std::filesystem::path> sceneOverride;
         for (int index = 1; index < argc; ++index) {
             const std::string_view argument{argv[index]};
             if (argument == "--project") {
-                if (++index == argc) throw std::runtime_error("--project requires a file path");
+                if (++index == argc)
+                    throw std::runtime_error("--project requires a file path");
                 projectPath = argv[index];
                 continue;
             }
             if (argument == "--scene") {
-                if (++index == argc) throw std::runtime_error("--scene requires a file path");
+                if (++index == argc)
+                    throw std::runtime_error("--scene requires a file path");
                 sceneOverride = std::filesystem::path{argv[index]};
             }
         }
-        const Engine::Project project = projectPath
-                                            ? Engine::Project::load(*projectPath)
-                                            : Engine::Project::load(executableRoot / "GamEngine.project");
-        const std::filesystem::path scenePath = sceneOverride
-                                                    ? project.resolve(*sceneOverride)
-                                                    : project.startupScene();
+        const Engine::Project project = projectPath ? Engine::Project::load(*projectPath)
+                                                    : Engine::Project::load(executableRoot / "GamEngine.project");
+        const std::filesystem::path scenePath =
+            sceneOverride ? project.resolve(*sceneOverride) : project.startupScene();
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
         const auto scriptModule = executableRoot / Platform::ScriptModuleFilename;
         if (!std::filesystem::is_regular_file(scriptModule)) {
@@ -70,7 +72,9 @@ int main(int argc, char** argv) {
             .gtaoQuality = Engine::GtaoQuality::High,
             .iblQuality = Engine::IblQuality::High,
         };
-        Engine::Application app{{.title = project.name(), .width = 800, .height = 600,
+        Engine::Application app{{.title = project.name(),
+                                 .width = 800,
+                                 .height = 600,
                                  .closeOnEscape = false,
                                  .assetRoot = project.assetRoot(),
                                  .render = renderConfig}};

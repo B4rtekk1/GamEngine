@@ -1,145 +1,153 @@
 #include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
+
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 
 #include <SDL3/SDL.h>
-
 #include <algorithm>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <regex>
 #include <stdexcept>
 #include <unordered_set>
 
 namespace Engine {
-    namespace {
-        constexpr std::string_view DeclarationMarker = "// GENERATED_SHADER_GRAPH_DECLARATIONS";
+namespace {
+constexpr std::string_view DeclarationMarker = "// GENERATED_SHADER_GRAPH_DECLARATIONS";
 
-        [[nodiscard]] std::string readText(const std::filesystem::path &path) {
-            std::ifstream file(path, std::ios::binary);
-            if (!file) throw std::runtime_error("Could not open shader graph template: " + path.string());
-            return {std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
-        }
+[[nodiscard]] std::string readText(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+        throw std::runtime_error("Could not open shader graph template: " + path.string());
+    return {std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+}
 
-        void writeText(const std::filesystem::path &path, const std::string &text) {
-            std::filesystem::create_directories(path.parent_path());
-            std::ofstream file(path, std::ios::binary | std::ios::trunc);
-            if (!file) throw std::runtime_error("Could not write generated shader: " + path.string());
-            file.write(text.data(), static_cast<std::streamsize>(text.size()));
-            if (!file) throw std::runtime_error("Could not finish generated shader: " + path.string());
-        }
+void writeText(const std::filesystem::path& path, const std::string& text) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file)
+        throw std::runtime_error("Could not write generated shader: " + path.string());
+    file.write(text.data(), static_cast<std::streamsize>(text.size()));
+    if (!file)
+        throw std::runtime_error("Could not finish generated shader: " + path.string());
+}
 
-        void appendCacheInput(std::string& input, const std::string_view label,
-                              const std::string_view value) {
-            input.append(label);
-            input.push_back('\0');
-            input.append(value);
-            input.push_back('\0');
-        }
+void appendCacheInput(std::string& input, const std::string_view label, const std::string_view value) {
+    input.append(label);
+    input.push_back('\0');
+    input.append(value);
+    input.push_back('\0');
+}
 
-        [[nodiscard]] std::filesystem::path resolveSlangModule(const std::string& module,
-                                                                const std::filesystem::path& sourceDirectory,
-                                                                const std::filesystem::path& includeDirectory) {
-            std::string relativeModule = module;
-            std::replace(relativeModule.begin(), relativeModule.end(), '.', '/');
-            std::filesystem::path relative{relativeModule};
-            relative += ".slang";
-            for (const auto& directory : {sourceDirectory, includeDirectory}) {
-                const std::filesystem::path candidate = directory / relative;
-                if (std::filesystem::is_regular_file(candidate)) return candidate;
-            }
-            throw std::runtime_error("Could not resolve Slang import '" + module + "'.");
-        }
+[[nodiscard]] std::filesystem::path resolveSlangModule(const std::string& module,
+                                                       const std::filesystem::path& sourceDirectory,
+                                                       const std::filesystem::path& includeDirectory) {
+    std::string relativeModule = module;
+    std::replace(relativeModule.begin(), relativeModule.end(), '.', '/');
+    std::filesystem::path relative{relativeModule};
+    relative += ".slang";
+    for (const auto& directory : {sourceDirectory, includeDirectory}) {
+        const std::filesystem::path candidate = directory / relative;
+        if (std::filesystem::is_regular_file(candidate))
+            return candidate;
+    }
+    throw std::runtime_error("Could not resolve Slang import '" + module + "'.");
+}
 
-        [[nodiscard]] std::filesystem::path resolveSlangInclude(const std::string& include,
-                                                                 const std::filesystem::path& sourceDirectory,
-                                                                 const std::filesystem::path& includeDirectory) {
-            for (const auto& directory : {sourceDirectory, includeDirectory}) {
-                const std::filesystem::path candidate = directory / include;
-                if (std::filesystem::is_regular_file(candidate)) return candidate;
-            }
-            throw std::runtime_error("Could not resolve Slang include '" + include + "'.");
-        }
+[[nodiscard]] std::filesystem::path resolveSlangInclude(const std::string& include,
+                                                        const std::filesystem::path& sourceDirectory,
+                                                        const std::filesystem::path& includeDirectory) {
+    for (const auto& directory : {sourceDirectory, includeDirectory}) {
+        const std::filesystem::path candidate = directory / include;
+        if (std::filesystem::is_regular_file(candidate))
+            return candidate;
+    }
+    throw std::runtime_error("Could not resolve Slang include '" + include + "'.");
+}
 
-        void appendSlangDependencyTree(std::string& input, const std::filesystem::path& path,
-                                       const std::filesystem::path& includeDirectory,
-                                       std::unordered_set<std::string>& visited) {
-            const std::filesystem::path normalized = std::filesystem::absolute(path).lexically_normal();
-            if (!visited.insert(normalized.generic_string()).second) return;
+void appendSlangDependencyTree(std::string& input, const std::filesystem::path& path,
+                               const std::filesystem::path& includeDirectory,
+                               std::unordered_set<std::string>& visited) {
+    const std::filesystem::path normalized = std::filesystem::absolute(path).lexically_normal();
+    if (!visited.insert(normalized.generic_string()).second)
+        return;
 
-            const std::string contents = readText(normalized);
-            appendCacheInput(input, normalized.generic_string(), contents);
+    const std::string contents = readText(normalized);
+    appendCacheInput(input, normalized.generic_string(), contents);
 
-            static const std::regex ImportPattern{R"(^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;)"};
-            for (std::sregex_iterator it(contents.begin(), contents.end(), ImportPattern), end; it != end; ++it) {
-                const std::filesystem::path dependency = resolveSlangModule((*it)[1].str(), normalized.parent_path(),
-                                                                             includeDirectory);
-                appendSlangDependencyTree(input, dependency, includeDirectory, visited);
-            }
-            static const std::regex IncludePattern{R"include(^\s*#\s*include\s*"([^"]+)")include"};
-            for (std::sregex_iterator it(contents.begin(), contents.end(), IncludePattern), end; it != end; ++it) {
-                const std::filesystem::path dependency = resolveSlangInclude((*it)[1].str(), normalized.parent_path(),
-                                                                              includeDirectory);
-                appendSlangDependencyTree(input, dependency, includeDirectory, visited);
-            }
-        }
+    static const std::regex ImportPattern{R"(^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;)"};
+    for (std::sregex_iterator it(contents.begin(), contents.end(), ImportPattern), end; it != end; ++it) {
+        const std::filesystem::path dependency =
+            resolveSlangModule((*it)[1].str(), normalized.parent_path(), includeDirectory);
+        appendSlangDependencyTree(input, dependency, includeDirectory, visited);
+    }
+    static const std::regex IncludePattern{R"include(^\s*#\s*include\s*"([^"]+)")include"};
+    for (std::sregex_iterator it(contents.begin(), contents.end(), IncludePattern), end; it != end; ++it) {
+        const std::filesystem::path dependency =
+            resolveSlangInclude((*it)[1].str(), normalized.parent_path(), includeDirectory);
+        appendSlangDependencyTree(input, dependency, includeDirectory, visited);
+    }
+}
 
-        [[nodiscard]] bool isUsableCachedOutput(const std::filesystem::path& path) {
-            std::error_code error;
-            return std::filesystem::is_regular_file(path, error) && !error &&
-                   std::filesystem::file_size(path, error) > 0 && !error;
-        }
+[[nodiscard]] bool isUsableCachedOutput(const std::filesystem::path& path) {
+    std::error_code error;
+    return std::filesystem::is_regular_file(path, error) && !error && std::filesystem::file_size(path, error) > 0 &&
+           !error;
+}
 
-        [[nodiscard]] std::filesystem::path findSlangCompiler() {
-            if (const char* const basePath = SDL_GetBasePath()) {
-                const auto bundled = std::filesystem::path{basePath} / "Tools" / "Slang"
+[[nodiscard]] std::filesystem::path findSlangCompiler() {
+    if (const char* const basePath = SDL_GetBasePath()) {
+        const auto bundled = std::filesystem::path{basePath} / "Tools" / "Slang"
 #if defined(_WIN32)
-                                      / "slangc.exe";
+                             / "slangc.exe";
 #else
-                                      / "slangc";
+                             / "slangc";
 #endif
-                if (std::filesystem::is_regular_file(bundled)) return bundled;
-            }
+        if (std::filesystem::is_regular_file(bundled))
+            return bundled;
+    }
 
 #ifdef GAMEENGINE_SLANGC_PATH
-            const std::filesystem::path development{GAMEENGINE_SLANGC_PATH};
-            if (std::filesystem::is_regular_file(development)) return development;
+    const std::filesystem::path development{GAMEENGINE_SLANGC_PATH};
+    if (std::filesystem::is_regular_file(development))
+        return development;
 #endif
 
-            throw std::runtime_error("Slang compiler is not available. Reinstall the GamEngine Editor.");
-        }
+    throw std::runtime_error("Slang compiler is not available. Reinstall the GamEngine Editor.");
+}
+} // namespace
+
+ShaderProgramId ShaderGraphSlangCompiler::makeProgramId(const std::string_view generatedSurface) noexcept {
+    // FNV-1a over generated code means a changed literal, topology, or
+    // property expression cannot accidentally reuse a stale VkPipeline.
+    ShaderProgramId hash = 14695981039346656037ULL;
+    const auto mix = [&hash](const std::uint8_t byte) { hash = (hash ^ byte) * 1099511628211ULL; };
+    for (const unsigned char character : generatedSurface)
+        mix(character);
+    return hash == 0 ? 1 : hash;
+}
+
+ShaderGraphCompileResult ShaderGraphSlangCompiler::compile(const ShaderGraphAsset& graph,
+                                                           const std::filesystem::path& forwardTemplate,
+                                                           const std::filesystem::path& generatedDirectory,
+                                                           ShaderGraphProgram& program) const {
+    ShaderGraphCompileResult result = ShaderGraphCompiler{}.compile(graph);
+    if (!result.succeeded())
+        return result;
+    if (result.slang.find("properties.") != std::string::npos) {
+        result.diagnostics.push_back(
+            {"Graph properties need a MaterialParameterBlock GPU layout before they can be emitted to Vulkan.", {}});
+        return result;
     }
 
-    ShaderProgramId ShaderGraphSlangCompiler::makeProgramId(const std::string_view generatedSurface) noexcept {
-        // FNV-1a over generated code means a changed literal, topology, or
-        // property expression cannot accidentally reuse a stale VkPipeline.
-        ShaderProgramId hash = 14695981039346656037ULL;
-        const auto mix = [&hash](const std::uint8_t byte) { hash = (hash ^ byte) * 1099511628211ULL; };
-        for (const unsigned char character: generatedSurface) mix(character);
-        return hash == 0 ? 1 : hash;
-    }
-
-    ShaderGraphCompileResult ShaderGraphSlangCompiler::compile(const ShaderGraphAsset &graph,
-                                                               const std::filesystem::path &forwardTemplate,
-                                                               const std::filesystem::path &generatedDirectory,
-                                                               ShaderGraphProgram &program) const {
-        ShaderGraphCompileResult result = ShaderGraphCompiler{}.compile(graph);
-        if (!result.succeeded()) return result;
-        if (result.slang.find("properties.") != std::string::npos) {
-            result.diagnostics.push_back({
-                "Graph properties need a MaterialParameterBlock GPU layout before they can be emitted to Vulkan.", {}
-            });
+    std::string source;
+    try {
+        source = readText(forwardTemplate);
+        const std::size_t marker = source.find(DeclarationMarker);
+        if (marker == std::string::npos) {
+            result.diagnostics.push_back({"Forward shader template has no Shader Graph declaration marker.", {}});
             return result;
         }
-
-        std::string source;
-        try {
-            source = readText(forwardTemplate);
-            const std::size_t marker = source.find(DeclarationMarker);
-            if (marker == std::string::npos) {
-                result.diagnostics.push_back({"Forward shader template has no Shader Graph declaration marker.", {}});
-                return result;
-            }
-            const std::string declarations = R"(
+        const std::string declarations = R"(
 #define ENGINE_SHADER_GRAPH 1
 struct SurfaceInput
 {
@@ -164,242 +172,248 @@ struct MaterialSurface
     float alphaCutoff;
 };
 )" + result.slang;
-            source.replace(marker, DeclarationMarker.size(), declarations);
-            const std::filesystem::path slangcPath = findSlangCompiler();
-            const std::filesystem::path includeDirectory = forwardTemplate.parent_path().parent_path();
-            std::string cacheInput;
-            // Bump this if the generated declarations or invocation contract changes.
-            appendCacheInput(cacheInput, "shader-graph-cache-schema", "1");
-            appendCacheInput(cacheInput, "generated-surface", result.slang);
-            appendCacheInput(cacheInput, "compile-flags",
-                             "-target=spirv;-profile=glsl_460;-emit-spirv-directly;-g2;"
-                             "-matrix-layout-row-major;FORWARD_OUTPUT_VELOCITY=0,1");
-            // Hash the compiler binary rather than querying --version: this avoids
-            // an extra process on a warm start and invalidates the cache for every
-            // compiler-version change.
-            appendCacheInput(cacheInput, "slangc-binary", readText(slangcPath));
-            std::unordered_set<std::string> visitedDependencies;
-            appendSlangDependencyTree(cacheInput, forwardTemplate, includeDirectory, visitedDependencies);
+        source.replace(marker, DeclarationMarker.size(), declarations);
+        const std::filesystem::path slangcPath = findSlangCompiler();
+        const std::filesystem::path includeDirectory = forwardTemplate.parent_path().parent_path();
+        std::string cacheInput;
+        // Bump this if the generated declarations or invocation contract changes.
+        appendCacheInput(cacheInput, "shader-graph-cache-schema", "1");
+        appendCacheInput(cacheInput, "generated-surface", result.slang);
+        appendCacheInput(cacheInput, "compile-flags",
+                         "-target=spirv;-profile=glsl_460;-emit-spirv-directly;-g2;"
+                         "-matrix-layout-row-major;FORWARD_OUTPUT_VELOCITY=0,1");
+        // Hash the compiler binary rather than querying --version: this avoids
+        // an extra process on a warm start and invalidates the cache for every
+        // compiler-version change.
+        appendCacheInput(cacheInput, "slangc-binary", readText(slangcPath));
+        std::unordered_set<std::string> visitedDependencies;
+        appendSlangDependencyTree(cacheInput, forwardTemplate, includeDirectory, visitedDependencies);
 
-            program.id = makeProgramId(cacheInput);
-            const std::string stem = std::format("generated_{:016x}", program.id);
-            program.slangPath = generatedDirectory / (stem + ".slang");
-            program.spirvPath = generatedDirectory / (stem + ".spv");
-            program.noVelocitySpirvPath = generatedDirectory / (stem + "_no_velocity.spv");
+        program.id = makeProgramId(cacheInput);
+        const std::string stem = std::format("generated_{:016x}", program.id);
+        program.slangPath = generatedDirectory / (stem + ".slang");
+        program.spirvPath = generatedDirectory / (stem + ".spv");
+        program.noVelocitySpirvPath = generatedDirectory / (stem + "_no_velocity.spv");
 
-            if (isUsableCachedOutput(program.spirvPath) && isUsableCachedOutput(program.noVelocitySpirvPath)) {
-                return result;
-            }
-
-            writeText(program.slangPath, source);
-
-            // The editor invokes this after debounce on its worker thread; Vulkan
-            // sees only the finished SPIR-V via ShaderGraphPipelineCache.
-            const std::string compiler = slangcPath.string();
-            const std::string sourcePath = program.slangPath.string();
-            const std::string includeDirectoryString = includeDirectory.string();
-            const std::string outputPath = program.spirvPath.string();
-            const std::string noVelocityOutputPath = program.noVelocitySpirvPath.string();
-            const char *arguments[] = {
-                compiler.c_str(), sourcePath.c_str(),
-                "-target", "spirv",
-                "-profile", "glsl_460",
-                "-emit-spirv-directly",
-                "-g2",
-                "-matrix-layout-row-major",
-                "-I", includeDirectoryString.c_str(),
-                "-o", outputPath.c_str(),
-                nullptr
-            };
-
-            const SDL_PropertiesID properties = SDL_CreateProperties();
-            if (!properties) {
-                throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
-            }
-
-            SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
-                                   static_cast<void *>(arguments));
-            SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
-            SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
-
-            SDL_Process *process = SDL_CreateProcessWithProperties(properties);
-            SDL_DestroyProperties(properties);
-            if (!process) {
-                throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
-            }
-
-            size_t outputSize = 0;
-            int exitCode = -1;
-            void *processOutput = SDL_ReadProcess(process, &outputSize, &exitCode);
-            std::string compilerOutput;
-            if (processOutput) {
-                compilerOutput.assign(static_cast<const char *>(processOutput), outputSize);
-                SDL_free(processOutput);
-            }
-            SDL_DestroyProcess(process);
-
-            if (exitCode != 0) {
-                std::string message = "slangc failed while compiling generated Shader Graph module: " +
-                                      slangcPath.string();
-                if (!compilerOutput.empty()) {
-                    message += "\n\n" + compilerOutput;
-                } else {
-                    message += "\nNo compiler output was captured.";
-                }
-                result.diagnostics.push_back({std::move(message), {}});
-                return result;
-            }
-
-            const char *noVelocityArguments[] = {
-                compiler.c_str(), sourcePath.c_str(),
-                "-target", "spirv",
-                "-profile", "glsl_460",
-                "-emit-spirv-directly",
-                "-g2",
-                "-matrix-layout-row-major",
-                "-I", includeDirectoryString.c_str(),
-                "-D", "FORWARD_OUTPUT_VELOCITY=0",
-                "-o", noVelocityOutputPath.c_str(),
-                nullptr
-            };
-            const SDL_PropertiesID noVelocityProperties = SDL_CreateProperties();
-            if (!noVelocityProperties) {
-                throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
-            }
-            SDL_SetPointerProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
-                                   static_cast<void *>(noVelocityArguments));
-            SDL_SetNumberProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
-            SDL_SetBooleanProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
-            SDL_Process *noVelocityProcess = SDL_CreateProcessWithProperties(noVelocityProperties);
-            SDL_DestroyProperties(noVelocityProperties);
-            if (!noVelocityProcess) {
-                throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
-            }
-            size_t noVelocityOutputSize = 0;
-            int noVelocityExitCode = -1;
-            void *noVelocityProcessOutput = SDL_ReadProcess(noVelocityProcess, &noVelocityOutputSize,
-                                                            &noVelocityExitCode);
-            std::string noVelocityCompilerOutput;
-            if (noVelocityProcessOutput) {
-                noVelocityCompilerOutput.assign(static_cast<const char *>(noVelocityProcessOutput),
-                                                noVelocityOutputSize);
-                SDL_free(noVelocityProcessOutput);
-            }
-            SDL_DestroyProcess(noVelocityProcess);
-            if (noVelocityExitCode != 0) {
-                std::string message = "slangc failed while compiling color-only generated Shader Graph module: " +
-                                      slangcPath.string();
-                if (!noVelocityCompilerOutput.empty()) message += "\n\n" + noVelocityCompilerOutput;
-                result.diagnostics.push_back({std::move(message), {}});
-            }
-        } catch (const std::exception &exception) {
-            result.diagnostics.push_back({exception.what(), {}});
-        }
-        return result;
-    }
-
-    ShaderGraphCompileResult ShaderGraphMaterialCompiler::resolve(
-        Material& material, const std::filesystem::path& assetRoot,
-        const std::filesystem::path& forwardTemplate,
-        const std::filesystem::path& generatedDirectory) const {
-        ShaderGraphCompileResult result;
-        const std::filesystem::path asset = material.shaderGraphAsset.lexically_normal();
-        if (asset.empty()) {
-            result.diagnostics.push_back({"Shader Graph material has no source asset.", {}});
-            return result;
-        }
-        if (asset.is_absolute() || *asset.begin() == ".." || asset.extension() != ".shadergraph") {
-            result.diagnostics.push_back({"Shader Graph asset must be a relative .shadergraph path inside Assets.", {}});
+        if (isUsableCachedOutput(program.spirvPath) && isUsableCachedOutput(program.noVelocitySpirvPath)) {
             return result;
         }
 
-        try {
-            const ShaderGraphAsset graph = ShaderGraphSerializer::load(assetRoot / asset);
-            ShaderGraphProgram program;
-            result = ShaderGraphSlangCompiler{}.compile(graph, forwardTemplate, generatedDirectory, program);
-            if (result.succeeded()) {
-                material.shaderGraphAsset = asset;
-                material.shaderProgram = program.id;
-                material.shaderProgramSpirv = program.spirvPath;
-            }
-        } catch (const std::exception& exception) {
-            result.diagnostics.push_back({exception.what(), {}});
+        writeText(program.slangPath, source);
+
+        // The editor invokes this after debounce on its worker thread; Vulkan
+        // sees only the finished SPIR-V via ShaderGraphPipelineCache.
+        const std::string compiler = slangcPath.string();
+        const std::string sourcePath = program.slangPath.string();
+        const std::string includeDirectoryString = includeDirectory.string();
+        const std::string outputPath = program.spirvPath.string();
+        const std::string noVelocityOutputPath = program.noVelocitySpirvPath.string();
+        const char* arguments[] = {compiler.c_str(),
+                                   sourcePath.c_str(),
+                                   "-target",
+                                   "spirv",
+                                   "-profile",
+                                   "glsl_460",
+                                   "-emit-spirv-directly",
+                                   "-g2",
+                                   "-matrix-layout-row-major",
+                                   "-I",
+                                   includeDirectoryString.c_str(),
+                                   "-o",
+                                   outputPath.c_str(),
+                                   nullptr};
+
+        const SDL_PropertiesID properties = SDL_CreateProperties();
+        if (!properties) {
+            throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
         }
+
+        SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, static_cast<void*>(arguments));
+        SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+        SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
+
+        SDL_Process* process = SDL_CreateProcessWithProperties(properties);
+        SDL_DestroyProperties(properties);
+        if (!process) {
+            throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
+        }
+
+        size_t outputSize = 0;
+        int exitCode = -1;
+        void* processOutput = SDL_ReadProcess(process, &outputSize, &exitCode);
+        std::string compilerOutput;
+        if (processOutput) {
+            compilerOutput.assign(static_cast<const char*>(processOutput), outputSize);
+            SDL_free(processOutput);
+        }
+        SDL_DestroyProcess(process);
+
+        if (exitCode != 0) {
+            std::string message = "slangc failed while compiling generated Shader Graph module: " + slangcPath.string();
+            if (!compilerOutput.empty()) {
+                message += "\n\n" + compilerOutput;
+            } else {
+                message += "\nNo compiler output was captured.";
+            }
+            result.diagnostics.push_back({std::move(message), {}});
+            return result;
+        }
+
+        const char* noVelocityArguments[] = {compiler.c_str(),
+                                             sourcePath.c_str(),
+                                             "-target",
+                                             "spirv",
+                                             "-profile",
+                                             "glsl_460",
+                                             "-emit-spirv-directly",
+                                             "-g2",
+                                             "-matrix-layout-row-major",
+                                             "-I",
+                                             includeDirectoryString.c_str(),
+                                             "-D",
+                                             "FORWARD_OUTPUT_VELOCITY=0",
+                                             "-o",
+                                             noVelocityOutputPath.c_str(),
+                                             nullptr};
+        const SDL_PropertiesID noVelocityProperties = SDL_CreateProperties();
+        if (!noVelocityProperties) {
+            throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
+        }
+        SDL_SetPointerProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
+                               static_cast<void*>(noVelocityArguments));
+        SDL_SetNumberProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+        SDL_SetBooleanProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
+        SDL_Process* noVelocityProcess = SDL_CreateProcessWithProperties(noVelocityProperties);
+        SDL_DestroyProperties(noVelocityProperties);
+        if (!noVelocityProcess) {
+            throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
+        }
+        size_t noVelocityOutputSize = 0;
+        int noVelocityExitCode = -1;
+        void* noVelocityProcessOutput = SDL_ReadProcess(noVelocityProcess, &noVelocityOutputSize, &noVelocityExitCode);
+        std::string noVelocityCompilerOutput;
+        if (noVelocityProcessOutput) {
+            noVelocityCompilerOutput.assign(static_cast<const char*>(noVelocityProcessOutput), noVelocityOutputSize);
+            SDL_free(noVelocityProcessOutput);
+        }
+        SDL_DestroyProcess(noVelocityProcess);
+        if (noVelocityExitCode != 0) {
+            std::string message =
+                "slangc failed while compiling color-only generated Shader Graph module: " + slangcPath.string();
+            if (!noVelocityCompilerOutput.empty())
+                message += "\n\n" + noVelocityCompilerOutput;
+            result.diagnostics.push_back({std::move(message), {}});
+        }
+    } catch (const std::exception& exception) {
+        result.diagnostics.push_back({exception.what(), {}});
+    }
+    return result;
+}
+
+ShaderGraphCompileResult ShaderGraphMaterialCompiler::resolve(Material& material,
+                                                              const std::filesystem::path& assetRoot,
+                                                              const std::filesystem::path& forwardTemplate,
+                                                              const std::filesystem::path& generatedDirectory) const {
+    ShaderGraphCompileResult result;
+    const std::filesystem::path asset = material.shaderGraphAsset.lexically_normal();
+    if (asset.empty()) {
+        result.diagnostics.push_back({"Shader Graph material has no source asset.", {}});
+        return result;
+    }
+    if (asset.is_absolute() || *asset.begin() == ".." || asset.extension() != ".shadergraph") {
+        result.diagnostics.push_back({"Shader Graph asset must be a relative .shadergraph path inside Assets.", {}});
         return result;
     }
 
-    void ShaderGraphPipelineCache::initialize(const VkDevice device, GraphicsPipelineOptions baseOptions) {
-        if (device == VK_NULL_HANDLE) throw std::invalid_argument(
-            "Shader Graph pipeline cache requires a Vulkan device");
-        if (device_ != VK_NULL_HANDLE) throw std::logic_error(
-            "Shader Graph pipeline cache has already been initialized");
-        device_ = device;
-        // Generated files are not AssetManager assets; load their just-cooked
-        // SPIR-V directly instead of passing through the timestamp cache.
-        baseOptions.assetManager = nullptr;
-        baseOptions_ = std::move(baseOptions);
-        for (auto& [program, entry] : entries_) {
-            (void) program;
-            createPipeline(entry);
+    try {
+        const ShaderGraphAsset graph = ShaderGraphSerializer::load(assetRoot / asset);
+        ShaderGraphProgram program;
+        result = ShaderGraphSlangCompiler{}.compile(graph, forwardTemplate, generatedDirectory, program);
+        if (result.succeeded()) {
+            material.shaderGraphAsset = asset;
+            material.shaderProgram = program.id;
+            material.shaderProgramSpirv = program.spirvPath;
         }
+    } catch (const std::exception& exception) {
+        result.diagnostics.push_back({exception.what(), {}});
     }
+    return result;
+}
 
-    void ShaderGraphPipelineCache::destroy() noexcept {
-        // ForwardPass is also torn down for swapchain/MSAA recreation while
-        // the scene's GPU batches retain their shader slots. Keep the slot
-        // registry so initialize() can recreate equivalent VkPipelines for
-        // those batches; only device-owned resources must be released here.
-        for (auto& [program, entry] : entries_) {
-            (void) program;
-            entry.pipeline.reset();
+void ShaderGraphPipelineCache::initialize(const VkDevice device, GraphicsPipelineOptions baseOptions) {
+    if (device == VK_NULL_HANDLE)
+        throw std::invalid_argument("Shader Graph pipeline cache requires a Vulkan device");
+    if (device_ != VK_NULL_HANDLE)
+        throw std::logic_error("Shader Graph pipeline cache has already been initialized");
+    device_ = device;
+    // Generated files are not AssetManager assets; load their just-cooked
+    // SPIR-V directly instead of passing through the timestamp cache.
+    baseOptions.assetManager = nullptr;
+    baseOptions_ = std::move(baseOptions);
+    for (auto& [program, entry] : entries_) {
+        (void)program;
+        createPipeline(entry);
+    }
+}
+
+void ShaderGraphPipelineCache::destroy() noexcept {
+    // ForwardPass is also torn down for swapchain/MSAA recreation while
+    // the scene's GPU batches retain their shader slots. Keep the slot
+    // registry so initialize() can recreate equivalent VkPipelines for
+    // those batches; only device-owned resources must be released here.
+    for (auto& [program, entry] : entries_) {
+        (void)program;
+        entry.pipeline.reset();
+    }
+    device_ = VK_NULL_HANDLE;
+    baseOptions_ = {};
+}
+
+void ShaderGraphPipelineCache::createPipeline(Entry& entry) {
+    GraphicsPipelineOptions options = baseOptions_;
+    options.shader = entry.spirv;
+    options.cullMode = entry.state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+    // A material can disable depth writes, but cannot enable them when the
+    // owning pass keeps its depth attachment read-only (e.g. lighting
+    // after the depth prepass).
+    options.depthWriteEnable = baseOptions_.depthWriteEnable && entry.state.depthWrite;
+    options.alphaBlendEnable = entry.state.transparent ? VK_TRUE : VK_FALSE;
+    entry.pipeline = std::make_unique<GraphicsPipeline>();
+    entry.pipeline->create(device_, options);
+}
+
+std::uint32_t ShaderGraphPipelineCache::getOrCreate(const ShaderProgramId program, const std::filesystem::path& spirv,
+                                                    const MaterialRenderState& state) {
+    if (program == 0 || spirv.empty())
+        throw std::invalid_argument("Shader Graph program requires an ID and SPIR-V path");
+    if (const auto existing = entries_.find(program); existing != entries_.end()) {
+        if (existing->second.spirv != spirv || existing->second.state.doubleSided != state.doubleSided ||
+            existing->second.state.depthWrite != state.depthWrite ||
+            existing->second.state.transparent != state.transparent) {
+            throw std::logic_error(
+                "A ShaderProgramId may not be reused with a different SPIR-V module or render state");
         }
-        device_ = VK_NULL_HANDLE;
-        baseOptions_ = {};
+        if (device_ != VK_NULL_HANDLE && !existing->second.pipeline)
+            createPipeline(existing->second);
+        return existing->second.slot;
     }
+    if (entries_.size() >= MaterialProgramSlotCount - MaterialShaderCount)
+        throw std::runtime_error("Shader Graph pipeline slot capacity exceeded");
+    const std::uint32_t slot = static_cast<std::uint32_t>(MaterialShaderCount + entries_.size());
+    Entry entry{spirv, state, slot, nullptr};
+    if (device_ != VK_NULL_HANDLE)
+        createPipeline(entry);
+    const auto [it, inserted] = entries_.emplace(program, std::move(entry));
+    (void)inserted;
+    return it->second.slot;
+}
 
-    void ShaderGraphPipelineCache::createPipeline(Entry& entry) {
-        GraphicsPipelineOptions options = baseOptions_;
-        options.shader = entry.spirv;
-        options.cullMode = entry.state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-        // A material can disable depth writes, but cannot enable them when the
-        // owning pass keeps its depth attachment read-only (e.g. lighting
-        // after the depth prepass).
-        options.depthWriteEnable = baseOptions_.depthWriteEnable && entry.state.depthWrite;
-        options.alphaBlendEnable = entry.state.transparent ? VK_TRUE : VK_FALSE;
-        entry.pipeline = std::make_unique<GraphicsPipeline>();
-        entry.pipeline->create(device_, options);
+const GraphicsPipeline* ShaderGraphPipelineCache::find(const std::uint32_t slot) const noexcept {
+    for (const auto& [id, entry] : entries_) {
+        (void)id;
+        if (entry.slot == slot)
+            return entry.pipeline.get();
     }
-
-    std::uint32_t ShaderGraphPipelineCache::getOrCreate(const ShaderProgramId program,
-                                                        const std::filesystem::path &spirv,
-                                                        const MaterialRenderState &state) {
-        if (program == 0 || spirv.empty()) throw std::invalid_argument(
-            "Shader Graph program requires an ID and SPIR-V path");
-        if (const auto existing = entries_.find(program); existing != entries_.end()) {
-            if (existing->second.spirv != spirv || existing->second.state.doubleSided != state.doubleSided ||
-                existing->second.state.depthWrite != state.depthWrite || existing->second.state.transparent != state.
-                transparent) {
-                throw std::logic_error(
-                    "A ShaderProgramId may not be reused with a different SPIR-V module or render state");
-            }
-            if (device_ != VK_NULL_HANDLE && !existing->second.pipeline) createPipeline(existing->second);
-            return existing->second.slot;
-        }
-        if (entries_.size() >= MaterialProgramSlotCount - MaterialShaderCount)
-            throw std::runtime_error("Shader Graph pipeline slot capacity exceeded");
-        const std::uint32_t slot = static_cast<std::uint32_t>(MaterialShaderCount + entries_.size());
-        Entry entry{spirv, state, slot, nullptr};
-        if (device_ != VK_NULL_HANDLE) createPipeline(entry);
-        const auto [it, inserted] = entries_.emplace(program, std::move(entry));
-        (void) inserted;
-        return it->second.slot;
-    }
-
-    const GraphicsPipeline *ShaderGraphPipelineCache::find(const std::uint32_t slot) const noexcept {
-        for (const auto &[id, entry]: entries_) {
-            (void) id;
-            if (entry.slot == slot) return entry.pipeline.get();
-        }
-        return nullptr;
-    }
+    return nullptr;
+}
 } // namespace Engine

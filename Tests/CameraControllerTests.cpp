@@ -1,16 +1,16 @@
-#include <gtest/gtest.h>
-
-#include "Engine/Core/Transform.h"
+#include "../Platform/SDL/SDLInput.h"
 #include "Engine/Core/Time.h"
+#include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Input/Input.h"
 #include "Engine/Renderer/Vulkan/CameraController.h"
 #include "Engine/Scene/TransformSystem.h"
-#include "../Platform/SDL/SDLInput.h"
+
+#include <gtest/gtest.h>
 
 namespace {
 class CameraControllerInput : public testing::Test {
-protected:
+  protected:
     void SetUp() override {
         SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
         ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_VIDEO));
@@ -21,8 +21,8 @@ protected:
         Engine::Input::beginFrame();
         camera_ = registry_.create();
         registry_.add<Engine::CameraComponent>(camera_);
-        registry_.add<Engine::Transform>(camera_, Engine::Transform{
-            .position = {0.0F, 0.0F, 0.0F}, .rotation = {0.0F, -90.0F, 0.0F}});
+        registry_.add<Engine::Transform>(
+            camera_, Engine::Transform{.position = {0.0F, 0.0F, 0.0F}, .rotation = {0.0F, -90.0F, 0.0F}});
         Engine::TransformSystem::updateDirty(registry_);
         controller_.setGameInputEnabled(true);
     }
@@ -34,7 +34,8 @@ protected:
         keyUp.key.down = false;
         Engine::SDLInput::processEvent(keyUp);
         Engine::SDLInput::setWindow(nullptr);
-        if (window_) SDL_DestroyWindow(window_);
+        if (window_)
+            SDL_DestroyWindow(window_);
         SDL_QuitSubSystem(SDL_INIT_VIDEO);
         SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
         Engine::Input::beginFrame();

@@ -1,6 +1,6 @@
-#include "Engine/Scene/TransformSystem.h"
-#include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/TransformSystem.h"
 
 #include <gtest/gtest.h>
 
@@ -10,7 +10,8 @@ TEST(TransformSystem, DirtyLeafDoesNotChangeSiblingWorldRevisions) {
     const auto root = registry.create();
     const auto leaf = registry.create();
     const auto sibling = registry.create();
-    for (const auto entity : {root, leaf, sibling}) registry.add<Engine::Transform>(entity);
+    for (const auto entity : {root, leaf, sibling})
+        registry.add<Engine::Transform>(entity);
     registry.add<Engine::UUIDComponent>(root, Engine::UUIDComponent{1});
     registry.add<Engine::ParentComponent>(leaf, Engine::ParentComponent{1});
     registry.add<Engine::ParentComponent>(sibling, Engine::ParentComponent{1});
@@ -62,13 +63,15 @@ TEST(RendererTransformHistory, FrameDirtyBitsEventuallyDrainAfterMotion) {
     unsigned uploads = 0;
     for (unsigned frame = 0; frame < 12; ++frame) {
         const unsigned bit = 1U << (frame % 3);
-        if ((dirty & bit) == 0) continue;
+        if ((dirty & bit) == 0)
+            continue;
         ++uploads;
         const bool historyChanged = previous.settle(current);
         dirty &= ~bit;
-        if (historyChanged) dirty |= 0b111;
+        if (historyChanged)
+            dirty |= 0b111;
     }
     EXPECT_EQ(dirty, 0U);
     EXPECT_EQ(uploads, 4U);
 }
-}
+} // namespace

@@ -2,114 +2,128 @@
 
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Actor.h"
+#include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
-#include "Engine/ECS/Components/RigidbodyRuntime.h"
 
-#include <vector>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Engine {
-    class Scene;
-    class Physics;
+class Scene;
+class Physics;
 
-    /** Base class for native C++ behaviours attached to entities. */
-    class Script {
-    public:
-        virtual ~Script() = default;
+/** Base class for native C++ behaviours attached to entities. */
+class Script {
+  public:
+    virtual ~Script() = default;
 
-        [[nodiscard]] Entity entity() const noexcept { return entity_; }
-        /**
-         * Advanced ECS access.
-         *
-         * Prefer actor(), scene(), physics() and other gameplay APIs.
-         */
-        [[nodiscard]] Registry &ecs() const noexcept { return *registry_; }
-        /** Returns the script entity's read-only local transform. */
-        [[nodiscard]] const Transform &transform() const { return ecs().get<Transform>(entity_); }
+    [[nodiscard]] Entity entity() const noexcept {
+        return entity_;
+    }
+    /**
+     * Advanced ECS access.
+     *
+     * Prefer actor(), scene(), physics() and other gameplay APIs.
+     */
+    [[nodiscard]] Registry& ecs() const noexcept {
+        return *registry_;
+    }
+    /** Returns the script entity's read-only local transform. */
+    [[nodiscard]] const Transform& transform() const {
+        return ecs().get<Transform>(entity_);
+    }
 
-        void setPosition(Vec3 value) {
-            if (ecs().has<RigidbodyComponent>(entity_) &&
-                ecs().get<RigidbodyComponent>(entity_).type == RigidbodyType::Dynamic) {
-                if (!ecs().has<PhysicsCommandBuffer>(entity_)) ecs().add<PhysicsCommandBuffer>(entity_);
-                ecs().modify<PhysicsCommandBuffer>(entity_, [value](auto &commands) { commands.teleportPosition = value; });
-                return;
-            }
-            ecs().modify<Transform>(entity_, [&](auto &transform) { transform.position = value; });
+    void setPosition(Vec3 value) {
+        if (ecs().has<RigidbodyComponent>(entity_) &&
+            ecs().get<RigidbodyComponent>(entity_).type == RigidbodyType::Dynamic) {
+            if (!ecs().has<PhysicsCommandBuffer>(entity_))
+                ecs().add<PhysicsCommandBuffer>(entity_);
+            ecs().modify<PhysicsCommandBuffer>(entity_, [value](auto& commands) { commands.teleportPosition = value; });
+            return;
         }
-        void setRotation(Vec3 value) {
-            if (ecs().has<RigidbodyComponent>(entity_) &&
-                ecs().get<RigidbodyComponent>(entity_).type == RigidbodyType::Dynamic) {
-                if (!ecs().has<PhysicsCommandBuffer>(entity_)) ecs().add<PhysicsCommandBuffer>(entity_);
-                ecs().modify<PhysicsCommandBuffer>(entity_, [value](auto &commands) { commands.teleportRotation = value; });
-                return;
-            }
-            ecs().modify<Transform>(entity_, [&](auto &transform) { transform.rotation = value; });
+        ecs().modify<Transform>(entity_, [&](auto& transform) { transform.position = value; });
+    }
+    void setRotation(Vec3 value) {
+        if (ecs().has<RigidbodyComponent>(entity_) &&
+            ecs().get<RigidbodyComponent>(entity_).type == RigidbodyType::Dynamic) {
+            if (!ecs().has<PhysicsCommandBuffer>(entity_))
+                ecs().add<PhysicsCommandBuffer>(entity_);
+            ecs().modify<PhysicsCommandBuffer>(entity_, [value](auto& commands) { commands.teleportRotation = value; });
+            return;
         }
-        void setScale(Vec3 value) { ecs().modify<Transform>(entity_, [&](auto &transform) {
-            transform.scale = value;
-        }); }
-        void translate(Vec3 offset) { setPosition(transform().position + offset); }
-        void rotate(Vec3 offset) { setRotation(transform().rotation + offset); }
+        ecs().modify<Transform>(entity_, [&](auto& transform) { transform.rotation = value; });
+    }
+    void setScale(Vec3 value) {
+        ecs().modify<Transform>(entity_, [&](auto& transform) { transform.scale = value; });
+    }
+    void translate(Vec3 offset) {
+        setPosition(transform().position + offset);
+    }
+    void rotate(Vec3 offset) {
+        setRotation(transform().rotation + offset);
+    }
 
-        /** Returns the high-level actor controlled by this script. */
-        [[nodiscard]] Actor actor() const;
+    /** Returns the high-level actor controlled by this script. */
+    [[nodiscard]] Actor actor() const;
 
-        /** Returns this script actor's parent, or an invalid Actor for a root actor. */
-        [[nodiscard]] Actor parent() const;
+    /** Returns this script actor's parent, or an invalid Actor for a root actor. */
+    [[nodiscard]] Actor parent() const;
 
-        /** Returns this script actor's direct children. */
-        [[nodiscard]] std::vector<Actor> children() const;
+    /** Returns this script actor's direct children. */
+    [[nodiscard]] std::vector<Actor> children() const;
 
-        /** Returns the scene containing the scripted actor. */
-        [[nodiscard]] Scene &scene() const;
+    /** Returns the scene containing the scripted actor. */
+    [[nodiscard]] Scene& scene() const;
 
-        /** Returns scene-bound gameplay physics queries. */
-        [[nodiscard]] Physics &physics() const;
+    /** Returns scene-bound gameplay physics queries. */
+    [[nodiscard]] Physics& physics() const;
 
-        /** Called once, immediately before the first update. */
-        virtual void onCreate() {
-        }
+    /** Called once, immediately before the first update. */
+    virtual void onCreate() {}
 
-        /** Called after creation, and whenever the ScriptComponent becomes enabled. */
-        virtual void onEnable() {
-        }
+    /** Called after creation, and whenever the ScriptComponent becomes enabled. */
+    virtual void onEnable() {}
 
-        /** Called once per frame while the ScriptComponent is enabled. */
-        virtual void onUpdate(float deltaTime) { (void) deltaTime; }
+    /** Called once per frame while the ScriptComponent is enabled. */
+    virtual void onUpdate(float deltaTime) {
+        (void)deltaTime;
+    }
 
-        /** Called before a live ScriptComponent is disabled or destroyed. */
-        virtual void onDisable() {
-        }
+    /** Called before a live ScriptComponent is disabled or destroyed. */
+    virtual void onDisable() {}
 
-        /** Called when the runtime instance is removed. */
-        virtual void onDestroy() {
-        }
+    /** Called when the runtime instance is removed. */
+    virtual void onDestroy() {}
 
-        /** Optional state hook used by native hot reload. */
-        [[nodiscard]] virtual std::string saveHotReloadState() const { return {}; }
+    /** Optional state hook used by native hot reload. */
+    [[nodiscard]] virtual std::string saveHotReloadState() const {
+        return {};
+    }
 
-        /** Optional state hook used by native hot reload. */
-        virtual void loadHotReloadState(std::string_view state) { (void) state; }
+    /** Optional state hook used by native hot reload. */
+    virtual void loadHotReloadState(std::string_view state) {
+        (void)state;
+    }
 
-    private:
-        friend class ScriptSystem;
+  private:
+    friend class ScriptSystem;
 
-        void attach(Registry &registry, Entity entity) noexcept {
-            scene_ = nullptr;
-            registry_ = &registry;
-            entity_ = entity;
-        }
+    void attach(Registry& registry, Entity entity) noexcept {
+        scene_ = nullptr;
+        registry_ = &registry;
+        entity_ = entity;
+    }
 
-        void attach(Scene &scene, Registry &registry, Entity entity) noexcept {
-            scene_ = &scene;
-            registry_ = &registry;
-            entity_ = entity;
-        }
+    void attach(Scene& scene, Registry& registry, Entity entity) noexcept {
+        scene_ = &scene;
+        registry_ = &registry;
+        entity_ = entity;
+    }
 
-        Scene *scene_{};
-        Registry *registry_{};
-        Entity entity_{NullEntity};
-    };
+    Scene* scene_{};
+    Registry* registry_{};
+    Entity entity_{NullEntity};
+};
 } // namespace Engine

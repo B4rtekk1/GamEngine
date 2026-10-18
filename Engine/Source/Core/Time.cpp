@@ -11,7 +11,7 @@ namespace {
 constexpr double DefaultTimeScale = 1.0;
 constexpr double DefaultFixedDeltaTime = 1.0 / 60.0;
 constexpr double MaximumFrameDeltaTime = 0.1;
-}
+} // namespace
 
 double Time::s_deltaTime = 0.0;
 double Time::s_unscaledDeltaTime = 0.0;

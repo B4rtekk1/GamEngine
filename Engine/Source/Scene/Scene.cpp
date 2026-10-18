@@ -1,14 +1,14 @@
-#include "Platform/DefaultFonts.h"
 #include "Engine/Scene/Scene.h"
 
-#include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Assets/Content.h"
 #include "Engine/Core/SceneCamera.h"
 #include "Engine/Renderer/Geometry/Cube.h"
+#include "Engine/Scene/SceneSerializer.h"
+#include "Platform/DefaultFonts.h"
 
+#include <array>
 #include <cctype>
 #include <cmath>
-#include <array>
 #include <stdexcept>
 #include <utility>
 
@@ -20,350 +20,340 @@
 // NOLINTBEGIN(readability-magic-numbers)
 
 namespace Engine {
-    namespace {
-        void buildDefaultFont(UI::UIFontAtlas &atlas) {
-            const auto font = Platform::defaultUiFont();
-            if (font.empty()) throw std::runtime_error("No default TrueType font found");
-            if (const std::string error = atlas.build(font.string(), 24, 32, 126); !error.empty()) {
-                throw std::runtime_error("Could not build default font atlas: " + error);
+namespace {
+void buildDefaultFont(UI::UIFontAtlas& atlas) {
+    const auto font = Platform::defaultUiFont();
+    if (font.empty())
+        throw std::runtime_error("No default TrueType font found");
+    if (const std::string error = atlas.build(font.string(), 24, 32, 126); !error.empty()) {
+        throw std::runtime_error("Could not build default font atlas: " + error);
+    }
+}
+
+[[nodiscard]] bool isGltfPath(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(),
+                           [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    return extension == ".gltf" || extension == ".glb";
+}
+
+[[nodiscard]] Transform localTransformFromMatrix(const glm::mat4& matrix) {
+    glm::vec3 scale{};
+    glm::vec3 translation{};
+    glm::vec3 skew{};
+    glm::quat rotation{};
+    glm::vec4 perspective{};
+    if (!glm::decompose(matrix, scale, rotation, translation, skew, perspective)) {
+        throw std::runtime_error("Cannot decompose transform while changing parent");
+    }
+    return Transform{
+        .position = Vec3{translation},
+        .rotation = Vec3{glm::degrees(glm::eulerAngles(glm::conjugate(glm::normalize(rotation))))},
+        .scale = Vec3{scale},
+    };
+}
+} // namespace
+
+Scene::Scene() : physics_(*this) {
+    buildDefaultFont(fontAtlas_);
+}
+
+std::optional<Camera> Scene::primaryViewCamera(const float aspectOverride) {
+    const auto primary = primaryCamera();
+    if (!primary.valid())
+        return std::nullopt;
+    return makeSceneCamera(registry_, findEntity(primary.id()), aspectOverride);
+}
+
+Actor Scene::primaryCamera() noexcept {
+    const auto componentRevision = registry_.componentRevision<CameraComponent>();
+    const auto structuralRevision = registry_.structuralRevision();
+    if (primaryCameraComponentRevision_ != componentRevision ||
+        primaryCameraStructuralRevision_ != structuralRevision) {
+        primaryCamera_ = NullObjectId;
+        registry_.view<CameraComponent>([&](const Entity entity, const CameraComponent& camera) {
+            if (primaryCamera_ != NullObjectId || !camera.primary) {
+                return;
             }
-        }
-
-        [[nodiscard]] bool isGltfPath(const std::filesystem::path &path) {
-            std::string extension = path.extension().string();
-            std::ranges::transform(extension, extension.begin(),
-                                   [](const unsigned char character) {
-                                       return static_cast<char>(std::tolower(character));
-                                   });
-            return extension == ".gltf" || extension == ".glb";
-        }
-
-        [[nodiscard]] Transform localTransformFromMatrix(const glm::mat4 &matrix) {
-            glm::vec3 scale{};
-            glm::vec3 translation{};
-            glm::vec3 skew{};
-            glm::quat rotation{};
-            glm::vec4 perspective{};
-            if (!glm::decompose(matrix, scale, rotation, translation, skew, perspective)) {
-                throw std::runtime_error("Cannot decompose transform while changing parent");
+            if (const auto* object = findByEntity(entity)) {
+                primaryCamera_ = object->objectId();
             }
-            return Transform{
-                .position = Vec3{translation},
-                .rotation = Vec3{glm::degrees(glm::eulerAngles(glm::conjugate(glm::normalize(rotation))))},
-                .scale = Vec3{scale},
-            };
-        }
+        });
+        primaryCameraComponentRevision_ = componentRevision;
+        primaryCameraStructuralRevision_ = structuralRevision;
     }
+    return primaryCamera_ == NullObjectId ? Actor{} : Actor{*this, primaryCamera_};
+}
 
-    Scene::Scene() : physics_(*this) {
-        buildDefaultFont(fontAtlas_);
-    }
-
-    std::optional<Camera> Scene::primaryViewCamera(const float aspectOverride) {
-        const auto primary = primaryCamera();
-        if (!primary.valid()) return std::nullopt;
-        return makeSceneCamera(registry_, findEntity(primary.id()), aspectOverride);
-    }
-
-    Actor Scene::primaryCamera() noexcept {
-        const auto componentRevision = registry_.componentRevision<CameraComponent>();
-        const auto structuralRevision = registry_.structuralRevision();
-        if (primaryCameraComponentRevision_ != componentRevision ||
-            primaryCameraStructuralRevision_ != structuralRevision) {
-            primaryCamera_ = NullObjectId;
-            registry_.view<CameraComponent>([&](const Entity entity, const CameraComponent &camera) {
-                if (primaryCamera_ != NullObjectId || !camera.primary) {
-                    return;
-                }
-                if (const auto *object = findByEntity(entity)) {
-                    primaryCamera_ = object->objectId();
-                }
-            });
-            primaryCameraComponentRevision_ = componentRevision;
-            primaryCameraStructuralRevision_ = structuralRevision;
-        }
-        return primaryCamera_ == NullObjectId ? Actor{} : Actor{*this, primaryCamera_};
-    }
-
-    Actor Scene::activeDirectionalLight() noexcept {
-        const auto componentRevision = registry_.componentRevision<LightComponent>();
-        const auto structuralRevision = registry_.structuralRevision();
-        if (directionalLightComponentRevision_ != componentRevision ||
-            directionalLightStructuralRevision_ != structuralRevision) {
-            directionalLight_ = NullObjectId;
-            registry_.view<LightComponent>([&](const Entity entity, const LightComponent &light) {
-                if (directionalLight_ != NullObjectId || light.type != LightType::Directional ||
-                    !light.enabled || !light.mainLight) {
-                    return;
-                }
-                if (const auto *object = findByEntity(entity)) {
-                    directionalLight_ = object->objectId();
-                }
-            });
-            directionalLightComponentRevision_ = componentRevision;
-            directionalLightStructuralRevision_ = structuralRevision;
-        }
-        return directionalLight_ == NullObjectId ? Actor{} : Actor{*this, directionalLight_};
-    }
-
-    GameObject &Scene::createMeshObject(std::string name,
-                                        std::shared_ptr<const Mesh> mesh,
-                                        const PBRMaterial &material) {
-        GameObject &object = create(std::move(name));
-        object.setMesh(std::move(mesh));
-        object.setMaterial(material);
-        return object;
-    }
-
-    Actor Scene::createMesh(std::string name, std::shared_ptr<const Mesh> mesh,
-                            const PBRMaterial &material) {
-        auto &object = createMeshObject(std::move(name), std::move(mesh), material);
-        return Actor{*this, object.objectId()};
-    }
-
-    Actor Scene::createWaterBody(const WaterBodyType type, std::string name) {
-        GameObject& object = create(std::move(name));
-        WaterBodyComponent body{};
-        body.type = type;
-        WaterShapeComponent shape{};
-        shape.type = type;
-        switch (type) {
-            case WaterBodyType::Ocean:
-                shape.oceanExtent = 65536.0F;
-                break;
-            case WaterBodyType::Lake:
-                shape.lakePolygon = {{-10.0F, 0.0F, -10.0F}, {10.0F, 0.0F, -10.0F},
-                                     {10.0F, 0.0F, 10.0F}, {-10.0F, 0.0F, 10.0F}};
-                // Keep the legacy field populated while old scene and water
-                // mesh paths are retired. New code must read WaterShape.
-                body.lakeBoundary = shape.lakePolygon;
-                break;
-            case WaterBodyType::River:
-                shape.riverSpline = {{{-10.0F, 0.0F, 0.0F}, 4.0F, 1.0F, 1.0F},
-                                     {{10.0F, 0.0F, 0.0F}, 4.0F, 1.0F, 1.0F}};
-                body.riverSpline = shape.riverSpline;
-                break;
-        }
-        object.add<WaterBodyComponent>(std::move(body));
-        object.add<WaterShapeComponent>(std::move(shape));
-        return Actor{*this, object.objectId()};
-    }
-
-    void Scene::setParent(const Actor &child, const Actor &parent, const ParentMode mode) {
-        if (child.scene_ != this || parent.scene_ != this || !child.valid() || !parent.valid()) {
-            throw std::invalid_argument("Parent and child must be live actors in this Scene");
-        }
-        if (child.objectId_ == parent.objectId_) {
-            throw std::invalid_argument("An actor cannot be its own parent");
-        }
-
-        // Walking from the proposed parent to the root catches every cycle.
-        for (Actor ancestor = parent; ancestor.valid(); ancestor = parentOf(ancestor)) {
-            if (ancestor.objectId_ == child.objectId_) {
-                throw std::invalid_argument("Parent relationship would create a cycle");
+Actor Scene::activeDirectionalLight() noexcept {
+    const auto componentRevision = registry_.componentRevision<LightComponent>();
+    const auto structuralRevision = registry_.structuralRevision();
+    if (directionalLightComponentRevision_ != componentRevision ||
+        directionalLightStructuralRevision_ != structuralRevision) {
+        directionalLight_ = NullObjectId;
+        registry_.view<LightComponent>([&](const Entity entity, const LightComponent& light) {
+            if (directionalLight_ != NullObjectId || light.type != LightType::Directional || !light.enabled ||
+                !light.mainLight) {
+                return;
             }
-        }
+            if (const auto* object = findByEntity(entity)) {
+                directionalLight_ = object->objectId();
+            }
+        });
+        directionalLightComponentRevision_ = componentRevision;
+        directionalLightStructuralRevision_ = structuralRevision;
+    }
+    return directionalLight_ == NullObjectId ? Actor{} : Actor{*this, directionalLight_};
+}
 
-        const Entity childEntity = findEntity(child.objectId_);
-        const Entity parentEntity = findEntity(parent.objectId_);
-        if (registry_.has<RigidbodyComponent>(childEntity) &&
-            registry_.get<RigidbodyComponent>(childEntity).type == RigidbodyType::Dynamic) {
-            throw std::invalid_argument("Dynamic rigid bodies cannot be parented; PhysX owns their world pose");
+GameObject& Scene::createMeshObject(std::string name, std::shared_ptr<const Mesh> mesh, const PBRMaterial& material) {
+    GameObject& object = create(std::move(name));
+    object.setMesh(std::move(mesh));
+    object.setMaterial(material);
+    return object;
+}
+
+Actor Scene::createMesh(std::string name, std::shared_ptr<const Mesh> mesh, const PBRMaterial& material) {
+    auto& object = createMeshObject(std::move(name), std::move(mesh), material);
+    return Actor{*this, object.objectId()};
+}
+
+Actor Scene::createWaterBody(const WaterBodyType type, std::string name) {
+    GameObject& object = create(std::move(name));
+    WaterBodyComponent body{};
+    body.type = type;
+    WaterShapeComponent shape{};
+    shape.type = type;
+    switch (type) {
+    case WaterBodyType::Ocean:
+        shape.oceanExtent = 65536.0F;
+        break;
+    case WaterBodyType::Lake:
+        shape.lakePolygon = {
+            {-10.0F, 0.0F, -10.0F}, {10.0F, 0.0F, -10.0F}, {10.0F, 0.0F, 10.0F}, {-10.0F, 0.0F, 10.0F}};
+        // Keep the legacy field populated while old scene and water
+        // mesh paths are retired. New code must read WaterShape.
+        body.lakeBoundary = shape.lakePolygon;
+        break;
+    case WaterBodyType::River:
+        shape.riverSpline = {{{-10.0F, 0.0F, 0.0F}, 4.0F, 1.0F, 1.0F}, {{10.0F, 0.0F, 0.0F}, 4.0F, 1.0F, 1.0F}};
+        body.riverSpline = shape.riverSpline;
+        break;
+    }
+    object.add<WaterBodyComponent>(std::move(body));
+    object.add<WaterShapeComponent>(std::move(shape));
+    return Actor{*this, object.objectId()};
+}
+
+void Scene::setParent(const Actor& child, const Actor& parent, const ParentMode mode) {
+    if (child.scene_ != this || parent.scene_ != this || !child.valid() || !parent.valid()) {
+        throw std::invalid_argument("Parent and child must be live actors in this Scene");
+    }
+    if (child.objectId_ == parent.objectId_) {
+        throw std::invalid_argument("An actor cannot be its own parent");
+    }
+
+    // Walking from the proposed parent to the root catches every cycle.
+    for (Actor ancestor = parent; ancestor.valid(); ancestor = parentOf(ancestor)) {
+        if (ancestor.objectId_ == child.objectId_) {
+            throw std::invalid_argument("Parent relationship would create a cycle");
         }
+    }
+
+    const Entity childEntity = findEntity(child.objectId_);
+    const Entity parentEntity = findEntity(parent.objectId_);
+    if (registry_.has<RigidbodyComponent>(childEntity) &&
+        registry_.get<RigidbodyComponent>(childEntity).type == RigidbodyType::Dynamic) {
+        throw std::invalid_argument("Dynamic rigid bodies cannot be parented; PhysX owns their world pose");
+    }
+    Transform preservedLocal{};
+    if (mode == ParentMode::KeepWorld) {
+        TransformSystem::updateDirty(registry_);
+        const glm::mat4 parentWorld = registry_.get<Transform>(parentEntity).worldMatrix().native();
+        if (std::abs(glm::determinant(parentWorld)) < 1.0e-6F) {
+            throw std::runtime_error("Cannot preserve world transform below a parent with a singular transform");
+        }
+        const glm::mat4 childWorld = registry_.get<Transform>(childEntity).worldMatrix().native();
+        preservedLocal = localTransformFromMatrix(glm::inverse(parentWorld) * childWorld);
+    }
+    const UUID parentUuid = registry_.get<UUIDComponent>(parentEntity).value;
+    if (registry_.has<ParentComponent>(childEntity)) {
+        registry_.modify<ParentComponent>(childEntity, [parentUuid, parentEntity](ParentComponent& link) {
+            link.parentUuid = parentUuid;
+            link.runtimeParent = parentEntity;
+        });
+    } else {
+        registry_.add<ParentComponent>(childEntity, ParentComponent{
+                                                        .parentUuid = parentUuid,
+                                                        .runtimeParent = parentEntity,
+                                                    });
+    }
+    if (mode == ParentMode::KeepWorld) {
+        registry_.modify<Transform>(childEntity, [&](Transform& transform) {
+            transform.position = preservedLocal.position;
+            transform.rotation = preservedLocal.rotation;
+            transform.scale = preservedLocal.scale;
+        });
+    }
+}
+
+void Scene::clearParent(const Actor& child, const ParentMode mode) {
+    if (child.scene_ != this || !child.valid()) {
+        throw std::invalid_argument("Child must be a live actor in this Scene");
+    }
+    const Entity childEntity = findEntity(child.objectId_);
+    if (registry_.has<ParentComponent>(childEntity)) {
         Transform preservedLocal{};
         if (mode == ParentMode::KeepWorld) {
             TransformSystem::updateDirty(registry_);
-            const glm::mat4 parentWorld = registry_.get<Transform>(parentEntity).worldMatrix().native();
-            if (std::abs(glm::determinant(parentWorld)) < 1.0e-6F) {
-                throw std::runtime_error("Cannot preserve world transform below a parent with a singular transform");
-            }
-            const glm::mat4 childWorld = registry_.get<Transform>(childEntity).worldMatrix().native();
-            preservedLocal = localTransformFromMatrix(glm::inverse(parentWorld) * childWorld);
+            preservedLocal = localTransformFromMatrix(registry_.get<Transform>(childEntity).worldMatrix().native());
         }
-        const UUID parentUuid = registry_.get<UUIDComponent>(parentEntity).value;
-        if (registry_.has<ParentComponent>(childEntity)) {
-            registry_.modify<ParentComponent>(childEntity, [parentUuid, parentEntity](ParentComponent &link) {
-                link.parentUuid = parentUuid;
-                link.runtimeParent = parentEntity;
-            });
-        } else {
-            registry_.add<ParentComponent>(childEntity, ParentComponent{
-                                               .parentUuid = parentUuid,
-                                               .runtimeParent = parentEntity,
-                                           });
-        }
+        registry_.remove<ParentComponent>(childEntity);
         if (mode == ParentMode::KeepWorld) {
-            registry_.modify<Transform>(childEntity, [&](Transform &transform) {
+            registry_.modify<Transform>(childEntity, [&](Transform& transform) {
                 transform.position = preservedLocal.position;
                 transform.rotation = preservedLocal.rotation;
                 transform.scale = preservedLocal.scale;
             });
         }
     }
+}
 
-    void Scene::clearParent(const Actor &child, const ParentMode mode) {
-        if (child.scene_ != this || !child.valid()) {
-            throw std::invalid_argument("Child must be a live actor in this Scene");
-        }
-        const Entity childEntity = findEntity(child.objectId_);
-        if (registry_.has<ParentComponent>(childEntity)) {
-            Transform preservedLocal{};
-            if (mode == ParentMode::KeepWorld) {
-                TransformSystem::updateDirty(registry_);
-                preservedLocal = localTransformFromMatrix(
-                    registry_.get<Transform>(childEntity).worldMatrix().native());
-            }
-            registry_.remove<ParentComponent>(childEntity);
-            if (mode == ParentMode::KeepWorld) {
-                registry_.modify<Transform>(childEntity, [&](Transform &transform) {
-                    transform.position = preservedLocal.position;
-                    transform.rotation = preservedLocal.rotation;
-                    transform.scale = preservedLocal.scale;
-                });
-            }
-        }
+Actor Scene::parentOf(const Actor& child) noexcept {
+    if (child.scene_ != this || !child.valid()) {
+        return {};
     }
-
-    Actor Scene::parentOf(const Actor &child) noexcept {
-        if (child.scene_ != this || !child.valid()) {
-            return {};
-        }
-        const Entity childEntity = findEntity(child.objectId_);
-        if (!registry_.has<ParentComponent>(childEntity)) {
-            return {};
-        }
-        const Entity parentEntity = registry_.get<ParentComponent>(childEntity).runtimeParent;
-        const auto it = objectByEntity_.find(parentEntity);
-        return it == objectByEntity_.end() ? Actor{} : Actor{*this, it->second->objectId()};
+    const Entity childEntity = findEntity(child.objectId_);
+    if (!registry_.has<ParentComponent>(childEntity)) {
+        return {};
     }
+    const Entity parentEntity = registry_.get<ParentComponent>(childEntity).runtimeParent;
+    const auto it = objectByEntity_.find(parentEntity);
+    return it == objectByEntity_.end() ? Actor{} : Actor{*this, it->second->objectId()};
+}
 
-    std::vector<Actor> Scene::childrenOf(const Actor &parent) {
-        std::vector<Actor> result;
-        if (parent.scene_ != this || !parent.valid()) {
-            return result;
-        }
-        const Entity parentEntity = findEntity(parent.objectId_);
-        rebuildHierarchyIndex();
-        const auto children = childrenByParent_.find(parentEntity);
-        if (children == childrenByParent_.end()) {
-            return result;
-        }
-        result.reserve(children->second.size());
-        for (const Entity childEntity: children->second) {
-            if (const auto object = objectByEntity_.find(childEntity); object != objectByEntity_.end()) {
-                result.push_back(Actor{*this, object->second->objectId()});
-            }
-        }
+std::vector<Actor> Scene::childrenOf(const Actor& parent) {
+    std::vector<Actor> result;
+    if (parent.scene_ != this || !parent.valid()) {
         return result;
     }
-
-    Actor Scene::createModel(std::string name, const std::filesystem::path& path,
-                             const Assets::Content &content) {
-        auto mesh = content.mesh(path);
-        if (!mesh) {
-            throw std::runtime_error("Could not load model for actor '" + name + "'");
+    const Entity parentEntity = findEntity(parent.objectId_);
+    rebuildHierarchyIndex();
+    const auto children = childrenByParent_.find(parentEntity);
+    if (children == childrenByParent_.end()) {
+        return result;
+    }
+    result.reserve(children->second.size());
+    for (const Entity childEntity : children->second) {
+        if (const auto object = objectByEntity_.find(childEntity); object != objectByEntity_.end()) {
+            result.push_back(Actor{*this, object->second->objectId()});
         }
-        const auto &object = createMeshObject(std::move(name), std::move(mesh));
-        // Imported render meshes can be extremely detailed.  Cooking the
-        // complete glTF as a PhysX triangle mesh here makes asset import
-        // unexpectedly expensive and can exhaust memory.  Collision is an
-        // explicit authoring choice and can be added by the caller.
-        return Actor{*this, object.objectId()};
     }
+    return result;
+}
 
-    Actor Scene::createModel(std::string name, const std::filesystem::path& path) {
-        if (content_ == nullptr) {
-            throw std::logic_error("Scene has no Content service attached");
+Actor Scene::createModel(std::string name, const std::filesystem::path& path, const Assets::Content& content) {
+    auto mesh = content.mesh(path);
+    if (!mesh) {
+        throw std::runtime_error("Could not load model for actor '" + name + "'");
+    }
+    const auto& object = createMeshObject(std::move(name), std::move(mesh));
+    // Imported render meshes can be extremely detailed.  Cooking the
+    // complete glTF as a PhysX triangle mesh here makes asset import
+    // unexpectedly expensive and can exhaust memory.  Collision is an
+    // explicit authoring choice and can be added by the caller.
+    return Actor{*this, object.objectId()};
+}
+
+Actor Scene::createModel(std::string name, const std::filesystem::path& path) {
+    if (content_ == nullptr) {
+        throw std::logic_error("Scene has no Content service attached");
+    }
+    return createModel(std::move(name), path, *content_);
+}
+
+Actor Scene::createPrefab(std::string name, std::filesystem::path path, const PBRMaterial& material) {
+    if (content_ == nullptr) {
+        throw std::logic_error("Scene has no Content service attached");
+    }
+    return createPrefab(std::move(name), Prefab::model(*content_, std::move(path), material));
+}
+
+Actor Scene::createCube(std::string name, const PBRMaterial& material) {
+    const auto prefab = Prefab::cube(material);
+    return createPrefab(std::move(name), prefab);
+}
+
+Actor Scene::createPrefab(std::string name, const Prefab& prefab) {
+    if (!prefab.mesh()) {
+        throw std::invalid_argument("Cannot instantiate an empty prefab");
+    }
+    auto& object = createMeshObject(std::move(name), prefab.mesh(), prefab.material());
+    object.setCastShadow(prefab.castShadow());
+    object.setCullingBatch(prefab.cullingBatch());
+    return Actor{*this, object.objectId()};
+}
+
+Actor Scene::createTerrain(std::string name, TerrainComponent terrain) {
+    auto mesh = std::make_shared<Mesh>(terrain.createMesh());
+    PBRMaterial material{
+        .baseColor = {0.74F, 0.78F, 0.70F},
+        .metallic = 0.0F,
+        .roughness = 0.92F,
+        .terrainLayered = true,
+    };
+    terrain.applyMaterialLayers(*mesh, material);
+    auto& object = createMeshObject(std::move(name), mesh, material);
+    object.addTerrain(std::move(terrain));
+    object.addMeshCollider();
+    return Actor{*this, object.objectId()};
+}
+
+void Scene::save(const std::filesystem::path& path) const {
+    SceneSerializer::save(*this, path);
+}
+
+void Scene::load(const std::filesystem::path& path) {
+    SceneSerializer::load(*this, path);
+}
+
+void Scene::rebuildObjectHandles() {
+    objects_.clear();
+    names_.clear();
+    objectById_.clear();
+    objectByEntity_.clear();
+    entityByObjectId_.clear();
+    entityByUuid_.clear();
+    childrenByParent_.clear();
+    registry_.view<>([this](const Entity entity) {
+        std::string name = "Entity " + std::to_string(entityIndex(entity));
+        if (registry_.has<NameComponent>(entity)) {
+            name = registry_.get<NameComponent>(entity).value;
         }
-        return createModel(std::move(name), path, *content_);
+        const ObjectId objectId = GameObject::nextObjectId();
+        auto object = std::unique_ptr<GameObject>(new GameObject(registry_, entity, objectId, name));
+        names_[name] = objectId;
+        objects_.push_back(std::move(object));
+        indexObject(*objects_.back());
+    });
+}
+
+void Scene::rebuildHierarchyIndex() const {
+    const std::uint64_t componentRevision = registry_.componentRevision<ParentComponent>();
+    const std::uint64_t structuralRevision = registry_.structuralRevision();
+    if (hierarchyComponentRevision_ == componentRevision && hierarchyStructuralRevision_ == structuralRevision) {
+        return;
     }
 
-    Actor Scene::createPrefab(std::string name, std::filesystem::path path,
-                              const PBRMaterial &material) {
-        if (content_ == nullptr) {
-            throw std::logic_error("Scene has no Content service attached");
+    childrenByParent_.clear();
+    registry_.view<ParentComponent>([this](const Entity child, const ParentComponent& link) {
+        if (link.runtimeParent != NullEntity && objectByEntity_.contains(link.runtimeParent)) {
+            childrenByParent_[link.runtimeParent].push_back(child);
         }
-        return createPrefab(std::move(name), Prefab::model(*content_, std::move(path),
-                                                           material));
-    }
-
-    Actor Scene::createCube(std::string name, const PBRMaterial &material) {
-        const auto prefab = Prefab::cube(material);
-        return createPrefab(std::move(name), prefab);
-    }
-
-    Actor Scene::createPrefab(std::string name, const Prefab &prefab) {
-        if (!prefab.mesh()) {
-            throw std::invalid_argument("Cannot instantiate an empty prefab");
-        }
-        auto &object = createMeshObject(std::move(name), prefab.mesh(), prefab.material());
-        object.setCastShadow(prefab.castShadow());
-        object.setCullingBatch(prefab.cullingBatch());
-        return Actor{*this, object.objectId()};
-    }
-
-    Actor Scene::createTerrain(std::string name, TerrainComponent terrain) {
-        auto mesh = std::make_shared<Mesh>(terrain.createMesh());
-        PBRMaterial material{
-            .baseColor = {0.74F, 0.78F, 0.70F},
-            .metallic = 0.0F,
-            .roughness = 0.92F,
-            .terrainLayered = true,
-        };
-        terrain.applyMaterialLayers(*mesh, material);
-        auto &object = createMeshObject(std::move(name), mesh, material);
-        object.addTerrain(std::move(terrain));
-        object.addMeshCollider();
-        return Actor{*this, object.objectId()};
-    }
-
-    void Scene::save(const std::filesystem::path &path) const {
-        SceneSerializer::save(*this, path);
-    }
-
-    void Scene::load(const std::filesystem::path &path) {
-        SceneSerializer::load(*this, path);
-    }
-
-    void Scene::rebuildObjectHandles() {
-        objects_.clear();
-        names_.clear();
-        objectById_.clear();
-        objectByEntity_.clear();
-        entityByObjectId_.clear();
-        entityByUuid_.clear();
-        childrenByParent_.clear();
-        registry_.view<>([this](const Entity entity) {
-            std::string name = "Entity " + std::to_string(entityIndex(entity));
-            if (registry_.has<NameComponent>(entity)) {
-                name = registry_.get<NameComponent>(entity).value;
-            }
-            const ObjectId objectId = GameObject::nextObjectId();
-            auto object = std::unique_ptr<GameObject>(
-                new GameObject(registry_, entity, objectId, name));
-            names_[name] = objectId;
-            objects_.push_back(std::move(object));
-            indexObject(*objects_.back());
-        });
-    }
-
-    void Scene::rebuildHierarchyIndex() const {
-        const std::uint64_t componentRevision = registry_.componentRevision<ParentComponent>();
-        const std::uint64_t structuralRevision = registry_.structuralRevision();
-        if (hierarchyComponentRevision_ == componentRevision &&
-            hierarchyStructuralRevision_ == structuralRevision) {
-            return;
-        }
-
-        childrenByParent_.clear();
-        registry_.view<ParentComponent>([this](const Entity child, const ParentComponent &link) {
-            if (link.runtimeParent != NullEntity && objectByEntity_.contains(link.runtimeParent)) {
-                childrenByParent_[link.runtimeParent].push_back(child);
-            }
-        });
-        hierarchyComponentRevision_ = componentRevision;
-        hierarchyStructuralRevision_ = structuralRevision;
-    }
+    });
+    hierarchyComponentRevision_ = componentRevision;
+    hierarchyStructuralRevision_ = structuralRevision;
+}
 } // namespace Engine
 
 // NOLINTEND(readability-magic-numbers)

@@ -1,1791 +1,2170 @@
-        void synchronizeGlassAtlasSlots() {
-            const Registry &readRegistry=registry;
-            std::array<GlassAtlasOwner,512> owners{};
-            std::unordered_map<Entity,unsigned> slots;
-            unsigned count=0;
-            // Keep surviving panes in their previous order, then fill new slots.
-            for (const auto &owner:glassAtlasOwners) {
-                if (!readRegistry.valid(owner.entity) || !readRegistry.has<GlassDestructionComponent>(owner.entity) ||
-                    !readRegistry.has<MeshRendererComponent>(owner.entity) || !readRegistry.has<UUIDComponent>(owner.entity) ||
-                    readRegistry.get<UUIDComponent>(owner.entity).value!=owner.uuid) continue;
-                slots.emplace(owner.entity,count); owners[count++]=owner;
+void synchronizeGlassAtlasSlots() {
+    const Registry& readRegistry = registry;
+    std::array<GlassAtlasOwner, 512> owners{};
+    std::unordered_map<Entity, unsigned> slots;
+    unsigned count = 0;
+    // Keep surviving panes in their previous order, then fill new slots.
+    for (const auto& owner : glassAtlasOwners) {
+        if (!readRegistry.valid(owner.entity) || !readRegistry.has<GlassDestructionComponent>(owner.entity) ||
+            !readRegistry.has<MeshRendererComponent>(owner.entity) || !readRegistry.has<UUIDComponent>(owner.entity) ||
+            readRegistry.get<UUIDComponent>(owner.entity).value != owner.uuid)
+            continue;
+        slots.emplace(owner.entity, count);
+        owners[count++] = owner;
+    }
+    readRegistry.view<GlassDestructionComponent, MeshRendererComponent, UUIDComponent>(
+        [&](Entity entity, const auto&, const auto&, const auto& uuid) {
+            if (count >= owners.size() || slots.contains(entity))
+                return;
+            slots.emplace(entity, count);
+            owners[count++] = {entity, uuid.value};
+        });
+    glassAtlasOwners = owners;
+    glassAtlasPaneCount = count;
+    readRegistry.view<GlassDestructionComponent, MeshRendererComponent, UUIDComponent>(
+        [&](Entity entity, const auto& glass, const auto&, const auto&) {
+            const auto entry = slots.find(entity);
+            const unsigned slot = entry == slots.end() ? ~0U : entry->second;
+            if (glass.crackAtlasIndex == slot)
+                return;
+            glass.crackAtlasIndex = slot;
+            registry.markChanged<GlassDestructionComponent>(entity);
+            const auto records = sceneGpu.renderableIndices.find(entity);
+            if (records == sceneGpu.renderableIndices.end())
+                return;
+            for (auto index : records->second) {
+                instanceModels[index].scaleBase.w = slot == ~0U ? 0.0F : std::bit_cast<float>(slot + 1U);
+                markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
             }
-            readRegistry.view<GlassDestructionComponent,MeshRendererComponent,UUIDComponent>(
-                [&](Entity entity,const auto &,const auto &,const auto &uuid) {
-                    if (count>=owners.size() || slots.contains(entity)) return;
-                    slots.emplace(entity,count); owners[count++]={entity,uuid.value};
-                });
-            glassAtlasOwners=owners; glassAtlasPaneCount=count;
-            readRegistry.view<GlassDestructionComponent,MeshRendererComponent,UUIDComponent>(
-                [&](Entity entity,const auto &glass,const auto &,const auto &) {
-                    const auto entry=slots.find(entity);
-                    const unsigned slot=entry==slots.end() ? ~0U : entry->second;
-                    if (glass.crackAtlasIndex==slot) return;
-                    glass.crackAtlasIndex=slot;
-                    registry.markChanged<GlassDestructionComponent>(entity);
-                    const auto records=sceneGpu.renderableIndices.find(entity);
-                    if (records==sceneGpu.renderableIndices.end()) return;
-                    for (auto index:records->second) {
-                        instanceModels[index].scaleBase.w=slot==~0U ? 0.0F : std::bit_cast<float>(slot+1U);
-                        markDirty(index,&RenderableRecord::transformDirtyFrames,dirtyTransforms);
-                    }
-                });
-        }
+        });
+}
 
-        [[nodiscard]] float glassCrackSlot(Entity entity) {
-            const Registry &readRegistry=registry;
-            if (!readRegistry.has<GlassDestructionComponent>(entity)) return 0.0F;
-            const auto &glass=readRegistry.get<GlassDestructionComponent>(entity);
-            const unsigned slot=glass.crackAtlasIndex;
-            if (slot>=glassAtlasPaneCount) return 0.0F;
-            const auto &owner=glassAtlasOwners[slot];
-            if (owner.entity!=entity || owner.uuid!=readRegistry.get<UUIDComponent>(entity).value) return 0.0F;
-            return std::bit_cast<float>(slot+1U);
-        }
+[[nodiscard]] float glassCrackSlot(Entity entity) {
+    const Registry& readRegistry = registry;
+    if (!readRegistry.has<GlassDestructionComponent>(entity))
+        return 0.0F;
+    const auto& glass = readRegistry.get<GlassDestructionComponent>(entity);
+    const unsigned slot = glass.crackAtlasIndex;
+    if (slot >= glassAtlasPaneCount)
+        return 0.0F;
+    const auto& owner = glassAtlasOwners[slot];
+    if (owner.entity != entity || owner.uuid != readRegistry.get<UUIDComponent>(entity).value)
+        return 0.0F;
+    return std::bit_cast<float>(slot + 1U);
+}
 
-        // Each glass mesh version keeps immutable packed geometry. Local impact
-        // refinement replaces the handle while preserving detached section IDs.
-        // Detached sections are inactive
-        // GPU objects; compute culling compacts only the live indirect commands.
-        [[nodiscard]] bool glassSectionVisible(const RenderableRecord &record) const {
-            if (!scene.registry().has<GlassDestructionComponent>(record.entity)) return true;
-            const auto &glass = scene.registry().get<GlassDestructionComponent>(record.entity);
-            // Fragment slots and the final intact slot are reserved at load time.
-            // Legacy unprepared meshes still draw normally until preparation.
-            const auto &sections = scene.registry().get<MeshRendererComponent>(record.entity).mesh.resource()->metadata.sections;
-            if (sections.size() != glass.fragments.size() + 1) return !glass.fractured;
-            if (record.sectionIndex >= glass.fragments.size()) return !glass.fractured;
-            if (!glass.fractured) return false;
-            const auto &fragment = glass.fragments[record.sectionIndex];
-            return fragment.attached || scene.registry().valid(fragment.debrisEntity);
-        }
+// Each glass mesh version keeps immutable packed geometry. Local impact
+// refinement replaces the handle while preserving detached section IDs.
+// Detached sections are inactive
+// GPU objects; compute culling compacts only the live indirect commands.
+[[nodiscard]] bool glassSectionVisible(const RenderableRecord& record) const {
+    if (!scene.registry().has<GlassDestructionComponent>(record.entity))
+        return true;
+    const auto& glass = scene.registry().get<GlassDestructionComponent>(record.entity);
+    // Fragment slots and the final intact slot are reserved at load time.
+    // Legacy unprepared meshes still draw normally until preparation.
+    const auto& sections =
+        scene.registry().get<MeshRendererComponent>(record.entity).mesh.resource()->metadata.sections;
+    if (sections.size() != glass.fragments.size() + 1)
+        return !glass.fractured;
+    if (record.sectionIndex >= glass.fragments.size())
+        return !glass.fractured;
+    if (!glass.fractured)
+        return false;
+    const auto& fragment = glass.fragments[record.sectionIndex];
+    return fragment.attached || scene.registry().valid(fragment.debrisEntity);
+}
 
-        [[nodiscard]] Entity glassSectionEntity(const RenderableRecord &record) const {
-            if (scene.registry().has<GlassDestructionComponent>(record.entity)) {
-                const auto &glass = scene.registry().get<GlassDestructionComponent>(record.entity);
-                if (glass.fractured && record.sectionIndex < glass.fragments.size()) {
-                    const auto &fragment = glass.fragments[record.sectionIndex];
-                    if (!fragment.attached && scene.registry().valid(fragment.debrisEntity))
-                        return fragment.debrisEntity;
-                }
+[[nodiscard]] Entity glassSectionEntity(const RenderableRecord& record) const {
+    if (scene.registry().has<GlassDestructionComponent>(record.entity)) {
+        const auto& glass = scene.registry().get<GlassDestructionComponent>(record.entity);
+        if (glass.fractured && record.sectionIndex < glass.fragments.size()) {
+            const auto& fragment = glass.fragments[record.sectionIndex];
+            if (!fragment.attached && scene.registry().valid(fragment.debrisEntity))
+                return fragment.debrisEntity;
+        }
+    }
+    return record.entity;
+}
+
+[[nodiscard]] glm::mat4 glassSectionModel(const RenderableRecord& record) const {
+    const auto source = glassSectionEntity(record);
+    const auto model = scene.registry().get<Transform>(source).worldMatrix().native();
+    if (source == record.entity)
+        return model;
+    const auto& fragment =
+        scene.registry().get<GlassDestructionComponent>(record.entity).fragments[record.sectionIndex];
+    return glm::translate(model, glm::vec3{-fragment.center, 0.0F});
+}
+
+[[nodiscard]] std::uint32_t liveBatchIndexCount(std::size_t batchIndex) const {
+    const auto& batch = instanceBatches[batchIndex];
+    const auto& indices = sceneGpu.batchRenderableIndices[batchIndex];
+    if (indices.empty() || !scene.registry().has<GlassDestructionComponent>(renderables[indices.front()].entity))
+        return batch.indexCount;
+    for (auto index : sceneGpu.batchRenderableIndices[batchIndex])
+        if (renderables[index].visible) {
+            const auto* resource = static_cast<const MeshGpuResource*>(batch.mesh);
+            const auto& sections = resource->metadata.sections;
+            const auto section = renderables[index].sectionIndex;
+            return section < sections.size() ? sections[section].indexCount : resource->metadata.indexCount;
+        }
+    return 0;
+}
+
+void refreshCullingBatchObjects() {
+    constexpr std::size_t modelDiagonalStride = 5;
+    const std::uint32_t objectCount = static_cast<std::uint32_t>(instanceBatches.size());
+    gpuObjects.resize(objectCount);
+    for (std::uint32_t i = 0; i < objectCount; ++i) {
+        InstanceBatch& batch = instanceBatches[i];
+        batch.indexCount = liveBatchIndexCount(i);
+        auto& object = gpuObjects[i];
+        object.model = {};
+        object.model.data[0] = 1.0F;
+        object.model.data[modelDiagonalStride] = 1.0F;
+        object.model.data[modelDiagonalStride * 2] = 1.0F;
+        object.model.data[modelDiagonalStride * 3] = 1.0F;
+        const AABB& bounds = batch.worldBounds;
+        object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F};
+        object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F};
+        object.indexCount = batch.indexCount;
+        object.instanceCount = batch.instanceCount;
+        object.firstIndex = batch.firstIndex;
+        object.vertexOffset = 0;
+        object.firstInstance = batch.firstInstance;
+        object.castShadow = batch.castShadow ? 1U : 0U;
+        object.shadowCacheMode = static_cast<std::uint32_t>(batch.shadowCacheMode);
+        object.twoSided = batch.foliagePipeline ? 1U : 0U;
+        object.shader = batch.shaderSlot;
+        object.lod1IndexCount = batch.lod1IndexCount;
+        object.lod2IndexCount = batch.lod2IndexCount;
+        object.lod1DistanceSq = batch.lod1Distance * batch.lod1Distance;
+        object.lod2DistanceSq = batch.lod2Distance * batch.lod2Distance;
+    }
+    const Culling::GPUObjectData emptyObject{};
+    for (Buffer& buffer : cullingObjectBuffers) {
+        if (buffer.handle() == VK_NULL_HANDLE)
+            continue;
+        buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
+                      sizeof(Culling::GPUObjectData) * std::max(1U, objectCount));
+    }
+    for (RenderableRecord& record : renderables)
+        record.cullingDirtyFrames = 0;
+}
+
+[[nodiscard]] bool canReuseCullingResources() const {
+    // Grass has a separate, variable set of compacted scratch lists;
+    // keep its migration boundary explicit until it gets its own heap.
+    if (!sceneGpu.grassInstances.empty() || !sceneGpu.grassClusters.empty() || cullingDescriptorPool == VK_NULL_HANDLE)
+        return false;
+    const VkDeviceSize objectBytes = sizeof(Culling::GPUObjectData) * std::max<std::size_t>(1, instanceBatches.size());
+    const VkDeviceSize visibleBytes =
+        sizeof(std::uint32_t) * std::max<std::size_t>(1, sceneGpu.database.instances().size());
+    if (!meshletForwardPathActive || !vulkanDevice.supportsMeshShaders()) {
+        if (meshletVisibleCapacity != 1)
+            return false;
+    } else {
+        std::uint64_t requiredVisibleMeshlets = 0;
+        for (const auto& instance : sceneGpu.database.instances()) {
+            if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size())
+                continue;
+            requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
+        }
+        if (requiredVisibleMeshlets > meshletVisibleCapacity)
+            return false;
+    }
+    const VkDeviceSize indirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
+                                       std::max<std::size_t>(1, instanceBatches.size()) * MaterialProgramSlotCount;
+    const VkDeviceSize shadowIndirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
+                                             std::max<std::size_t>(1, instanceBatches.size()) *
+                                             ShadowMap::MaxPageUpdatesPerFrame;
+    const VkDeviceSize shadowCandidateBytes =
+        sizeof(std::uint32_t) * std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::ClipLevelCount;
+    const VkDeviceSize shadowTransformBytes =
+        sizeof(RendererInstanceData) *
+        std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()), ShadowMap::MaxCasterInstancesPerPage) *
+        ShadowMap::MaxPageUpdatesPerFrame;
+    const VkDeviceSize shadowVisibleBytes =
+        sizeof(Culling::ShadowVisibleInstance) *
+        std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()), ShadowMap::MaxCasterInstancesPerPage) *
+        ShadowMap::MaxPageUpdatesPerFrame;
+    const VkDeviceSize shadowMaterialBytes =
+        sizeof(std::uint32_t) *
+        std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()), ShadowMap::MaxCasterInstancesPerPage) *
+        ShadowMap::MaxPageUpdatesPerFrame;
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        if (cullingObjectBuffers[frame].size() < objectBytes || visibleInstanceBuffers[frame].size() < visibleBytes ||
+            indirectBuffers[frame].size() < indirectBytes || foliageIndirectBuffers[frame].size() < indirectBytes ||
+            shadowIndirectBuffers[frame].size() < shadowIndirectBytes ||
+            shadowTwoSidedIndirectBuffers[frame].size() < shadowIndirectBytes ||
+            shadowCandidateBuffers[frame].size() < shadowCandidateBytes ||
+            shadowTwoSidedCandidateBuffers[frame].size() < shadowCandidateBytes ||
+            shadowInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
+            shadowTwoSidedInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
+            shadowVisibleInstanceBuffers[frame].size() < shadowVisibleBytes ||
+            shadowTwoSidedVisibleInstanceBuffers[frame].size() < shadowVisibleBytes ||
+            shadowInstanceMaterialBuffers[frame].size() < shadowMaterialBytes ||
+            shadowTwoSidedInstanceMaterialBuffers[frame].size() < shadowMaterialBytes)
+            return false;
+    }
+    return true;
+}
+
+void createCullingResources() {
+    auto uploadBatch = uploadContext.beginBatch();
+    constexpr std::size_t cullingDescriptorBindingCount = 15;
+    const std::uint32_t grassBinCount =
+        std::max(1u, static_cast<std::uint32_t>(sceneGpu.database.meshes().size() * 3u));
+
+    hiZValid.fill(false);
+    const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
+    std::uint64_t requiredVisibleMeshlets = 0;
+    if (meshletForwardPathActive && vulkanDevice.supportsMeshShaders()) {
+        for (const auto& instance : sceneGpu.database.instances()) {
+            if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size())
+                continue;
+            requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
+        }
+        if (requiredVisibleMeshlets > std::numeric_limits<std::uint32_t>::max())
+            throw std::runtime_error("Visible meshlet list exceeds uint32 capacity");
+    }
+    const std::uint32_t meshletCapacity =
+        static_cast<std::uint32_t>(std::max<std::uint64_t>(1, requiredVisibleMeshlets));
+    meshletVisibleCapacity = meshletCapacity;
+    // An empty ECS scene still renders the sky, editor UI, and fallback
+    // camera.  Keep the per-view UBOs and descriptor-backed culling
+    // resources alive with inert storage entries; logical draw counts
+    // below remain zero when there are no renderables.
+    // Generic descriptors remain valid in a grass-only scene, but
+    // their backing allocations need one inert element. Their draw
+    // counts stay zero because objectCount itself remains zero.
+    const auto genericCapacity = std::max(1u, objectCount + objectCount / 2u + 1u);
+    // Passes and indirect draws require a non-zero physical capacity.
+    // Runtime culling still receives objectCount, which may be zero.
+    const auto passCapacity = genericCapacity;
+    const auto shadowPassCapacity = passCapacity;
+    const auto clusterCountFor = [](const VkExtent2D extent) {
+        const std::uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
+        const std::uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
+        return std::max(1U, tilesX * tilesY * ClusterDepthSlices);
+    };
+    const std::uint32_t gameClusterCount = clusterCountFor(swapchain.extent());
+    const std::uint32_t sceneClusterCount = clusterCountFor(sceneViewportTarget.extent());
+
+    // Keep the complete R32F hierarchy out of memory unless the
+    // feature can actually consume it. Frustum/GPU culling remains
+    // available without this optional occlusion input.
+    // VSM receiver marking consumes the previous depth hierarchy even
+    // when object occlusion culling itself is disabled.
+    const bool allocateHiZ = canUseHiZOcclusionCulling() || optimizationFeatures.shadows;
+    if (allocateHiZ) {
+        for (auto& hiZBuffer : hiZBuffers) {
+            hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height,
+                             vulkanDevice.allocator());
+        }
+    }
+
+    constexpr VkDescriptorSetLayoutBinding copyBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = std::size(copyBindings);
+    layoutInfo.pBindings = copyBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &hiZCopyDescriptorSetLayout) != VK_SUCCESS ||
+        vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &hiZReduceDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create Hi-Z descriptor-set layouts");
+    }
+    const VkDescriptorSetLayoutBinding vsmPageMarkingBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+    layoutInfo.bindingCount = std::size(vsmPageMarkingBindings);
+    layoutInfo.pBindings = vsmPageMarkingBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &vsmPageMarkingDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create VSM page-marking descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding vsmPageCompactBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+    layoutInfo.bindingCount = std::size(vsmPageCompactBindings);
+    layoutInfo.pBindings = vsmPageCompactBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &vsmPageCompactDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create VSM page-compaction descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding cullBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+    layoutInfo.bindingCount = std::size(cullBindings);
+    layoutInfo.pBindings = cullBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &cullingDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create culling descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding instanceCullBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+    layoutInfo.bindingCount = std::size(instanceCullBindings);
+    layoutInfo.pBindings = instanceCullBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &instanceCullingDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create instance-culling descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding meshletCullBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+    layoutInfo.bindingCount = std::size(meshletCullBindings);
+    layoutInfo.pBindings = meshletCullBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &meshletCullingDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create meshlet-culling descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding meshletDispatchBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+    layoutInfo.bindingCount = std::size(meshletDispatchBindings);
+    layoutInfo.pBindings = meshletDispatchBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &meshletDispatchDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create meshlet-dispatch descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding meshletIndirectBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    };
+    layoutInfo.bindingCount = std::size(meshletIndirectBindings);
+    layoutInfo.pBindings = meshletIndirectBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &meshletIndirectDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create meshlet-indirect descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding grassBuildBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassBuildBindings);
+    layoutInfo.pBindings = grassBuildBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassBuildDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create grass-build descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding grassDispatchBuildBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassDispatchBuildBindings);
+    layoutInfo.pBindings = grassDispatchBuildBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassDispatchBuildDescriptorSetLayout) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("Could not create grass dispatch-build descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding grassPrefixBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassPrefixBindings);
+    layoutInfo.pBindings = grassPrefixBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPrefixDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create grass-prefix descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding grassScatterBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassScatterBindings);
+    layoutInfo.pBindings = grassScatterBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassScatterDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create grass-scatter descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding grassFinalizeBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassFinalizeBindings);
+    layoutInfo.pBindings = grassFinalizeBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassFinalizeDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create grass-finalize descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding grassPackedCullBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassPackedCullBindings);
+    layoutInfo.pBindings = grassPackedCullBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedCullDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create packed grass-cull descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding grassShadowPageCullBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassShadowPageCullBindings);
+    layoutInfo.pBindings = grassShadowPageCullBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassShadowPageCullDescriptorSetLayout) !=
+        VK_SUCCESS)
+        throw std::runtime_error("Could not create grass VSM page-cull descriptor-set layout");
+    const VkDescriptorSetLayoutBinding grassBladeCullBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassBladeCullBindings);
+    layoutInfo.pBindings = grassBladeCullBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassBladeCullDescriptorSetLayout) != VK_SUCCESS)
+        throw std::runtime_error("Could not create grass blade-cull descriptor-set layout");
+    const VkDescriptorSetLayoutBinding grassClassifyBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassClassifyBindings);
+    layoutInfo.pBindings = grassClassifyBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassClassifyDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create grass-classify descriptor-set layout");
+    }
+    const VkDescriptorSetLayoutBinding grassPackedBinBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassPackedBinBindings);
+    layoutInfo.pBindings = grassPackedBinBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedBinDescriptorSetLayout) != VK_SUCCESS)
+        throw std::runtime_error("Could not create packed grass-bin layout");
+    const VkDescriptorSetLayoutBinding grassPackedScatterBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassPackedScatterBindings);
+    layoutInfo.pBindings = grassPackedScatterBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedScatterDescriptorSetLayout) != VK_SUCCESS)
+        throw std::runtime_error("Could not create packed grass-scatter layout");
+    const VkDescriptorSetLayoutBinding grassPackedFinalizeBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(grassPackedFinalizeBindings);
+    layoutInfo.pBindings = grassPackedFinalizeBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedFinalizeDescriptorSetLayout) !=
+        VK_SUCCESS)
+        throw std::runtime_error("Could not create packed grass-finalize layout");
+    const VkDescriptorSetLayoutBinding clusteredLightingBindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    layoutInfo.bindingCount = std::size(clusteredLightingBindings);
+    layoutInfo.pBindings = clusteredLightingBindings;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &clusteredLightingDescriptorSetLayout) != VK_SUCCESS)
+        throw std::runtime_error("Could not create clustered-light descriptor layout");
+    const auto createLayout = [&](VkDescriptorSetLayout setLayout, VkPipelineLayout& pipelineLayout,
+                                  const VkPushConstantRange* pushConstantRange = nullptr) {
+        VkPipelineLayoutCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        info.setLayoutCount = 1;
+        info.pSetLayouts = &setLayout;
+        if (pushConstantRange != nullptr) {
+            info.pushConstantRangeCount = 1;
+            info.pPushConstantRanges = pushConstantRange;
+        }
+        if (vkCreatePipelineLayout(device, &info, nullptr, &pipelineLayout) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create Hi-Z pipeline layout");
+        }
+    };
+    createLayout(hiZCopyDescriptorSetLayout, hiZCopyPipelineLayout);
+    createLayout(hiZReduceDescriptorSetLayout, hiZReducePipelineLayout);
+    createLayout(vsmPageMarkingDescriptorSetLayout, vsmPageMarkingPipelineLayout);
+    createLayout(vsmPageCompactDescriptorSetLayout, vsmPageCompactPipelineLayout);
+    // mat4 plus page-culling control fields. Keep this synchronized
+    // with CullingPushConstants in GPUCullingPass.cpp/.slang.
+    const VkPushConstantRange cullingPushConstants{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Mat4) + 28};
+    createLayout(cullingDescriptorSetLayout, cullingPipelineLayout, &cullingPushConstants);
+    createLayout(instanceCullingDescriptorSetLayout, instanceCullingPipelineLayout);
+    createLayout(meshletCullingDescriptorSetLayout, meshletCullingPipelineLayout);
+    createLayout(meshletDispatchDescriptorSetLayout, meshletDispatchPipelineLayout);
+    createLayout(meshletIndirectDescriptorSetLayout, meshletIndirectPipelineLayout);
+    createLayout(grassBuildDescriptorSetLayout, grassBuildPipelineLayout);
+    createLayout(grassDispatchBuildDescriptorSetLayout, grassDispatchBuildPipelineLayout);
+    createLayout(grassPrefixDescriptorSetLayout, grassPrefixPipelineLayout);
+    createLayout(grassScatterDescriptorSetLayout, grassScatterPipelineLayout);
+    createLayout(grassFinalizeDescriptorSetLayout, grassFinalizePipelineLayout);
+    createLayout(grassPackedCullDescriptorSetLayout, grassPackedCullPipelineLayout);
+    createLayout(grassShadowPageCullDescriptorSetLayout, grassShadowPageCullPipelineLayout);
+    createLayout(grassBladeCullDescriptorSetLayout, grassBladeCullPipelineLayout);
+    createLayout(grassClassifyDescriptorSetLayout, grassClassifyPipelineLayout);
+    createLayout(grassPackedBinDescriptorSetLayout, grassPackedBinPipelineLayout);
+    createLayout(grassPackedScatterDescriptorSetLayout, grassPackedScatterPipelineLayout);
+    createLayout(grassPackedFinalizeDescriptorSetLayout, grassPackedFinalizePipelineLayout);
+    createLayout(clusteredLightingDescriptorSetLayout, clusteredLightingPipelineLayout);
+    hiZCopyPipeline = createComputePipeline("shaders/hiz_initialize.spv", hiZCopyPipelineLayout);
+    hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.spv", hiZReducePipelineLayout);
+    vsmPageMarkingPipeline = createComputePipeline("shaders/vsm_page_marking.spv", vsmPageMarkingPipelineLayout);
+    vsmPageCompactPipeline = createComputePipeline("shaders/vsm_page_compact.spv", vsmPageCompactPipelineLayout);
+    cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
+    instanceCullingPipeline = createComputePipeline("shaders/gpu_instance_culling.spv", instanceCullingPipelineLayout);
+    meshletCullingPipeline = createComputePipeline("shaders/meshlet_culling.spv", meshletCullingPipelineLayout);
+    meshletDispatchPipeline =
+        createComputePipeline("shaders/meshlet_build_dispatch.spv", meshletDispatchPipelineLayout);
+    meshletIndirectPipeline = createComputePipeline("shaders/meshlet_build_indexed.spv", meshletIndirectPipelineLayout);
+    grassBuildPipeline = createComputePipeline("shaders/grass_build_indirect.spv", grassBuildPipelineLayout);
+    grassDispatchBuildPipeline =
+        createComputePipeline("shaders/grass_build_dispatch.spv", grassDispatchBuildPipelineLayout);
+    grassPrefixPipeline = createComputePipeline("shaders/grass_prefix_sum.spv", grassPrefixPipelineLayout);
+    grassScatterPipeline = createComputePipeline("shaders/grass_scatter_instances.spv", grassScatterPipelineLayout);
+    grassFinalizePipeline = createComputePipeline("shaders/grass_finalize_indirect.spv", grassFinalizePipelineLayout);
+    grassBladeCullPipeline = createComputePipeline("shaders/grass_packed_cull.spv", grassBladeCullPipelineLayout);
+    // Cluster cull has the compact 5-binding layout retained above.
+    grassPackedCullPipeline = createComputePipeline("shaders/grass_cluster_cull.spv", grassPackedCullPipelineLayout);
+    grassShadowPageCullPipeline =
+        createComputePipeline("shaders/grass_shadow_page_cull.spv", grassShadowPageCullPipelineLayout);
+    grassClassifyPipeline = createComputePipeline("shaders/grass_classify.spv", grassClassifyPipelineLayout);
+    grassPackedBinPipeline = createComputePipeline("shaders/grass_packed_bin.spv", grassPackedBinPipelineLayout);
+    grassPackedPrefixPipeline = createComputePipeline("shaders/grass_packed_prefix.spv", grassPrefixPipelineLayout);
+    grassPackedScatterPipeline =
+        createComputePipeline("shaders/grass_packed_scatter.spv", grassPackedScatterPipelineLayout);
+    grassPackedFinalizePipeline =
+        createComputePipeline("shaders/grass_packed_finalize.spv", grassPackedFinalizePipelineLayout);
+    clusteredLightingPipeline =
+        createComputePipeline("shaders/clustered_light_culling.spv", clusteredLightingPipelineLayout);
+
+    refreshCullingBatchObjects();
+    for (Buffer& buffer : cullingObjectBuffers) {
+        buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(Culling::GPUObjectData) * genericCapacity,
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        const Culling::GPUObjectData emptyObject{};
+        buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
+                      sizeof(Culling::GPUObjectData) * std::max(1u, objectCount));
+    }
+
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        const GpuReflectionProbe emptyProbe{};
+        reflectionProbeBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                                                        sizeof(GpuReflectionProbe) * ReflectionProbeManager::MaxProbes,
+                                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        reflectionProbeBuffers[frame].update(&emptyProbe, sizeof(emptyProbe));
+        clusteredLightingUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        sceneClusteredLightingUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        std::vector<ClusterLightRangeGPU> emptyGameRanges(gameClusterCount);
+        std::vector<ClusterLightRangeGPU> emptySceneRanges(sceneClusterCount);
+        std::vector<std::uint32_t> emptyGameIndices(gameClusterCount * MaxLightsPerCluster);
+        std::vector<std::uint32_t> emptySceneIndices(sceneClusterCount * MaxLightsPerCluster);
+        clusteredLightRangeBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGameRanges.data(),
+            sizeof(ClusterLightRangeGPU) * emptyGameRanges.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        clusteredLightIndexBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGameIndices.data(), sizeof(std::uint32_t) * emptyGameIndices.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        sceneClusteredLightRangeBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptySceneRanges.data(),
+            sizeof(ClusterLightRangeGPU) * emptySceneRanges.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        sceneClusteredLightIndexBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptySceneIndices.data(), sizeof(std::uint32_t) * emptySceneIndices.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                                                       sizeof(Culling::CullingUniformData),
+                                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        sceneCullingUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        meshletCullingUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(Culling::MeshletCullUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        foliageCullingUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        shadowCullingUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        shadowTwoSidedCullingUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        const std::uint32_t zero = 0;
+        std::vector<std::uint32_t> emptyVisibleInstances(
+            std::max<std::size_t>(1, sceneGpu.database.instances().size()));
+        visibleInstanceBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyVisibleInstances.data(),
+            sizeof(std::uint32_t) * emptyVisibleInstances.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        visibleInstanceCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, &zero, sizeof(zero),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        const VkDispatchIndirectCommand emptyMeshletCullDispatch{};
+        meshletCullDispatchBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, &emptyMeshletCullDispatch, sizeof(emptyMeshletCullDispatch),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        visibleMeshletBuffers[frame].createDeviceLocalEmpty(device, sizeof(Culling::VisibleMeshlet) * meshletCapacity,
+                                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                            vulkanDevice.allocator());
+        visibleMeshletCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, &zero, sizeof(zero),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        meshletIndexedIndirectBuffers[frame].createDeviceLocalEmpty(
+            device,
+            sizeof(VkDrawIndexedIndirectCommand) * static_cast<VkDeviceSize>(meshletCapacity) *
+                MaterialProgramSlotCount,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, vulkanDevice.allocator());
+        std::array<std::uint32_t, MaterialProgramSlotCount> emptyMeshletCounts{};
+        meshletIndexedDrawCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyMeshletCounts.data(), sizeof(emptyMeshletCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        meshletIndexedIndirectDraws[frame].create(meshletIndexedIndirectBuffers[frame].handle(),
+                                                  meshletIndexedDrawCountBuffers[frame].handle(), meshletCapacity);
+        std::vector<std::uint32_t> emptyGrassBins(grassBinCount, 0U);
+        grassBinCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGrassBins.data(), sizeof(std::uint32_t) * emptyGrassBins.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        grassBinOffsetBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGrassBins.data(), sizeof(std::uint32_t) * emptyGrassBins.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        grassBinCursorBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGrassBins.data(), sizeof(std::uint32_t) * emptyGrassBins.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        const std::vector<GPUGrassInstance> emptyGeneratedGrass =
+            sceneGpu.grassInstances.empty() ? std::vector<GPUGrassInstance>(1) : sceneGpu.grassInstances;
+        generatedGrassInstanceBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGeneratedGrass.data(),
+            sizeof(GPUGrassInstance) * emptyGeneratedGrass.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        const std::vector<GPUGrassDeformation> emptyGrassDeformations =
+            sceneGpu.grassDeformations.empty() ? std::vector<GPUGrassDeformation>(1) : sceneGpu.grassDeformations;
+        // This is the only per-blade buffer updated at runtime. Each
+        // frame owns one copy, so mapped coherent memory is safe once
+        // that frame's fence has completed and avoids an extra staging
+        // submission for every grass interaction.
+        grassDeformationBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                                                         sizeof(GPUGrassDeformation) * emptyGrassDeformations.size(),
+                                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        grassDeformationBuffers[frame].update(emptyGrassDeformations.data(),
+                                              sizeof(GPUGrassDeformation) * emptyGrassDeformations.size());
+        const std::vector<GPUGrassCluster> emptyGrassClusters =
+            sceneGpu.grassClusters.empty() ? std::vector<GPUGrassCluster>(1) : sceneGpu.grassClusters;
+        grassClusterBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGrassClusters.data(),
+            sizeof(GPUGrassCluster) * emptyGrassClusters.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        std::vector<VkDrawIndexedIndirectCommand> emptyGrassCommands(grassBinCount);
+        grassIndirectBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGrassCommands.data(),
+            sizeof(VkDrawIndexedIndirectCommand) * emptyGrassCommands.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        grassDrawCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, &zero, sizeof(zero),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        const std::size_t grassClusterCapacity = std::max<std::size_t>(1, sceneGpu.grassClusters.size());
+        const std::size_t grassPageCommandCapacity = grassClusterCapacity * ShadowMap::MaxPageUpdatesPerFrame;
+        std::vector<VkDrawIndexedIndirectCommand> emptyGrassPageCommands(grassPageCommandCapacity);
+        std::array<std::uint32_t, ShadowMap::MaxPageUpdatesPerFrame> emptyPageCounts{};
+        std::array<glm::mat4, ShadowMap::MaxPageUpdatesPerFrame> emptyPageMatrices{};
+        grassShadowPageMatricesBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(emptyPageMatrices), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vulkanDevice.allocator());
+        grassShadowPageMatricesBuffers[frame].update(emptyPageMatrices.data(), sizeof(emptyPageMatrices));
+        grassShadowPageIndirectBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyGrassPageCommands.data(),
+            sizeof(VkDrawIndexedIndirectCommand) * emptyGrassPageCommands.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        grassShadowPageDrawCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyPageCounts.data(), sizeof(emptyPageCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        grassShadowPageCullUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(GrassShadowPageCullUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        grassIndirectUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(GrassIndirectUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        grassPrefixUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(GrassPrefixUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        std::vector<VkDrawIndexedIndirectCommand> emptyCommands(genericCapacity * MaterialProgramSlotCount);
+        indirectBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyCommands.data(),
+            sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        auto& lists = grassRenderLists[frame];
+        const std::size_t grassCapacity = std::max<std::size_t>(1, sceneGpu.grassInstances.size());
+        std::vector<std::uint32_t> emptyVisibleGrass(grassCapacity, 0U);
+        std::vector<VkDrawIndexedIndirectCommand> emptyGrassList(
+            std::max<std::size_t>(1, sceneGpu.grassClusters.size()));
+        lists.visibleInstances.createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleGrass.data(),
+                                                 sizeof(std::uint32_t) * grassCapacity,
+                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                 commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        const std::array<std::uint32_t, 3> zeroDispatchCounts{};
+        lists.visibleCount.createDeviceLocal(vulkanDevice.physical(), device, zeroDispatchCounts.data(),
+                                             sizeof(zeroDispatchCounts),
+                                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                             commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        const std::size_t clusterCapacity = std::max<std::size_t>(1, sceneGpu.grassClusters.size());
+        std::vector<std::uint32_t> emptyVisibleClusters(clusterCapacity, 0U);
+        lists.visibleClusters.createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleClusters.data(),
+                                                sizeof(std::uint32_t) * clusterCapacity,
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        lists.visibleClusterCount.createDeviceLocal(
+            vulkanDevice.physical(), device, &zero, sizeof(zero),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        const auto maxClusterInstances =
+            std::max_element(sceneGpu.grassClusters.begin(), sceneGpu.grassClusters.end(),
+                             [](const auto& a, const auto& b) { return a.instanceRange.y < b.instanceRange.y; });
+        const GrassBladeDispatchData bladeDispatch{maxClusterInstances == sceneGpu.grassClusters.end()
+                                                       ? 1U
+                                                       : (maxClusterInstances->instanceRange.y + 63U) / 64U,
+                                                   0U, 1U};
+        lists.bladeCullDispatch.createDeviceLocal(
+            vulkanDevice.physical(), device, &bladeDispatch, sizeof(bladeDispatch),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        const std::array<GrassBladeDispatchData, 3> emptyDispatches{};
+        lists.dispatchIndirect.createDeviceLocal(
+            vulkanDevice.physical(), device, emptyDispatches.data(), sizeof(emptyDispatches),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        for (Buffer* buffer :
+             {&lists.mainVisibleInstances, &lists.shadowVisibleInstances, &lists.velocityVisibleInstances})
+            buffer->createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleGrass.data(),
+                                      sizeof(std::uint32_t) * grassCapacity,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        std::array<std::uint32_t, 3> zeroStreamCounts{};
+        lists.classifyCounts.createDeviceLocal(vulkanDevice.physical(), device, zeroStreamCounts.data(),
+                                               sizeof(zeroStreamCounts),
+                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                               commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        std::vector<std::uint32_t> zeroBins(clusterCapacity, 0U);
+        for (uint32_t stream = 0; stream < 3; ++stream) {
+            for (Buffer* buffer : {&lists.binCounts[stream], &lists.binOffsets[stream], &lists.binCursors[stream]})
+                buffer->createDeviceLocal(vulkanDevice.physical(), device, zeroBins.data(),
+                                          sizeof(std::uint32_t) * clusterCapacity,
+                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                          commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+            lists.drawInstances[stream].createDeviceLocal(
+                vulkanDevice.physical(), device, emptyVisibleGrass.data(), sizeof(std::uint32_t) * grassCapacity,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+                vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        }
+        grassClassifyUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(GrassClassifyUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        grassPackedCullUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(GrassPackedCullUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        for (Buffer& buffer : grassPackedStreamUniformBuffers[frame])
+            buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(GrassPackedStreamUniformData),
+                                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        for (Buffer* buffer : {&lists.mainIndirect, &lists.shadowIndirect, &lists.velocityIndirect})
+            buffer->createDeviceLocal(vulkanDevice.physical(), device, emptyGrassList.data(),
+                                      sizeof(VkDrawIndexedIndirectCommand) * emptyGrassList.size(),
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        for (Buffer* buffer : {&lists.mainDrawCount, &lists.shadowDrawCount, &lists.velocityDrawCount})
+            buffer->createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        // Scene descriptors share the grass scratch buffers created
+        // above for Game View; only descriptor-set identities differ.
+        foliageIndirectBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyCommands.data(),
+            sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        std::vector<std::uint32_t> emptyShadowCandidates(genericCapacity * ShadowMap::ClipLevelCount);
+        shadowCandidateBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyShadowCandidates.data(),
+            sizeof(std::uint32_t) * emptyShadowCandidates.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        shadowTwoSidedCandidateBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyShadowCandidates.data(),
+            sizeof(std::uint32_t) * emptyShadowCandidates.size(),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        std::array<std::uint32_t, ShadowMap::ClipLevelCount> zeroCandidateCounts{};
+        shadowCandidateCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, zeroCandidateCounts.data(), sizeof(zeroCandidateCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        shadowTwoSidedCandidateCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, zeroCandidateCounts.data(), sizeof(zeroCandidateCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        std::array<VkDispatchIndirectCommand, ShadowMap::ClipLevelCount> emptyCandidateDispatches{};
+        shadowCandidateDispatchBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyCandidateDispatches.data(), sizeof(emptyCandidateDispatches),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        shadowTwoSidedCandidateDispatchBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, emptyCandidateDispatches.data(), sizeof(emptyCandidateDispatches),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        shadowIndirectBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(VkDrawIndexedIndirectCommand) * shadowPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, vulkanDevice.allocator());
+        std::array<Culling::ShadowPageWork, ShadowMap::MaxPageUpdatesPerFrame> emptyPageWork{};
+        shadowPageWorkBuffers[frame].createHostVisible(vulkanDevice.physical(), device, sizeof(emptyPageWork),
+                                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        constexpr std::uint32_t vsmRequestWordCount = (ShadowMap::VirtualPageCount + 31U) / 32U;
+        const std::array<std::uint32_t, vsmRequestWordCount> emptyVsmRequests{};
+        vsmRequestedPageBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(emptyVsmRequests),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, vulkanDevice.allocator());
+        const std::array<std::uint32_t, ShadowMap::VirtualPageCount> emptyVsmPageKeys{};
+        const std::uint32_t emptyVsmPageCount = 0;
+        vsmCompactedPageBuffers[frame].createHostVisible(vulkanDevice.physical(), device, sizeof(emptyVsmPageKeys),
+                                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        vsmCompactedPageCountBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(emptyVsmPageCount),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, vulkanDevice.allocator());
+        vsmPageMarkingUniformBuffers[frame].createHostVisible(
+            vulkanDevice.physical(), device, sizeof(VsmPageMarkingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            vulkanDevice.allocator());
+        shadowTwoSidedIndirectBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(VkDrawIndexedIndirectCommand) * shadowPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, vulkanDevice.allocator());
+        std::array<std::uint32_t, ShadowMap::MaxPageUpdatesPerFrame> zeroShadowCounts{};
+        // One independent compact range per page lets the 2D page
+        // culling dispatch write transforms without cross-page atomics.
+        const std::size_t shadowTransformCount = std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
+                                                                       ShadowMap::MaxCasterInstancesPerPage) *
+                                                 ShadowMap::MaxPageUpdatesPerFrame;
+        for (Buffer* buffer : {&shadowInstanceTransformBuffers[frame], &shadowTwoSidedInstanceTransformBuffers[frame]})
+            buffer->createDeviceLocalEmpty(device, sizeof(RendererInstanceData) * shadowTransformCount,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        for (Buffer* buffer : {&shadowVisibleInstanceBuffers[frame], &shadowTwoSidedVisibleInstanceBuffers[frame]})
+            buffer->createDeviceLocalEmpty(device, sizeof(Culling::ShadowVisibleInstance) * shadowTransformCount,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        shadowInstanceTransformCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, zeroShadowCounts.data(), sizeof(zeroShadowCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        shadowTwoSidedInstanceTransformCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, zeroShadowCounts.data(), sizeof(zeroShadowCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
+            vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        for (Buffer* buffer : {&shadowInstanceMaterialBuffers[frame], &shadowTwoSidedInstanceMaterialBuffers[frame]})
+            buffer->createDeviceLocalEmpty(device, sizeof(std::uint32_t) * shadowTransformCount,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        const std::array<std::uint32_t, MaterialProgramSlotCount> zeroMaterialDrawCounts{};
+        drawCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        foliageDrawCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        shadowDrawCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, zeroShadowCounts.data(), sizeof(zeroShadowCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        shadowTwoSidedDrawCountBuffers[frame].createDeviceLocal(
+            vulkanDevice.physical(), device, zeroShadowCounts.data(), sizeof(zeroShadowCounts),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+    }
+
+    constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 6;
+    constexpr uint32_t instanceCullSetCount = MAX_FRAMES_IN_FLIGHT;
+    // Per frame: 4 legacy sets, game cluster/blade/classify sets,
+    // 14 per-frame shared sets (including four dispatch builders),
+    // plus 24 stream-builder sets and one VSM page-cull set.
+    // Keep this in lockstep with allocateGrassSets below.
+    constexpr uint32_t grassSetCount = MAX_FRAMES_IN_FLIGHT * 39;
+    const uint32_t hiZDescriptorSetCount = hiZBuffers[0].mipCount() * MAX_FRAMES_IN_FLIGHT;
+    const uint32_t imageDescriptors = hiZDescriptorSetCount + cullingSetCount;
+    const VkDescriptorPoolSize poolSizes[] = {
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors + MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         cullingSetCount * 12 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 152},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 31},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZDescriptorSetCount},
+    };
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.maxSets =
+        hiZDescriptorSetCount + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 7;
+    poolInfo.poolSizeCount = allocateHiZ ? std::size(poolSizes) : std::size(poolSizes) - 1;
+    poolInfo.pPoolSizes = poolSizes;
+    if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create Hi-Z descriptor pool");
+    }
+    if (allocateHiZ) {
+        for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+            hiZPasses[frame].create(device, cullingDescriptorPool, hiZCopyPipeline, hiZCopyPipelineLayout,
+                                    hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
+                                    hiZReduceDescriptorSetLayout, hiZBuffers[frame],
+                                    msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
+                                    msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
+        }
+    }
+
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 6> cullLayouts{};
+    cullLayouts.fill(cullingDescriptorSetLayout);
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 6> cullSets{};
+    VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocateInfo.descriptorPool = cullingDescriptorPool;
+    allocateInfo.descriptorSetCount = static_cast<uint32_t>(cullSets.size());
+    allocateInfo.pSetLayouts = cullLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, cullSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate culling descriptor sets");
+    }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> vsmMarkingLayouts{};
+    vsmMarkingLayouts.fill(vsmPageMarkingDescriptorSetLayout);
+    allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocateInfo.pSetLayouts = vsmMarkingLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, vsmPageMarkingSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate VSM page-marking descriptor sets");
+    }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> vsmCompactLayouts{};
+    vsmCompactLayouts.fill(vsmPageCompactDescriptorSetLayout);
+    allocateInfo.pSetLayouts = vsmCompactLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, vsmPageCompactSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate VSM page-compaction descriptor sets");
+    }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> instanceCullLayouts{};
+    instanceCullLayouts.fill(instanceCullingDescriptorSetLayout);
+    allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocateInfo.pSetLayouts = instanceCullLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, instanceCullSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate instance-culling descriptor sets");
+    }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> meshletCullLayouts{};
+    meshletCullLayouts.fill(meshletCullingDescriptorSetLayout);
+    allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocateInfo.pSetLayouts = meshletCullLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, meshletCullSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate meshlet-culling descriptor sets");
+    }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> meshletDispatchLayouts{};
+    meshletDispatchLayouts.fill(meshletDispatchDescriptorSetLayout);
+    allocateInfo.pSetLayouts = meshletDispatchLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, meshletDispatchSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate meshlet-dispatch descriptor sets");
+    }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> meshletIndirectLayouts{};
+    meshletIndirectLayouts.fill(meshletIndirectDescriptorSetLayout);
+    allocateInfo.pSetLayouts = meshletIndirectLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, meshletIndirectSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate meshlet-indirect descriptor sets");
+    }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> clusteredLayouts{};
+    clusteredLayouts.fill(clusteredLightingDescriptorSetLayout);
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 2> clusteredSets{};
+    allocateInfo.descriptorSetCount = static_cast<uint32_t>(clusteredSets.size());
+    allocateInfo.pSetLayouts = clusteredLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, clusteredSets.data()) != VK_SUCCESS)
+        throw std::runtime_error("Could not allocate clustered-light descriptor sets");
+    std::copy_n(clusteredSets.begin(), MAX_FRAMES_IN_FLIGHT, clusteredLightingSets.begin());
+    std::copy_n(clusteredSets.begin() + MAX_FRAMES_IN_FLIGHT, MAX_FRAMES_IN_FLIGHT, sceneClusteredLightingSets.begin());
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        const auto updateClusterSet = [&](VkDescriptorSet set, VkBuffer frameUniform, VkBuffer ranges, VkBuffer indices,
+                                          VkBuffer clusteredUniform, VkBuffer probes) {
+            const VkDescriptorBufferInfo infos[] = {{frameUniform, 0, sizeof(UniformBufferObject)},
+                                                    {ranges, 0, VK_WHOLE_SIZE},
+                                                    {indices, 0, VK_WHOLE_SIZE},
+                                                    {clusteredUniform, 0, sizeof(ClusteredLightingUniforms)},
+                                                    {probes, 0, VK_WHOLE_SIZE}};
+            VkWriteDescriptorSet writes[5]{};
+            for (uint32_t binding = 0; binding < 5; ++binding) {
+                writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                   nullptr,
+                                   set,
+                                   binding,
+                                   0,
+                                   1,
+                                   binding == 0 || binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                                : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                   nullptr,
+                                   &infos[binding],
+                                   nullptr};
             }
-            return record.entity;
+            vkUpdateDescriptorSets(device, 5, writes, 0, nullptr);
+        };
+        updateClusterSet(clusteredLightingSets[frame], uniformBuffers[frame].handle(),
+                         clusteredLightRangeBuffers[frame].handle(), clusteredLightIndexBuffers[frame].handle(),
+                         clusteredLightingUniformBuffers[frame].handle(), reflectionProbeBuffers[frame].handle());
+        updateClusterSet(sceneClusteredLightingSets[frame], sceneUniformBuffers[frame].handle(),
+                         sceneClusteredLightRangeBuffers[frame].handle(),
+                         sceneClusteredLightIndexBuffers[frame].handle(),
+                         sceneClusteredLightingUniformBuffers[frame].handle(), reflectionProbeBuffers[frame].handle());
+    }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> grassLayouts{};
+    const auto allocateGrassSets = [&](VkDescriptorSetLayout layout,
+                                       std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>& sets) {
+        grassLayouts.fill(layout);
+        allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+        allocateInfo.pSetLayouts = grassLayouts.data();
+        if (vkAllocateDescriptorSets(device, &allocateInfo, sets.data()) != VK_SUCCESS) {
+            throw std::runtime_error("Could not allocate grass compute descriptor sets");
         }
-
-        [[nodiscard]] glm::mat4 glassSectionModel(const RenderableRecord &record) const {
-            const auto source = glassSectionEntity(record);
-            const auto model = scene.registry().get<Transform>(source).worldMatrix().native();
-            if (source == record.entity) return model;
-            const auto &fragment = scene.registry().get<GlassDestructionComponent>(record.entity).fragments[record.sectionIndex];
-            return glm::translate(model, glm::vec3{-fragment.center, 0.0F});
-        }
-
-        [[nodiscard]] std::uint32_t liveBatchIndexCount(std::size_t batchIndex) const {
-            const auto &batch = instanceBatches[batchIndex];
-            const auto &indices = sceneGpu.batchRenderableIndices[batchIndex];
-            if (indices.empty() || !scene.registry().has<GlassDestructionComponent>(renderables[indices.front()].entity))
-                return batch.indexCount;
-            for (auto index : sceneGpu.batchRenderableIndices[batchIndex])
-                if (renderables[index].visible) {
-                    const auto *resource = static_cast<const MeshGpuResource *>(batch.mesh);
-                    const auto &sections = resource->metadata.sections;
-                    const auto section = renderables[index].sectionIndex;
-                    return section < sections.size() ? sections[section].indexCount : resource->metadata.indexCount;
-                }
-            return 0;
-        }
-
-        void refreshCullingBatchObjects() {
-            constexpr std::size_t modelDiagonalStride = 5;
-            const std::uint32_t objectCount = static_cast<std::uint32_t>(instanceBatches.size());
-            gpuObjects.resize(objectCount);
-            for (std::uint32_t i = 0; i < objectCount; ++i) {
-                InstanceBatch& batch = instanceBatches[i];
-                batch.indexCount = liveBatchIndexCount(i);
-                auto& object = gpuObjects[i];
-                object.model = {};
-                object.model.data[0] = 1.0F;
-                object.model.data[modelDiagonalStride] = 1.0F;
-                object.model.data[modelDiagonalStride * 2] = 1.0F;
-                object.model.data[modelDiagonalStride * 3] = 1.0F;
-                const AABB& bounds = batch.worldBounds;
-                object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F};
-                object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F};
-                object.indexCount = batch.indexCount;
-                object.instanceCount = batch.instanceCount;
-                object.firstIndex = batch.firstIndex;
-                object.vertexOffset = 0;
-                object.firstInstance = batch.firstInstance;
-                object.castShadow = batch.castShadow ? 1U : 0U;
-                object.shadowCacheMode = static_cast<std::uint32_t>(batch.shadowCacheMode);
-                object.twoSided = batch.foliagePipeline ? 1U : 0U;
-                object.shader = batch.shaderSlot;
-                object.lod1IndexCount = batch.lod1IndexCount;
-                object.lod2IndexCount = batch.lod2IndexCount;
-                object.lod1DistanceSq = batch.lod1Distance * batch.lod1Distance;
-                object.lod2DistanceSq = batch.lod2Distance * batch.lod2Distance;
-            }
-            const Culling::GPUObjectData emptyObject{};
-            for (Buffer& buffer : cullingObjectBuffers) {
-                if (buffer.handle() == VK_NULL_HANDLE) continue;
-                buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
-                              sizeof(Culling::GPUObjectData) * std::max(1U, objectCount));
-            }
-            for (RenderableRecord& record : renderables) record.cullingDirtyFrames = 0;
-        }
-
-        [[nodiscard]] bool canReuseCullingResources() const {
-            // Grass has a separate, variable set of compacted scratch lists;
-            // keep its migration boundary explicit until it gets its own heap.
-            if (!sceneGpu.grassInstances.empty() || !sceneGpu.grassClusters.empty() ||
-                cullingDescriptorPool == VK_NULL_HANDLE) return false;
-            const VkDeviceSize objectBytes = sizeof(Culling::GPUObjectData) *
-                std::max<std::size_t>(1, instanceBatches.size());
-            const VkDeviceSize visibleBytes = sizeof(std::uint32_t) *
-                std::max<std::size_t>(1, sceneGpu.database.instances().size());
-            if (!meshletForwardPathActive || !vulkanDevice.supportsMeshShaders()) {
-                if (meshletVisibleCapacity != 1) return false;
-            } else {
-                std::uint64_t requiredVisibleMeshlets = 0;
-                for (const auto& instance : sceneGpu.database.instances()) {
-                    if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
-                    requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
-                }
-                if (requiredVisibleMeshlets > meshletVisibleCapacity) return false;
-            }
-            const VkDeviceSize indirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
-                std::max<std::size_t>(1, instanceBatches.size()) * MaterialProgramSlotCount;
-            const VkDeviceSize shadowIndirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
-                std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::MaxPageUpdatesPerFrame;
-            const VkDeviceSize shadowCandidateBytes = sizeof(std::uint32_t) *
-                std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::ClipLevelCount;
-            const VkDeviceSize shadowTransformBytes = sizeof(RendererInstanceData) *
-                std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
-                                      ShadowMap::MaxCasterInstancesPerPage) * ShadowMap::MaxPageUpdatesPerFrame;
-            const VkDeviceSize shadowVisibleBytes = sizeof(Culling::ShadowVisibleInstance) *
-                std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
-                                      ShadowMap::MaxCasterInstancesPerPage) * ShadowMap::MaxPageUpdatesPerFrame;
-            const VkDeviceSize shadowMaterialBytes = sizeof(std::uint32_t) *
-                std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
-                                      ShadowMap::MaxCasterInstancesPerPage) * ShadowMap::MaxPageUpdatesPerFrame;
-            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                if (cullingObjectBuffers[frame].size() < objectBytes ||
-                    visibleInstanceBuffers[frame].size() < visibleBytes ||
-                    indirectBuffers[frame].size() < indirectBytes ||
-                    foliageIndirectBuffers[frame].size() < indirectBytes ||
-                    shadowIndirectBuffers[frame].size() < shadowIndirectBytes ||
-                    shadowTwoSidedIndirectBuffers[frame].size() < shadowIndirectBytes ||
-                    shadowCandidateBuffers[frame].size() < shadowCandidateBytes ||
-                    shadowTwoSidedCandidateBuffers[frame].size() < shadowCandidateBytes ||
-                    shadowInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
-                    shadowTwoSidedInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
-                    shadowVisibleInstanceBuffers[frame].size() < shadowVisibleBytes ||
-                    shadowTwoSidedVisibleInstanceBuffers[frame].size() < shadowVisibleBytes ||
-                    shadowInstanceMaterialBuffers[frame].size() < shadowMaterialBytes ||
-                    shadowTwoSidedInstanceMaterialBuffers[frame].size() < shadowMaterialBytes) return false;
-            }
-            return true;
-        }
-
-        void createCullingResources() {
-            auto uploadBatch = uploadContext.beginBatch();
-            constexpr std::size_t cullingDescriptorBindingCount = 15;
-            const std::uint32_t grassBinCount = std::max(1u, static_cast<std::uint32_t>(
-                sceneGpu.database.meshes().size() * 3u));
-
-            hiZValid.fill(false);
-            const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
-            std::uint64_t requiredVisibleMeshlets = 0;
-            if (meshletForwardPathActive && vulkanDevice.supportsMeshShaders()) {
-                for (const auto& instance : sceneGpu.database.instances()) {
-                    if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
-                    requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
-                }
-                if (requiredVisibleMeshlets > std::numeric_limits<std::uint32_t>::max())
-                    throw std::runtime_error("Visible meshlet list exceeds uint32 capacity");
-            }
-            const std::uint32_t meshletCapacity = static_cast<std::uint32_t>(
-                std::max<std::uint64_t>(1, requiredVisibleMeshlets));
-            meshletVisibleCapacity = meshletCapacity;
-            // An empty ECS scene still renders the sky, editor UI, and fallback
-            // camera.  Keep the per-view UBOs and descriptor-backed culling
-            // resources alive with inert storage entries; logical draw counts
-            // below remain zero when there are no renderables.
-            // Generic descriptors remain valid in a grass-only scene, but
-            // their backing allocations need one inert element. Their draw
-            // counts stay zero because objectCount itself remains zero.
-            const auto genericCapacity = std::max(1u, objectCount + objectCount / 2u + 1u);
-            // Passes and indirect draws require a non-zero physical capacity.
-            // Runtime culling still receives objectCount, which may be zero.
-            const auto passCapacity = genericCapacity;
-            const auto shadowPassCapacity = passCapacity;
-            const auto clusterCountFor = [](const VkExtent2D extent) {
-                const std::uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
-                const std::uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
-                return std::max(1U, tilesX * tilesY * ClusterDepthSlices);
+    };
+    allocateGrassSets(grassBuildDescriptorSetLayout, grassBuildSets);
+    allocateGrassSets(grassDispatchBuildDescriptorSetLayout, grassVisibleDispatchBuildSets);
+    allocateGrassSets(grassDispatchBuildDescriptorSetLayout, grassStreamDispatchBuildSets);
+    allocateGrassSets(grassDispatchBuildDescriptorSetLayout, sceneGrassVisibleDispatchBuildSets);
+    allocateGrassSets(grassDispatchBuildDescriptorSetLayout, sceneGrassStreamDispatchBuildSets);
+    allocateGrassSets(grassPrefixDescriptorSetLayout, grassPrefixSets);
+    allocateGrassSets(grassScatterDescriptorSetLayout, grassScatterSets);
+    allocateGrassSets(grassFinalizeDescriptorSetLayout, grassFinalizeSets);
+    allocateGrassSets(grassPackedCullDescriptorSetLayout, grassPackedCullSets);
+    allocateGrassSets(grassShadowPageCullDescriptorSetLayout, grassShadowPageCullSets);
+    allocateGrassSets(grassBladeCullDescriptorSetLayout, grassBladeCullSets);
+    allocateGrassSets(grassClassifyDescriptorSetLayout, grassClassifySets);
+    allocateGrassSets(grassPackedCullDescriptorSetLayout, sceneGrassPackedCullSets);
+    allocateGrassSets(grassBladeCullDescriptorSetLayout, sceneGrassBladeCullSets);
+    allocateGrassSets(grassClassifyDescriptorSetLayout, sceneGrassClassifySets);
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        for (uint32_t stream = 0; stream < 3; ++stream) {
+            const auto allocateOne = [&](VkDescriptorSetLayout layout, VkDescriptorSet& set) {
+                allocateInfo.descriptorSetCount = 1;
+                allocateInfo.pSetLayouts = &layout;
+                if (vkAllocateDescriptorSets(device, &allocateInfo, &set) != VK_SUCCESS)
+                    throw std::runtime_error("Could not allocate packed grass descriptor set");
             };
-            const std::uint32_t gameClusterCount = clusterCountFor(swapchain.extent());
-            const std::uint32_t sceneClusterCount = clusterCountFor(sceneViewportTarget.extent());
-
-            // Keep the complete R32F hierarchy out of memory unless the
-            // feature can actually consume it. Frustum/GPU culling remains
-            // available without this optional occlusion input.
-            // VSM receiver marking consumes the previous depth hierarchy even
-            // when object occlusion culling itself is disabled.
-            const bool allocateHiZ = canUseHiZOcclusionCulling() || optimizationFeatures.shadows;
-            if (allocateHiZ) {
-                for (auto& hiZBuffer : hiZBuffers) {
-                    hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width,
-                                     swapchain.extent().height, vulkanDevice.allocator());
-                }
-            }
-
-            constexpr VkDescriptorSetLayoutBinding copyBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            };
-            VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-            layoutInfo.bindingCount = std::size(copyBindings);
-            layoutInfo.pBindings = copyBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &hiZCopyDescriptorSetLayout) != VK_SUCCESS ||
-                vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &hiZReduceDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create Hi-Z descriptor-set layouts");
-            }
-            const VkDescriptorSetLayoutBinding vsmPageMarkingBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            };
-            layoutInfo.bindingCount = std::size(vsmPageMarkingBindings);
-            layoutInfo.pBindings = vsmPageMarkingBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                                            &vsmPageMarkingDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create VSM page-marking descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding vsmPageCompactBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            };
-            layoutInfo.bindingCount = std::size(vsmPageCompactBindings);
-            layoutInfo.pBindings = vsmPageCompactBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                                            &vsmPageCompactDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create VSM page-compaction descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding cullBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            };
-            layoutInfo.bindingCount = std::size(cullBindings);
-            layoutInfo.pBindings = cullBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &cullingDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create culling descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding instanceCullBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            };
-            layoutInfo.bindingCount = std::size(instanceCullBindings);
-            layoutInfo.pBindings = instanceCullBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                                             &instanceCullingDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create instance-culling descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding meshletCullBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            };
-            layoutInfo.bindingCount = std::size(meshletCullBindings);
-            layoutInfo.pBindings = meshletCullBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                                            &meshletCullingDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create meshlet-culling descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding meshletDispatchBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            };
-            layoutInfo.bindingCount = std::size(meshletDispatchBindings);
-            layoutInfo.pBindings = meshletDispatchBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                                            &meshletDispatchDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create meshlet-dispatch descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding meshletIndirectBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            };
-            layoutInfo.bindingCount = std::size(meshletIndirectBindings);
-            layoutInfo.pBindings = meshletIndirectBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                                            &meshletIndirectDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create meshlet-indirect descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding grassBuildBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassBuildBindings); layoutInfo.pBindings = grassBuildBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassBuildDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create grass-build descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding grassDispatchBuildBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassDispatchBuildBindings);
-            layoutInfo.pBindings = grassDispatchBuildBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassDispatchBuildDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create grass dispatch-build descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding grassPrefixBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassPrefixBindings); layoutInfo.pBindings = grassPrefixBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPrefixDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create grass-prefix descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding grassScatterBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassScatterBindings); layoutInfo.pBindings = grassScatterBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassScatterDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create grass-scatter descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding grassFinalizeBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassFinalizeBindings); layoutInfo.pBindings = grassFinalizeBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassFinalizeDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create grass-finalize descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding grassPackedCullBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassPackedCullBindings); layoutInfo.pBindings = grassPackedCullBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedCullDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create packed grass-cull descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding grassShadowPageCullBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassShadowPageCullBindings); layoutInfo.pBindings = grassShadowPageCullBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassShadowPageCullDescriptorSetLayout) != VK_SUCCESS)
-                throw std::runtime_error("Could not create grass VSM page-cull descriptor-set layout");
-            const VkDescriptorSetLayoutBinding grassBladeCullBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassBladeCullBindings); layoutInfo.pBindings = grassBladeCullBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassBladeCullDescriptorSetLayout) != VK_SUCCESS)
-                throw std::runtime_error("Could not create grass blade-cull descriptor-set layout");
-            const VkDescriptorSetLayoutBinding grassClassifyBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassClassifyBindings); layoutInfo.pBindings = grassClassifyBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassClassifyDescriptorSetLayout) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create grass-classify descriptor-set layout");
-            }
-            const VkDescriptorSetLayoutBinding grassPackedBinBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassPackedBinBindings); layoutInfo.pBindings = grassPackedBinBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedBinDescriptorSetLayout) != VK_SUCCESS) throw std::runtime_error("Could not create packed grass-bin layout");
-            const VkDescriptorSetLayoutBinding grassPackedScatterBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassPackedScatterBindings); layoutInfo.pBindings = grassPackedScatterBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedScatterDescriptorSetLayout) != VK_SUCCESS) throw std::runtime_error("Could not create packed grass-scatter layout");
-            const VkDescriptorSetLayoutBinding grassPackedFinalizeBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(grassPackedFinalizeBindings); layoutInfo.pBindings = grassPackedFinalizeBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedFinalizeDescriptorSetLayout) != VK_SUCCESS) throw std::runtime_error("Could not create packed grass-finalize layout");
-            const VkDescriptorSetLayoutBinding clusteredLightingBindings[] = {
-                {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-            layoutInfo.bindingCount = std::size(clusteredLightingBindings); layoutInfo.pBindings = clusteredLightingBindings;
-            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &clusteredLightingDescriptorSetLayout) != VK_SUCCESS)
-                throw std::runtime_error("Could not create clustered-light descriptor layout");
-            const auto createLayout = [&](VkDescriptorSetLayout setLayout, VkPipelineLayout& pipelineLayout,
-                                          const VkPushConstantRange* pushConstantRange = nullptr) {
-                VkPipelineLayoutCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-                info.setLayoutCount = 1; info.pSetLayouts = &setLayout;
-                if (pushConstantRange != nullptr) {
-                    info.pushConstantRangeCount = 1;
-                    info.pPushConstantRanges = pushConstantRange;
-                }
-                if (vkCreatePipelineLayout(device, &info, nullptr, &pipelineLayout) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create Hi-Z pipeline layout");
-                }
-            };
-            createLayout(hiZCopyDescriptorSetLayout, hiZCopyPipelineLayout);
-            createLayout(hiZReduceDescriptorSetLayout, hiZReducePipelineLayout);
-            createLayout(vsmPageMarkingDescriptorSetLayout, vsmPageMarkingPipelineLayout);
-            createLayout(vsmPageCompactDescriptorSetLayout, vsmPageCompactPipelineLayout);
-            // mat4 plus page-culling control fields. Keep this synchronized
-            // with CullingPushConstants in GPUCullingPass.cpp/.slang.
-            const VkPushConstantRange cullingPushConstants{
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Mat4) + 28};
-            createLayout(cullingDescriptorSetLayout, cullingPipelineLayout,
-                         &cullingPushConstants);
-            createLayout(instanceCullingDescriptorSetLayout, instanceCullingPipelineLayout);
-            createLayout(meshletCullingDescriptorSetLayout, meshletCullingPipelineLayout);
-            createLayout(meshletDispatchDescriptorSetLayout, meshletDispatchPipelineLayout);
-            createLayout(meshletIndirectDescriptorSetLayout, meshletIndirectPipelineLayout);
-            createLayout(grassBuildDescriptorSetLayout, grassBuildPipelineLayout);
-            createLayout(grassDispatchBuildDescriptorSetLayout, grassDispatchBuildPipelineLayout);
-            createLayout(grassPrefixDescriptorSetLayout, grassPrefixPipelineLayout);
-            createLayout(grassScatterDescriptorSetLayout, grassScatterPipelineLayout);
-            createLayout(grassFinalizeDescriptorSetLayout, grassFinalizePipelineLayout);
-            createLayout(grassPackedCullDescriptorSetLayout, grassPackedCullPipelineLayout);
-            createLayout(grassShadowPageCullDescriptorSetLayout, grassShadowPageCullPipelineLayout);
-            createLayout(grassBladeCullDescriptorSetLayout, grassBladeCullPipelineLayout);
-            createLayout(grassClassifyDescriptorSetLayout, grassClassifyPipelineLayout);
-            createLayout(grassPackedBinDescriptorSetLayout, grassPackedBinPipelineLayout);
-            createLayout(grassPackedScatterDescriptorSetLayout, grassPackedScatterPipelineLayout);
-            createLayout(grassPackedFinalizeDescriptorSetLayout, grassPackedFinalizePipelineLayout);
-            createLayout(clusteredLightingDescriptorSetLayout, clusteredLightingPipelineLayout);
-            hiZCopyPipeline = createComputePipeline("shaders/hiz_initialize.spv", hiZCopyPipelineLayout);
-            hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.spv", hiZReducePipelineLayout);
-            vsmPageMarkingPipeline = createComputePipeline("shaders/vsm_page_marking.spv", vsmPageMarkingPipelineLayout);
-            vsmPageCompactPipeline = createComputePipeline("shaders/vsm_page_compact.spv", vsmPageCompactPipelineLayout);
-            cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
-            instanceCullingPipeline = createComputePipeline("shaders/gpu_instance_culling.spv",
-                                                             instanceCullingPipelineLayout);
-            meshletCullingPipeline = createComputePipeline("shaders/meshlet_culling.spv",
-                                                            meshletCullingPipelineLayout);
-            meshletDispatchPipeline = createComputePipeline("shaders/meshlet_build_dispatch.spv",
-                                                             meshletDispatchPipelineLayout);
-            meshletIndirectPipeline = createComputePipeline("shaders/meshlet_build_indexed.spv",
-                                                             meshletIndirectPipelineLayout);
-            grassBuildPipeline = createComputePipeline("shaders/grass_build_indirect.spv", grassBuildPipelineLayout);
-            grassDispatchBuildPipeline = createComputePipeline("shaders/grass_build_dispatch.spv", grassDispatchBuildPipelineLayout);
-            grassPrefixPipeline = createComputePipeline("shaders/grass_prefix_sum.spv", grassPrefixPipelineLayout);
-            grassScatterPipeline = createComputePipeline("shaders/grass_scatter_instances.spv", grassScatterPipelineLayout);
-            grassFinalizePipeline = createComputePipeline("shaders/grass_finalize_indirect.spv", grassFinalizePipelineLayout);
-            grassBladeCullPipeline = createComputePipeline("shaders/grass_packed_cull.spv", grassBladeCullPipelineLayout);
-            // Cluster cull has the compact 5-binding layout retained above.
-            grassPackedCullPipeline = createComputePipeline("shaders/grass_cluster_cull.spv", grassPackedCullPipelineLayout);
-            grassShadowPageCullPipeline = createComputePipeline("shaders/grass_shadow_page_cull.spv", grassShadowPageCullPipelineLayout);
-            grassClassifyPipeline = createComputePipeline("shaders/grass_classify.spv", grassClassifyPipelineLayout);
-            grassPackedBinPipeline = createComputePipeline("shaders/grass_packed_bin.spv", grassPackedBinPipelineLayout);
-            grassPackedPrefixPipeline = createComputePipeline("shaders/grass_packed_prefix.spv", grassPrefixPipelineLayout);
-            grassPackedScatterPipeline = createComputePipeline("shaders/grass_packed_scatter.spv", grassPackedScatterPipelineLayout);
-            grassPackedFinalizePipeline = createComputePipeline("shaders/grass_packed_finalize.spv", grassPackedFinalizePipelineLayout);
-            clusteredLightingPipeline = createComputePipeline("shaders/clustered_light_culling.spv", clusteredLightingPipelineLayout);
-
-            refreshCullingBatchObjects();
-            for (Buffer& buffer : cullingObjectBuffers) {
-                buffer.createHostVisible(
-                    vulkanDevice.physical(), device,
-                    sizeof(Culling::GPUObjectData) * genericCapacity,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                const Culling::GPUObjectData emptyObject{};
-                buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
-                              sizeof(Culling::GPUObjectData) * std::max(1u, objectCount));
-            }
-
-            for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                const GpuReflectionProbe emptyProbe{};
-                reflectionProbeBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(GpuReflectionProbe) * ReflectionProbeManager::MaxProbes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                reflectionProbeBuffers[frame].update(&emptyProbe, sizeof(emptyProbe));
-                clusteredLightingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
-                sceneClusteredLightingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
-                std::vector<ClusterLightRangeGPU> emptyGameRanges(gameClusterCount);
-                std::vector<ClusterLightRangeGPU> emptySceneRanges(sceneClusterCount);
-                std::vector<std::uint32_t> emptyGameIndices(gameClusterCount * MaxLightsPerCluster);
-                std::vector<std::uint32_t> emptySceneIndices(sceneClusterCount * MaxLightsPerCluster);
-                clusteredLightRangeBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGameRanges.data(), sizeof(ClusterLightRangeGPU) * emptyGameRanges.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                clusteredLightIndexBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGameIndices.data(), sizeof(std::uint32_t) * emptyGameIndices.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                sceneClusteredLightRangeBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptySceneRanges.data(), sizeof(ClusterLightRangeGPU) * emptySceneRanges.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                sceneClusteredLightIndexBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptySceneIndices.data(), sizeof(std::uint32_t) * emptySceneIndices.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                sceneCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                meshletCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(Culling::MeshletCullUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                foliageCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                shadowCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                shadowTwoSidedCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                const std::uint32_t zero = 0;
-                std::vector<std::uint32_t> emptyVisibleInstances(
-                    std::max<std::size_t>(1, sceneGpu.database.instances().size()));
-                visibleInstanceBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyVisibleInstances.data(), sizeof(std::uint32_t) * emptyVisibleInstances.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                visibleInstanceCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
-                    sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const VkDispatchIndirectCommand emptyMeshletCullDispatch{};
-                meshletCullDispatchBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    &emptyMeshletCullDispatch, sizeof(emptyMeshletCullDispatch),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
-                    vulkanDevice.allocator());
-                visibleMeshletBuffers[frame].createDeviceLocalEmpty(device,
-                    sizeof(Culling::VisibleMeshlet) * meshletCapacity,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                visibleMeshletCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
-                    sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                meshletIndexedIndirectBuffers[frame].createDeviceLocalEmpty(device,
-                    sizeof(VkDrawIndexedIndirectCommand) * static_cast<VkDeviceSize>(meshletCapacity) *
-                        MaterialProgramSlotCount,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                std::array<std::uint32_t, MaterialProgramSlotCount> emptyMeshletCounts{};
-                meshletIndexedDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyMeshletCounts.data(), sizeof(emptyMeshletCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
-                    vulkanDevice.allocator());
-                meshletIndexedIndirectDraws[frame].create(
-                    meshletIndexedIndirectBuffers[frame].handle(),
-                    meshletIndexedDrawCountBuffers[frame].handle(), meshletCapacity);
-                std::vector<std::uint32_t> emptyGrassBins(grassBinCount, 0U);
-                grassBinCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGrassBins.data(), sizeof(std::uint32_t) * emptyGrassBins.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                grassBinOffsetBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGrassBins.data(), sizeof(std::uint32_t) * emptyGrassBins.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                grassBinCursorBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGrassBins.data(), sizeof(std::uint32_t) * emptyGrassBins.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const std::vector<GPUGrassInstance> emptyGeneratedGrass =
-                    sceneGpu.grassInstances.empty() ? std::vector<GPUGrassInstance>(1)
-                                                    : sceneGpu.grassInstances;
-                generatedGrassInstanceBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGeneratedGrass.data(), sizeof(GPUGrassInstance) * emptyGeneratedGrass.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const std::vector<GPUGrassDeformation> emptyGrassDeformations =
-                    sceneGpu.grassDeformations.empty() ? std::vector<GPUGrassDeformation>(1)
-                                                        : sceneGpu.grassDeformations;
-                // This is the only per-blade buffer updated at runtime. Each
-                // frame owns one copy, so mapped coherent memory is safe once
-                // that frame's fence has completed and avoids an extra staging
-                // submission for every grass interaction.
-                grassDeformationBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(GPUGrassDeformation) * emptyGrassDeformations.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                grassDeformationBuffers[frame].update(emptyGrassDeformations.data(),
-                    sizeof(GPUGrassDeformation) * emptyGrassDeformations.size());
-                const std::vector<GPUGrassCluster> emptyGrassClusters =
-                    sceneGpu.grassClusters.empty() ? std::vector<GPUGrassCluster>(1)
-                                                   : sceneGpu.grassClusters;
-                grassClusterBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGrassClusters.data(), sizeof(GPUGrassCluster) * emptyGrassClusters.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                std::vector<VkDrawIndexedIndirectCommand> emptyGrassCommands(grassBinCount);
-                grassIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGrassCommands.data(), sizeof(VkDrawIndexedIndirectCommand) * emptyGrassCommands.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
-                    vulkanDevice.allocator());
-                grassDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
-                    sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
-                    vulkanDevice.allocator());
-                const std::size_t grassClusterCapacity = std::max<std::size_t>(1, sceneGpu.grassClusters.size());
-                const std::size_t grassPageCommandCapacity = grassClusterCapacity * ShadowMap::MaxPageUpdatesPerFrame;
-                std::vector<VkDrawIndexedIndirectCommand> emptyGrassPageCommands(grassPageCommandCapacity);
-                std::array<std::uint32_t, ShadowMap::MaxPageUpdatesPerFrame> emptyPageCounts{};
-                std::array<glm::mat4, ShadowMap::MaxPageUpdatesPerFrame> emptyPageMatrices{};
-                grassShadowPageMatricesBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(emptyPageMatrices), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                grassShadowPageMatricesBuffers[frame].update(emptyPageMatrices.data(), sizeof(emptyPageMatrices));
-                grassShadowPageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyGrassPageCommands.data(), sizeof(VkDrawIndexedIndirectCommand) * emptyGrassPageCommands.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                grassShadowPageDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyPageCounts.data(), sizeof(emptyPageCounts), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                grassShadowPageCullUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(GrassShadowPageCullUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
-                grassIndirectUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(GrassIndirectUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                grassPrefixUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(GrassPrefixUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                std::vector<VkDrawIndexedIndirectCommand> emptyCommands(genericCapacity * MaterialProgramSlotCount);
-                indirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                auto& lists = grassRenderLists[frame];
-                const std::size_t grassCapacity = std::max<std::size_t>(1, sceneGpu.grassInstances.size());
-                std::vector<std::uint32_t> emptyVisibleGrass(grassCapacity, 0U);
-                std::vector<VkDrawIndexedIndirectCommand> emptyGrassList(std::max<std::size_t>(1, sceneGpu.grassClusters.size()));
-                lists.visibleInstances.createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleGrass.data(), sizeof(std::uint32_t) * grassCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const std::array<std::uint32_t, 3> zeroDispatchCounts{};
-                lists.visibleCount.createDeviceLocal(vulkanDevice.physical(), device, zeroDispatchCounts.data(), sizeof(zeroDispatchCounts), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const std::size_t clusterCapacity = std::max<std::size_t>(1, sceneGpu.grassClusters.size());
-                std::vector<std::uint32_t> emptyVisibleClusters(clusterCapacity, 0U);
-                lists.visibleClusters.createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleClusters.data(), sizeof(std::uint32_t) * clusterCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                lists.visibleClusterCount.createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const auto maxClusterInstances = std::max_element(sceneGpu.grassClusters.begin(), sceneGpu.grassClusters.end(), [](const auto& a, const auto& b) { return a.instanceRange.y < b.instanceRange.y; });
-                const GrassBladeDispatchData bladeDispatch{maxClusterInstances == sceneGpu.grassClusters.end() ? 1U : (maxClusterInstances->instanceRange.y + 63U) / 64U, 0U, 1U};
-                lists.bladeCullDispatch.createDeviceLocal(vulkanDevice.physical(), device, &bladeDispatch, sizeof(bladeDispatch), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const std::array<GrassBladeDispatchData, 3> emptyDispatches{};
-                lists.dispatchIndirect.createDeviceLocal(vulkanDevice.physical(), device, emptyDispatches.data(), sizeof(emptyDispatches), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                for (Buffer* buffer : {&lists.mainVisibleInstances, &lists.shadowVisibleInstances, &lists.velocityVisibleInstances}) buffer->createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleGrass.data(), sizeof(std::uint32_t) * grassCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                std::array<std::uint32_t, 3> zeroStreamCounts{};
-                lists.classifyCounts.createDeviceLocal(vulkanDevice.physical(), device, zeroStreamCounts.data(), sizeof(zeroStreamCounts), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                std::vector<std::uint32_t> zeroBins(clusterCapacity, 0U);
-                for (uint32_t stream = 0; stream < 3; ++stream) {
-                    for (Buffer* buffer : {&lists.binCounts[stream], &lists.binOffsets[stream], &lists.binCursors[stream]}) buffer->createDeviceLocal(vulkanDevice.physical(), device, zeroBins.data(), sizeof(std::uint32_t) * clusterCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                    lists.drawInstances[stream].createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleGrass.data(), sizeof(std::uint32_t) * grassCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                }
-                grassClassifyUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device, sizeof(GrassClassifyUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
-                grassPackedCullUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device, sizeof(GrassPackedCullUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
-                for (Buffer& buffer : grassPackedStreamUniformBuffers[frame]) buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(GrassPackedStreamUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
-                for (Buffer* buffer : {&lists.mainIndirect, &lists.shadowIndirect, &lists.velocityIndirect})
-                    buffer->createDeviceLocal(vulkanDevice.physical(), device, emptyGrassList.data(), sizeof(VkDrawIndexedIndirectCommand) * emptyGrassList.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                for (Buffer* buffer : {&lists.mainDrawCount, &lists.shadowDrawCount, &lists.velocityDrawCount})
-                    buffer->createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                // Scene descriptors share the grass scratch buffers created
-                // above for Game View; only descriptor-set identities differ.
-                foliageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                std::vector<std::uint32_t> emptyShadowCandidates(
-                    genericCapacity * ShadowMap::ClipLevelCount);
-                shadowCandidateBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyShadowCandidates.data(), sizeof(std::uint32_t) * emptyShadowCandidates.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowTwoSidedCandidateBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyShadowCandidates.data(), sizeof(std::uint32_t) * emptyShadowCandidates.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                std::array<std::uint32_t, ShadowMap::ClipLevelCount> zeroCandidateCounts{};
-                shadowCandidateCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    zeroCandidateCounts.data(), sizeof(zeroCandidateCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowTwoSidedCandidateCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    zeroCandidateCounts.data(), sizeof(zeroCandidateCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                std::array<VkDispatchIndirectCommand, ShadowMap::ClipLevelCount> emptyCandidateDispatches{};
-                shadowCandidateDispatchBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyCandidateDispatches.data(), sizeof(emptyCandidateDispatches),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowTwoSidedCandidateDispatchBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyCandidateDispatches.data(), sizeof(emptyCandidateDispatches),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowIndirectBuffers[frame].createDeviceLocalEmpty(device,
-                    sizeof(VkDrawIndexedIndirectCommand) * shadowPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                std::array<Culling::ShadowPageWork, ShadowMap::MaxPageUpdatesPerFrame> emptyPageWork{};
-                shadowPageWorkBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(emptyPageWork), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                constexpr std::uint32_t vsmRequestWordCount =
-                    (ShadowMap::VirtualPageCount + 31U) / 32U;
-                const std::array<std::uint32_t, vsmRequestWordCount> emptyVsmRequests{};
-                vsmRequestedPageBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(emptyVsmRequests), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, vulkanDevice.allocator());
-                const std::array<std::uint32_t, ShadowMap::VirtualPageCount> emptyVsmPageKeys{};
-                const std::uint32_t emptyVsmPageCount = 0;
-                vsmCompactedPageBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(emptyVsmPageKeys), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                vsmCompactedPageCountBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(emptyVsmPageCount), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, vulkanDevice.allocator());
-                vsmPageMarkingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(VsmPageMarkingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                shadowTwoSidedIndirectBuffers[frame].createDeviceLocalEmpty(device,
-                    sizeof(VkDrawIndexedIndirectCommand) * shadowPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                std::array<std::uint32_t, ShadowMap::MaxPageUpdatesPerFrame> zeroShadowCounts{};
-                // One independent compact range per page lets the 2D page
-                // culling dispatch write transforms without cross-page atomics.
-                const std::size_t shadowTransformCount =
-                    std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
-                                          ShadowMap::MaxCasterInstancesPerPage) *
-                    ShadowMap::MaxPageUpdatesPerFrame;
-                for (Buffer* buffer : {&shadowInstanceTransformBuffers[frame],
-                                       &shadowTwoSidedInstanceTransformBuffers[frame]})
-                    buffer->createDeviceLocalEmpty(device, sizeof(RendererInstanceData) * shadowTransformCount,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                for (Buffer* buffer : {&shadowVisibleInstanceBuffers[frame],
-                                       &shadowTwoSidedVisibleInstanceBuffers[frame]})
-                    buffer->createDeviceLocalEmpty(device,
-                        sizeof(Culling::ShadowVisibleInstance) * shadowTransformCount,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                shadowInstanceTransformCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    zeroShadowCounts.data(), sizeof(zeroShadowCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowTwoSidedInstanceTransformCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    zeroShadowCounts.data(), sizeof(zeroShadowCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                for (Buffer* buffer : {&shadowInstanceMaterialBuffers[frame],
-                                       &shadowTwoSidedInstanceMaterialBuffers[frame]})
-                    buffer->createDeviceLocalEmpty(device, sizeof(std::uint32_t) * shadowTransformCount,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                const std::array<std::uint32_t, MaterialProgramSlotCount> zeroMaterialDrawCounts{};
-                drawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                foliageDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    zeroShadowCounts.data(), sizeof(zeroShadowCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowTwoSidedDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    zeroShadowCounts.data(), sizeof(zeroShadowCounts),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-            }
-
-            constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 6;
-            constexpr uint32_t instanceCullSetCount = MAX_FRAMES_IN_FLIGHT;
-            // Per frame: 4 legacy sets, game cluster/blade/classify sets,
-            // 14 per-frame shared sets (including four dispatch builders),
-            // plus 24 stream-builder sets and one VSM page-cull set.
-            // Keep this in lockstep with allocateGrassSets below.
-            constexpr uint32_t grassSetCount = MAX_FRAMES_IN_FLIGHT * 39;
-            const uint32_t hiZDescriptorSetCount = hiZBuffers[0].mipCount() * MAX_FRAMES_IN_FLIGHT;
-            const uint32_t imageDescriptors = hiZDescriptorSetCount + cullingSetCount;
-            const VkDescriptorPoolSize poolSizes[] = {
-                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors + MAX_FRAMES_IN_FLIGHT},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 12 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 152},
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 31},
-                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZDescriptorSetCount},
-            };
-            VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            poolInfo.maxSets = hiZDescriptorSetCount + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 7;
-            poolInfo.poolSizeCount = allocateHiZ ? std::size(poolSizes) : std::size(poolSizes) - 1;
-            poolInfo.pPoolSizes = poolSizes;
-            if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create Hi-Z descriptor pool");
-            }
-            if (allocateHiZ) {
-                for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                    hiZPasses[frame].create(device, cullingDescriptorPool, hiZCopyPipeline, hiZCopyPipelineLayout,
-                        hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
-                        hiZReduceDescriptorSetLayout, hiZBuffers[frame],
-                        msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
-                        msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
-                }
-            }
-
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 6> cullLayouts{};
-            cullLayouts.fill(cullingDescriptorSetLayout);
-            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 6> cullSets{};
-            VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            allocateInfo.descriptorPool = cullingDescriptorPool;
-            allocateInfo.descriptorSetCount = static_cast<uint32_t>(cullSets.size());
-            allocateInfo.pSetLayouts = cullLayouts.data();
-            if (vkAllocateDescriptorSets(device, &allocateInfo, cullSets.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate culling descriptor sets");
-            }
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> vsmMarkingLayouts{};
-            vsmMarkingLayouts.fill(vsmPageMarkingDescriptorSetLayout);
-            allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-            allocateInfo.pSetLayouts = vsmMarkingLayouts.data();
-            if (vkAllocateDescriptorSets(device, &allocateInfo, vsmPageMarkingSets.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate VSM page-marking descriptor sets");
-            }
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> vsmCompactLayouts{};
-            vsmCompactLayouts.fill(vsmPageCompactDescriptorSetLayout);
-            allocateInfo.pSetLayouts = vsmCompactLayouts.data();
-            if (vkAllocateDescriptorSets(device, &allocateInfo, vsmPageCompactSets.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate VSM page-compaction descriptor sets");
-            }
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> instanceCullLayouts{};
-            instanceCullLayouts.fill(instanceCullingDescriptorSetLayout);
-            allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-            allocateInfo.pSetLayouts = instanceCullLayouts.data();
-            if (vkAllocateDescriptorSets(device, &allocateInfo, instanceCullSets.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate instance-culling descriptor sets");
-            }
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> meshletCullLayouts{};
-            meshletCullLayouts.fill(meshletCullingDescriptorSetLayout);
-            allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-            allocateInfo.pSetLayouts = meshletCullLayouts.data();
-            if (vkAllocateDescriptorSets(device, &allocateInfo, meshletCullSets.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate meshlet-culling descriptor sets");
-            }
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> meshletDispatchLayouts{};
-            meshletDispatchLayouts.fill(meshletDispatchDescriptorSetLayout);
-            allocateInfo.pSetLayouts = meshletDispatchLayouts.data();
-            if (vkAllocateDescriptorSets(device, &allocateInfo, meshletDispatchSets.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate meshlet-dispatch descriptor sets");
-            }
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> meshletIndirectLayouts{};
-            meshletIndirectLayouts.fill(meshletIndirectDescriptorSetLayout);
-            allocateInfo.pSetLayouts = meshletIndirectLayouts.data();
-            if (vkAllocateDescriptorSets(device, &allocateInfo, meshletIndirectSets.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate meshlet-indirect descriptor sets");
-            }
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> clusteredLayouts{};
-            clusteredLayouts.fill(clusteredLightingDescriptorSetLayout);
-            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 2> clusteredSets{};
-            allocateInfo.descriptorSetCount = static_cast<uint32_t>(clusteredSets.size());
-            allocateInfo.pSetLayouts = clusteredLayouts.data();
-            if (vkAllocateDescriptorSets(device, &allocateInfo, clusteredSets.data()) != VK_SUCCESS)
-                throw std::runtime_error("Could not allocate clustered-light descriptor sets");
-            std::copy_n(clusteredSets.begin(), MAX_FRAMES_IN_FLIGHT, clusteredLightingSets.begin());
-            std::copy_n(clusteredSets.begin() + MAX_FRAMES_IN_FLIGHT, MAX_FRAMES_IN_FLIGHT, sceneClusteredLightingSets.begin());
-            for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                const auto updateClusterSet = [&](VkDescriptorSet set, VkBuffer frameUniform, VkBuffer ranges,
-                                                  VkBuffer indices, VkBuffer clusteredUniform, VkBuffer probes) {
-                    const VkDescriptorBufferInfo infos[] = {{frameUniform, 0, sizeof(UniformBufferObject)},
-                        {ranges, 0, VK_WHOLE_SIZE}, {indices, 0, VK_WHOLE_SIZE},
-                        {clusteredUniform, 0, sizeof(ClusteredLightingUniforms)}, {probes, 0, VK_WHOLE_SIZE}};
-                    VkWriteDescriptorSet writes[5]{};
-                    for (uint32_t binding = 0; binding < 5; ++binding) {
-                        writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, binding, 0, 1,
-                            binding == 0 || binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                            nullptr, &infos[binding], nullptr};
-                    }
-                    vkUpdateDescriptorSets(device, 5, writes, 0, nullptr);
-                };
-                updateClusterSet(clusteredLightingSets[frame], uniformBuffers[frame].handle(),
-                    clusteredLightRangeBuffers[frame].handle(), clusteredLightIndexBuffers[frame].handle(),
-                    clusteredLightingUniformBuffers[frame].handle(), reflectionProbeBuffers[frame].handle());
-                updateClusterSet(sceneClusteredLightingSets[frame], sceneUniformBuffers[frame].handle(),
-                    sceneClusteredLightRangeBuffers[frame].handle(), sceneClusteredLightIndexBuffers[frame].handle(),
-                    sceneClusteredLightingUniformBuffers[frame].handle(), reflectionProbeBuffers[frame].handle());
-            }
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> grassLayouts{};
-            const auto allocateGrassSets = [&](VkDescriptorSetLayout layout,
-                                               std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>& sets) {
-                grassLayouts.fill(layout);
-                allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-                allocateInfo.pSetLayouts = grassLayouts.data();
-                if (vkAllocateDescriptorSets(device, &allocateInfo, sets.data()) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not allocate grass compute descriptor sets");
-                }
-            };
-            allocateGrassSets(grassBuildDescriptorSetLayout, grassBuildSets);
-            allocateGrassSets(grassDispatchBuildDescriptorSetLayout, grassVisibleDispatchBuildSets);
-            allocateGrassSets(grassDispatchBuildDescriptorSetLayout, grassStreamDispatchBuildSets);
-            allocateGrassSets(grassDispatchBuildDescriptorSetLayout, sceneGrassVisibleDispatchBuildSets);
-            allocateGrassSets(grassDispatchBuildDescriptorSetLayout, sceneGrassStreamDispatchBuildSets);
-            allocateGrassSets(grassPrefixDescriptorSetLayout, grassPrefixSets);
-            allocateGrassSets(grassScatterDescriptorSetLayout, grassScatterSets);
-            allocateGrassSets(grassFinalizeDescriptorSetLayout, grassFinalizeSets);
-            allocateGrassSets(grassPackedCullDescriptorSetLayout, grassPackedCullSets);
-            allocateGrassSets(grassShadowPageCullDescriptorSetLayout, grassShadowPageCullSets);
-            allocateGrassSets(grassBladeCullDescriptorSetLayout, grassBladeCullSets);
-            allocateGrassSets(grassClassifyDescriptorSetLayout, grassClassifySets);
-            allocateGrassSets(grassPackedCullDescriptorSetLayout, sceneGrassPackedCullSets);
-            allocateGrassSets(grassBladeCullDescriptorSetLayout, sceneGrassBladeCullSets);
-            allocateGrassSets(grassClassifyDescriptorSetLayout, sceneGrassClassifySets);
-            for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                for (uint32_t stream = 0; stream < 3; ++stream) {
-                    const auto allocateOne = [&](VkDescriptorSetLayout layout, VkDescriptorSet& set) {
-                        allocateInfo.descriptorSetCount = 1; allocateInfo.pSetLayouts = &layout;
-                        if (vkAllocateDescriptorSets(device, &allocateInfo, &set) != VK_SUCCESS) throw std::runtime_error("Could not allocate packed grass descriptor set");
-                    };
-                    allocateOne(grassPackedBinDescriptorSetLayout, grassPackedBinSets[frame][stream]);
-                    allocateOne(grassPrefixDescriptorSetLayout, grassPackedPrefixSets[frame][stream]);
-                    allocateOne(grassPackedScatterDescriptorSetLayout, grassPackedScatterSets[frame][stream]);
-                    allocateOne(grassPackedFinalizeDescriptorSetLayout, grassPackedFinalizeSets[frame][stream]);
-                    allocateOne(grassPackedBinDescriptorSetLayout, sceneGrassPackedBinSets[frame][stream]);
-                    allocateOne(grassPrefixDescriptorSetLayout, sceneGrassPackedPrefixSets[frame][stream]);
-                    allocateOne(grassPackedScatterDescriptorSetLayout, sceneGrassPackedScatterSets[frame][stream]);
-                    allocateOne(grassPackedFinalizeDescriptorSetLayout, sceneGrassPackedFinalizeSets[frame][stream]);
-                }
-            }
-            for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                const VkDescriptorBufferInfo sceneInstanceInfo{
-                    gpuVisibilityInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                const VkDescriptorBufferInfo visibleInfo{visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                const VkDescriptorBufferInfo visibleCountInfo{visibleInstanceCountBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                const VkDescriptorBufferInfo instanceUniformInfo{
-                    cullingUniformBuffers[frame].handle(), 0, sizeof(Culling::CullingUniformData)};
-                std::array<VkWriteDescriptorSet, 4> instanceWrites{};
-                const std::array<const VkDescriptorBufferInfo*, 4> instanceInfos{
-                    &sceneInstanceInfo, &visibleInfo, &visibleCountInfo, &instanceUniformInfo};
-                for (std::uint32_t binding = 0; binding < instanceWrites.size(); ++binding) {
-                    instanceWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                        .dstSet = instanceCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
-                        .descriptorType = binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                        .pBufferInfo = instanceInfos[binding]};
-                }
-                vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(instanceWrites.size()),
-                                       instanceWrites.data(), 0, nullptr);
-                const auto updateGrassSet = [&](const VkDescriptorSet set,
-                                                std::initializer_list<VkBuffer> storageBuffers,
-                                                const VkBuffer uniformBuffer) {
-                    std::vector<VkDescriptorBufferInfo> infos;
-                    infos.reserve(storageBuffers.size() + (uniformBuffer != VK_NULL_HANDLE ? 1 : 0));
-                    for (const VkBuffer buffer : storageBuffers) infos.push_back({buffer, 0, VK_WHOLE_SIZE});
-                    if (uniformBuffer != VK_NULL_HANDLE) infos.push_back({uniformBuffer, 0, VK_WHOLE_SIZE});
-                    std::vector<VkWriteDescriptorSet> writes(infos.size());
-                    for (std::uint32_t binding = 0; binding < writes.size(); ++binding) {
-                        writes[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                            .dstSet = set, .dstBinding = binding, .descriptorCount = 1,
-                            .descriptorType = uniformBuffer != VK_NULL_HANDLE && binding + 1 == writes.size()
-                                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                            .pBufferInfo = &infos[binding]};
-                    }
-                    vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()),
-                                           writes.data(), 0, nullptr);
-                };
-                auto& packedLists = grassRenderLists[frame];
-                updateGrassSet(grassVisibleDispatchBuildSets[frame], {packedLists.visibleCount.handle(), packedLists.dispatchIndirect.handle()}, VK_NULL_HANDLE);
-                updateGrassSet(grassStreamDispatchBuildSets[frame], {packedLists.classifyCounts.handle(), packedLists.dispatchIndirect.handle()}, VK_NULL_HANDLE);
-                updateGrassSet(grassPackedCullSets[frame], {grassClusterBuffers[frame].handle(), packedLists.visibleClusters.handle(), packedLists.visibleClusterCount.handle(), packedLists.bladeCullDispatch.handle()}, grassPackedCullUniformBuffers[frame].handle());
-                updateGrassSet(grassShadowPageCullSets[frame], {grassClusterBuffers[frame].handle(), packedLists.shadowIndirect.handle(), grassShadowPageMatricesBuffers[frame].handle(), grassShadowPageIndirectBuffers[frame].handle(), grassShadowPageDrawCountBuffers[frame].handle()}, grassShadowPageCullUniformBuffers[frame].handle());
-                updateGrassSet(grassBladeCullSets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), packedLists.visibleClusters.handle(), packedLists.visibleClusterCount.handle(), packedLists.visibleInstances.handle(), packedLists.visibleCount.handle()}, grassPackedCullUniformBuffers[frame].handle());
-                updateGrassSet(grassClassifySets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), packedLists.visibleInstances.handle(), packedLists.mainVisibleInstances.handle(), packedLists.shadowVisibleInstances.handle(), packedLists.velocityVisibleInstances.handle(), packedLists.classifyCounts.handle(), packedLists.visibleCount.handle()}, grassClassifyUniformBuffers[frame].handle());
-                const std::array<VkBuffer, 3> classified{packedLists.mainVisibleInstances.handle(), packedLists.shadowVisibleInstances.handle(), packedLists.velocityVisibleInstances.handle()};
-                const std::array<VkBuffer, 3> indirect{packedLists.mainIndirect.handle(), packedLists.shadowIndirect.handle(), packedLists.velocityIndirect.handle()};
-                const std::array<VkBuffer, 3> drawCounts{packedLists.mainDrawCount.handle(), packedLists.shadowDrawCount.handle(), packedLists.velocityDrawCount.handle()};
-                for (uint32_t stream = 0; stream < 3; ++stream) {
-                    const VkBuffer uniform = grassPackedStreamUniformBuffers[frame][stream].handle();
-                    updateGrassSet(grassPackedBinSets[frame][stream], {generatedGrassInstanceBuffers[frame].handle(), classified[stream], packedLists.classifyCounts.handle(), packedLists.binCounts[stream].handle()}, uniform);
-                    updateGrassSet(grassPackedPrefixSets[frame][stream], {packedLists.binCounts[stream].handle(), packedLists.binOffsets[stream].handle()}, uniform);
-                    updateGrassSet(grassPackedScatterSets[frame][stream], {generatedGrassInstanceBuffers[frame].handle(), classified[stream], packedLists.classifyCounts.handle(), packedLists.binOffsets[stream].handle(), packedLists.binCursors[stream].handle(), packedLists.drawInstances[stream].handle()}, uniform);
-                    updateGrassSet(grassPackedFinalizeSets[frame][stream], {grassClusterBuffers[frame].handle(), packedLists.binCounts[stream].handle(), packedLists.binOffsets[stream].handle(), indirect[stream], drawCounts[stream]}, uniform);
-                }
-                auto& scenePackedLists = sceneGrassRenderLists[frame];
-                updateGrassSet(sceneGrassVisibleDispatchBuildSets[frame], {scenePackedLists.visibleCount.handle(), scenePackedLists.dispatchIndirect.handle()}, VK_NULL_HANDLE);
-                updateGrassSet(sceneGrassStreamDispatchBuildSets[frame], {scenePackedLists.classifyCounts.handle(), scenePackedLists.dispatchIndirect.handle()}, VK_NULL_HANDLE);
-                updateGrassSet(sceneGrassPackedCullSets[frame], {grassClusterBuffers[frame].handle(), scenePackedLists.visibleClusters.handle(), scenePackedLists.visibleClusterCount.handle(), scenePackedLists.bladeCullDispatch.handle()}, sceneGrassPackedCullUniformBuffers[frame].handle());
-                updateGrassSet(sceneGrassBladeCullSets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), scenePackedLists.visibleClusters.handle(), scenePackedLists.visibleClusterCount.handle(), scenePackedLists.visibleInstances.handle(), scenePackedLists.visibleCount.handle()}, sceneGrassPackedCullUniformBuffers[frame].handle());
-                const VkBuffer sceneUniform = sceneGrassPackedStreamUniformBuffers[frame][0].handle();
-                updateGrassSet(sceneGrassClassifySets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), scenePackedLists.visibleInstances.handle(), scenePackedLists.mainVisibleInstances.handle(), scenePackedLists.mainVisibleInstances.handle(), scenePackedLists.mainVisibleInstances.handle(), scenePackedLists.classifyCounts.handle(), scenePackedLists.visibleCount.handle()}, sceneGrassClassifyUniformBuffers[frame].handle());
-                updateGrassSet(sceneGrassPackedBinSets[frame][0], {generatedGrassInstanceBuffers[frame].handle(), scenePackedLists.mainVisibleInstances.handle(), scenePackedLists.classifyCounts.handle(), scenePackedLists.binCounts[0].handle()}, sceneUniform);
-                updateGrassSet(sceneGrassPackedPrefixSets[frame][0], {scenePackedLists.binCounts[0].handle(), scenePackedLists.binOffsets[0].handle()}, sceneUniform);
-                updateGrassSet(sceneGrassPackedScatterSets[frame][0], {generatedGrassInstanceBuffers[frame].handle(), scenePackedLists.mainVisibleInstances.handle(), scenePackedLists.classifyCounts.handle(), scenePackedLists.binOffsets[0].handle(), scenePackedLists.binCursors[0].handle(), scenePackedLists.drawInstances[0].handle()}, sceneUniform);
-                updateGrassSet(sceneGrassPackedFinalizeSets[frame][0], {grassClusterBuffers[frame].handle(), scenePackedLists.binCounts[0].handle(), scenePackedLists.binOffsets[0].handle(), scenePackedLists.mainIndirect.handle(), scenePackedLists.mainDrawCount.handle()}, sceneUniform);
-                updateGrassSet(grassBuildSets[frame], {
-                    gpuSceneInstanceBuffers[frame].handle(), visibleInstanceBuffers[frame].handle(),
-                    visibleInstanceCountBuffers[frame].handle(), gpuSceneMeshBuffers[frame].handle(),
-                    grassBinCountBuffers[frame].handle()}, grassIndirectUniformBuffers[frame].handle());
-                updateGrassSet(grassPrefixSets[frame], {grassBinCountBuffers[frame].handle(),
-                    grassBinOffsetBuffers[frame].handle()}, grassPrefixUniformBuffers[frame].handle());
-                updateGrassSet(grassScatterSets[frame], {
-                    gpuSceneInstanceBuffers[frame].handle(), visibleInstanceBuffers[frame].handle(),
-                    visibleInstanceCountBuffers[frame].handle(), grassBinOffsetBuffers[frame].handle(),
-                    grassBinCursorBuffers[frame].handle(), compactGrassInstanceBuffers[frame].handle()},
-                    grassIndirectUniformBuffers[frame].handle());
-                updateGrassSet(grassFinalizeSets[frame], {gpuSceneMeshBuffers[frame].handle(),
-                    grassBinCountBuffers[frame].handle(), grassBinOffsetBuffers[frame].handle(),
-                    grassIndirectBuffers[frame].handle(), grassDrawCountBuffers[frame].handle()},
-                    grassIndirectUniformBuffers[frame].handle());
-                // Binding 3 is retained by the shared culling pipeline.  When
-                // Hi-Z is disabled the shader's feature flag prevents a read,
-                // so HDR is a small, already-allocated valid fallback.
-                const auto previousHiZFrame = (frame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
-                const auto& hiZBuffer = hiZBuffers[previousHiZFrame];
-                const VkDescriptorImageInfo hiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
-                    ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
-                    : VkDescriptorImageInfo{hdrBuffer.sampler(), hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                const VkDescriptorBufferInfo vsmRequestInfo{
-                    vsmRequestedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                const VkDescriptorBufferInfo vsmUniformInfo{
-                    vsmPageMarkingUniformBuffers[frame].handle(), 0,
-                    sizeof(VsmPageMarkingUniforms)};
-                const VkWriteDescriptorSet vsmWrites[] = {
-                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                     .dstSet = vsmPageMarkingSets[frame], .dstBinding = 0,
-                     .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                     .pImageInfo = &hiZInfo},
-                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                     .dstSet = vsmPageMarkingSets[frame], .dstBinding = 1,
-                     .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                     .pBufferInfo = &vsmRequestInfo},
-                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                     .dstSet = vsmPageMarkingSets[frame], .dstBinding = 2,
-                     .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                     .pBufferInfo = &vsmUniformInfo},
-                };
-                vkUpdateDescriptorSets(device, std::size(vsmWrites), vsmWrites, 0, nullptr);
-                const VkDescriptorBufferInfo vsmCompactInfos[] = {
-                    {vsmRequestedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
-                    {vsmCompactedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
-                    {vsmCompactedPageCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
-                };
-                VkWriteDescriptorSet vsmCompactWrites[3]{};
-                for (std::uint32_t binding = 0; binding < std::size(vsmCompactWrites); ++binding) {
-                    vsmCompactWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                        .dstSet = vsmPageCompactSets[frame], .dstBinding = binding,
-                        .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                        .pBufferInfo = &vsmCompactInfos[binding]};
-                }
-                vkUpdateDescriptorSets(device, std::size(vsmCompactWrites), vsmCompactWrites, 0, nullptr);
-                struct CullingSetUpdate {
-                    VkDescriptorSet set;
-                    const Buffer& indirectBuffer;
-                    const Buffer& countBuffer;
-                    const Buffer& uniformBuffer;
-                    const Buffer& candidateBuffer;
-                    const Buffer& candidateCountBuffer;
-                    const Buffer& candidateDispatchBuffer;
-                    const Buffer& pageWorkBuffer;
-                    const Buffer& shadowTransformBuffer;
-                    const Buffer& shadowTransformCountBuffer;
-                    const Buffer& shadowMaterialBuffer;
-                    const Buffer& shadowVisibleInstanceBuffer;
-                };
-                const auto updateCullingSet = [&](const CullingSetUpdate& update) {
-                    const VkDescriptorBufferInfo objectInfo{
-                        cullingObjectBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo indirectInfo{update.indirectBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo countInfo{update.countBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo uniformInfo{update.uniformBuffer.handle(), 0, sizeof(Culling::CullingUniformData)};
-                    const VkDescriptorBufferInfo candidateInfo{update.candidateBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo candidateCountInfo{update.candidateCountBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo candidateDispatchInfo{update.candidateDispatchBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo pageWorkInfo{update.pageWorkBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo rendererInstanceInfo{instanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo rendererInstanceIndexInfo{compactGrassInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo shadowTransformInfo{update.shadowTransformBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo shadowTransformCountInfo{update.shadowTransformCountBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo shadowMaterialInfo{update.shadowMaterialBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo shadowVisibleInstanceInfo{update.shadowVisibleInstanceBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    std::array<VkWriteDescriptorSet, cullingDescriptorBindingCount> writes{};
-                    for (uint32_t i = 0; i < writes.size(); ++i) {
-                        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                        writes[i].dstSet = update.set;
-                        writes[i].dstBinding = i;
-                        writes[i].descriptorCount = 1;
-                    }
-                    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[0].pBufferInfo = &objectInfo;
-                    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[1].pBufferInfo = &indirectInfo;
-                    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo = &countInfo;
-                    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[3].pImageInfo = &hiZInfo;
-                    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; writes[4].pBufferInfo = &uniformInfo;
-                    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[5].pBufferInfo = &candidateInfo;
-                    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[6].pBufferInfo = &candidateCountInfo;
-                    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[7].pBufferInfo = &candidateDispatchInfo;
-                    writes[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[8].pBufferInfo = &pageWorkInfo;
-                    writes[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[9].pBufferInfo = &rendererInstanceInfo;
-                    writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[10].pBufferInfo = &rendererInstanceIndexInfo;
-                    writes[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[11].pBufferInfo = &shadowTransformInfo;
-                    writes[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[12].pBufferInfo = &shadowTransformCountInfo;
-                    writes[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[13].pBufferInfo = &shadowMaterialInfo;
-                    writes[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[14].pBufferInfo = &shadowVisibleInstanceInfo;
-                    vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-                };
-                VkDescriptorSet cameraCullSet = cullSets[frame];
-                VkDescriptorSet foliageCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
-                VkDescriptorSet sceneCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 2 + frame];
-                VkDescriptorSet sceneFoliageCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 3 + frame];
-                VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 4 + frame];
-                VkDescriptorSet shadowTwoSidedCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 5 + frame];
-                const auto& candidates = shadowCandidateBuffers[frame];
-                const auto& candidateCounts = shadowCandidateCountBuffers[frame];
-                const auto& candidateDispatches = shadowCandidateDispatchBuffers[frame];
-                const auto& pageWork = shadowPageWorkBuffers[frame];
-                const auto& shadowTransforms = shadowInstanceTransformBuffers[frame];
-                const auto& shadowTransformCounts = shadowInstanceTransformCountBuffers[frame];
-                const auto& shadowTwoSidedTransforms = shadowTwoSidedInstanceTransformBuffers[frame];
-                const auto& shadowTwoSidedTransformCounts = shadowTwoSidedInstanceTransformCountBuffers[frame];
-                const auto& shadowMaterials = shadowInstanceMaterialBuffers[frame];
-                const auto& shadowTwoSidedMaterials = shadowTwoSidedInstanceMaterialBuffers[frame];
-                updateCullingSet({cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
-                                  cullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
-                updateCullingSet({foliageCullSet, foliageIndirectBuffers[frame], foliageDrawCountBuffers[frame],
-                                  foliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
-                updateCullingSet({shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
-                                  shadowCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
-                updateCullingSet({shadowTwoSidedCullSet, shadowTwoSidedIndirectBuffers[frame], shadowTwoSidedDrawCountBuffers[frame],
-                                  shadowTwoSidedCullingUniformBuffers[frame], shadowTwoSidedCandidateBuffers[frame], shadowTwoSidedCandidateCountBuffers[frame], shadowTwoSidedCandidateDispatchBuffers[frame], pageWork, shadowTwoSidedTransforms, shadowTwoSidedTransformCounts, shadowTwoSidedMaterials, shadowTwoSidedVisibleInstanceBuffers[frame]});
-                updateCullingSet({sceneCullSet, sceneIndirectBuffers[frame], sceneDrawCountBuffers[frame],
-                                  sceneCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
-                updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
-                                  sceneFoliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
-                // Keep this indexed by descriptor binding. Binding 8 is the
-                // Hi-Z image, while binding 9 is the cluster hierarchy; the
-                // previous compact initializer put the hierarchy at index 8
-                // and made vkUpdateDescriptorSets read past the array.
-                const std::array<VkDescriptorBufferInfo, 10> meshletInfos{{
-                    {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
-                    {gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
-                    {gpuSceneMeshBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
-                    {visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
-                    {visibleInstanceCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
-                    {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
-                    {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
-                    {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
-                    {}, // binding 8 is meshletHiZInfo below
-                    {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
-                }};
-                // Meshlet culling keeps binding 8 populated even when the
-                // optional Hi-Z pyramid was not allocated for this renderer
-                // configuration.  A valid depth fallback is required because
-                // nullDescriptor is not enabled on the device.
-                const auto& meshletDepthFallback = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
-                const VkDescriptorImageInfo meshletHiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
-                    ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
-                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
-                    : VkDescriptorImageInfo{meshletDepthFallback.sampler(), meshletDepthFallback.imageView(),
-                                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-                VkWriteDescriptorSet meshletWrites[10]{};
-                for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
-                    meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                        .dstSet = meshletCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
-                        .descriptorType = binding == 8 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER :
-                                          (binding == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                        .pImageInfo = binding == 8 ? &meshletHiZInfo : nullptr,
-                        .pBufferInfo = binding == 8 ? nullptr : &meshletInfos[binding]};
-                }
-                vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
-                const VkDescriptorBufferInfo meshletDispatchInfos[] = {
-                    {visibleInstanceCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
-                    {meshletCullDispatchBuffers[frame].handle(), 0, sizeof(VkDispatchIndirectCommand)},
-                };
-                VkWriteDescriptorSet meshletDispatchWrites[2]{};
-                for (std::uint32_t binding = 0; binding < std::size(meshletDispatchWrites); ++binding) {
-                    meshletDispatchWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                        .dstSet = meshletDispatchSets[frame], .dstBinding = binding, .descriptorCount = 1,
-                        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                        .pBufferInfo = &meshletDispatchInfos[binding]};
-                }
-                vkUpdateDescriptorSets(device, std::size(meshletDispatchWrites), meshletDispatchWrites, 0, nullptr);
-                instanceCullingPasses[frame].create(instanceCullingPipeline, instanceCullingPipelineLayout,
-                    instanceCullSets[frame], visibleInstanceCountBuffers[frame].handle(),
-                    visibleInstanceBuffers[frame].handle());
-                gpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, cullSets[frame],
-                    indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), passCapacity);
-                indirectDraws[frame].create(
-                    indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), passCapacity);
-                foliageGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, foliageCullSet,
-                    foliageIndirectBuffers[frame].handle(), foliageDrawCountBuffers[frame].handle(), passCapacity);
-                // Grass is culled as terrain chunks in the production draw
-                // path.  The experimental GPU-scene per-instance list remains
-                // available for the compaction passes, but must not replace a
-                // valid chunk command list until its bounds source is shared
-                // with terrain extraction.
-                foliageIndirectDraws[frame].create(
-                    foliageIndirectBuffers[frame].handle(), foliageDrawCountBuffers[frame].handle(), passCapacity);
-                sceneGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneCullSet,
-                    sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), passCapacity);
-                sceneIndirectDraws[frame].create(
-                    sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), passCapacity);
-                sceneFoliageGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneFoliageCullSet,
-                    sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), passCapacity);
-                sceneFoliageIndirectDraws[frame].create(
-                    sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), passCapacity);
-                shadowCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowCullSet,
-                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), shadowPassCapacity,
-                    shadowCandidateCountBuffers[frame].handle(), shadowCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame],
-                    shadowInstanceTransformCountBuffers[frame].handle());
-                shadowIndirectDraws[frame].create(
-                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), shadowPassCapacity);
-                shadowTwoSidedCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowTwoSidedCullSet,
-                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), shadowPassCapacity,
-                    shadowTwoSidedCandidateCountBuffers[frame].handle(), shadowTwoSidedCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame],
-                    shadowTwoSidedInstanceTransformCountBuffers[frame].handle());
-                shadowTwoSidedIndirectDraws[frame].create(
-                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), shadowPassCapacity);
-            }
-            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
-                refreshGPUSceneDescriptors(frame);
-            hiZValid.fill(false);
-            [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
+            allocateOne(grassPackedBinDescriptorSetLayout, grassPackedBinSets[frame][stream]);
+            allocateOne(grassPrefixDescriptorSetLayout, grassPackedPrefixSets[frame][stream]);
+            allocateOne(grassPackedScatterDescriptorSetLayout, grassPackedScatterSets[frame][stream]);
+            allocateOne(grassPackedFinalizeDescriptorSetLayout, grassPackedFinalizeSets[frame][stream]);
+            allocateOne(grassPackedBinDescriptorSetLayout, sceneGrassPackedBinSets[frame][stream]);
+            allocateOne(grassPrefixDescriptorSetLayout, sceneGrassPackedPrefixSets[frame][stream]);
+            allocateOne(grassPackedScatterDescriptorSetLayout, sceneGrassPackedScatterSets[frame][stream]);
+            allocateOne(grassPackedFinalizeDescriptorSetLayout, sceneGrassPackedFinalizeSets[frame][stream]);
         }
-
-        void destroyCullingResources() noexcept {
-            for (auto& hiZPass : hiZPasses) hiZPass.destroy();
-            for (auto& draw : indirectDraws) draw.destroy();
-            for (auto& draw : foliageIndirectDraws) draw.destroy();
-            for (auto& draw : sceneIndirectDraws) draw.destroy();
-            for (auto& draw : sceneFoliageIndirectDraws) draw.destroy();
-            for (auto& draw : shadowIndirectDraws) draw.destroy();
-            for (auto& draw : shadowTwoSidedIndirectDraws) draw.destroy();
-            for (auto& draw : meshletIndexedIndirectDraws) draw.destroy();
-            for (Buffer& buffer : cullingUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : sceneCullingUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : foliageCullingUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowCullingUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedCullingUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : indirectBuffers) buffer.destroy();
-            for (Buffer& buffer : foliageIndirectBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowIndirectBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedIndirectBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowCandidateBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedCandidateBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowCandidateCountBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedCandidateCountBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowCandidateDispatchBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedCandidateDispatchBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowInstanceTransformBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowVisibleInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedInstanceTransformBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedVisibleInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowInstanceTransformCountBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedInstanceTransformCountBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowInstanceMaterialBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedInstanceMaterialBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowPageWorkBuffers) buffer.destroy();
-            for (Buffer& buffer : vsmRequestedPageBuffers) buffer.destroy();
-            for (Buffer& buffer : vsmCompactedPageBuffers) buffer.destroy();
-            for (Buffer& buffer : vsmCompactedPageCountBuffers) buffer.destroy();
-            for (Buffer& buffer : vsmPageMarkingUniformBuffers) buffer.destroy();
-            vsmRequestsReady.fill(false);
-            vsmRequestsFromScene.fill(false);
-            sceneVsmFeedbackPending.fill(false);
-            sceneVsmFeedbackCache = {};
-            sceneVsmReceiverFeedbackValid = false;
-            sceneVsmReceiverRequests.clear();
-            for (Buffer& buffer : clusteredLightRangeBuffers) buffer.destroy();
-            for (Buffer& buffer : clusteredLightIndexBuffers) buffer.destroy();
-            for (Buffer& buffer : sceneClusteredLightRangeBuffers) buffer.destroy();
-            for (Buffer& buffer : sceneClusteredLightIndexBuffers) buffer.destroy();
-            for (Buffer& buffer : clusteredLightingUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : sceneClusteredLightingUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : drawCountBuffers) buffer.destroy();
-            for (Buffer& buffer : foliageDrawCountBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowTwoSidedDrawCountBuffers) buffer.destroy();
-            for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
-            for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
-            for (Buffer& buffer : meshletCullDispatchBuffers) buffer.destroy();
-            for (Buffer& buffer : visibleMeshletBuffers) buffer.destroy();
-            for (Buffer& buffer : visibleMeshletCountBuffers) buffer.destroy();
-            for (Buffer& buffer : meshletIndexedIndirectBuffers) buffer.destroy();
-            for (Buffer& buffer : meshletIndexedDrawCountBuffers) buffer.destroy();
-            for (Buffer& buffer : meshletCullingUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : grassBinCountBuffers) buffer.destroy();
-            for (Buffer& buffer : grassBinOffsetBuffers) buffer.destroy();
-            for (Buffer& buffer : grassBinCursorBuffers) buffer.destroy();
-            for (Buffer& buffer : generatedGrassInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : grassDeformationBuffers) buffer.destroy();
-            for (Buffer& buffer : grassIndirectBuffers) buffer.destroy();
-            for (Buffer& buffer : grassDrawCountBuffers) buffer.destroy();
-            for (Buffer& buffer : grassShadowPageMatricesBuffers) buffer.destroy();
-            for (Buffer& buffer : grassShadowPageIndirectBuffers) buffer.destroy();
-            for (Buffer& buffer : grassShadowPageDrawCountBuffers) buffer.destroy();
-            for (Buffer& buffer : grassShadowPageCullUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : grassIndirectUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : grassPrefixUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : grassClassifyUniformBuffers) buffer.destroy();
-            for (Buffer& buffer : grassPackedCullUniformBuffers) buffer.destroy();
-            for (auto& streamUniforms : grassPackedStreamUniformBuffers) {
-                for (Buffer& buffer : streamUniforms) buffer.destroy();
+    }
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        const VkDescriptorBufferInfo sceneInstanceInfo{gpuVisibilityInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo visibleInfo{visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo visibleCountInfo{visibleInstanceCountBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo instanceUniformInfo{cullingUniformBuffers[frame].handle(), 0,
+                                                         sizeof(Culling::CullingUniformData)};
+        std::array<VkWriteDescriptorSet, 4> instanceWrites{};
+        const std::array<const VkDescriptorBufferInfo*, 4> instanceInfos{&sceneInstanceInfo, &visibleInfo,
+                                                                         &visibleCountInfo, &instanceUniformInfo};
+        for (std::uint32_t binding = 0; binding < instanceWrites.size(); ++binding) {
+            instanceWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                       .dstSet = instanceCullSets[frame],
+                                       .dstBinding = binding,
+                                       .descriptorCount = 1,
+                                       .descriptorType = binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                                      : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                       .pBufferInfo = instanceInfos[binding]};
+        }
+        vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(instanceWrites.size()), instanceWrites.data(), 0,
+                               nullptr);
+        const auto updateGrassSet = [&](const VkDescriptorSet set, std::initializer_list<VkBuffer> storageBuffers,
+                                        const VkBuffer uniformBuffer) {
+            std::vector<VkDescriptorBufferInfo> infos;
+            infos.reserve(storageBuffers.size() + (uniformBuffer != VK_NULL_HANDLE ? 1 : 0));
+            for (const VkBuffer buffer : storageBuffers)
+                infos.push_back({buffer, 0, VK_WHOLE_SIZE});
+            if (uniformBuffer != VK_NULL_HANDLE)
+                infos.push_back({uniformBuffer, 0, VK_WHOLE_SIZE});
+            std::vector<VkWriteDescriptorSet> writes(infos.size());
+            for (std::uint32_t binding = 0; binding < writes.size(); ++binding) {
+                writes[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                   .dstSet = set,
+                                   .dstBinding = binding,
+                                   .descriptorCount = 1,
+                                   .descriptorType = uniformBuffer != VK_NULL_HANDLE && binding + 1 == writes.size()
+                                                         ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                         : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                   .pBufferInfo = &infos[binding]};
             }
-            for (GrassRenderLists& lists : grassRenderLists) {
-                lists.visibleInstances.destroy();
-                lists.visibleCount.destroy();
-                lists.visibleClusters.destroy(); lists.visibleClusterCount.destroy(); lists.bladeCullDispatch.destroy();
-                lists.dispatchIndirect.destroy();
-                lists.mainVisibleInstances.destroy();
-                lists.shadowVisibleInstances.destroy();
-                lists.velocityVisibleInstances.destroy();
-                lists.classifyCounts.destroy();
-                for (Buffer& buffer : lists.binCounts) buffer.destroy();
-                for (Buffer& buffer : lists.binOffsets) buffer.destroy();
-                for (Buffer& buffer : lists.binCursors) buffer.destroy();
-                for (Buffer& buffer : lists.drawInstances) buffer.destroy();
-                lists.mainIndirect.destroy();
-                lists.mainDrawCount.destroy();
-                lists.shadowIndirect.destroy();
-                lists.shadowDrawCount.destroy();
-                lists.velocityIndirect.destroy();
-                lists.velocityDrawCount.destroy();
+            vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        };
+        auto& packedLists = grassRenderLists[frame];
+        updateGrassSet(grassVisibleDispatchBuildSets[frame],
+                       {packedLists.visibleCount.handle(), packedLists.dispatchIndirect.handle()}, VK_NULL_HANDLE);
+        updateGrassSet(grassStreamDispatchBuildSets[frame],
+                       {packedLists.classifyCounts.handle(), packedLists.dispatchIndirect.handle()}, VK_NULL_HANDLE);
+        updateGrassSet(grassPackedCullSets[frame],
+                       {grassClusterBuffers[frame].handle(), packedLists.visibleClusters.handle(),
+                        packedLists.visibleClusterCount.handle(), packedLists.bladeCullDispatch.handle()},
+                       grassPackedCullUniformBuffers[frame].handle());
+        updateGrassSet(grassShadowPageCullSets[frame],
+                       {grassClusterBuffers[frame].handle(), packedLists.shadowIndirect.handle(),
+                        grassShadowPageMatricesBuffers[frame].handle(), grassShadowPageIndirectBuffers[frame].handle(),
+                        grassShadowPageDrawCountBuffers[frame].handle()},
+                       grassShadowPageCullUniformBuffers[frame].handle());
+        updateGrassSet(grassBladeCullSets[frame],
+                       {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(),
+                        packedLists.visibleClusters.handle(), packedLists.visibleClusterCount.handle(),
+                        packedLists.visibleInstances.handle(), packedLists.visibleCount.handle()},
+                       grassPackedCullUniformBuffers[frame].handle());
+        updateGrassSet(grassClassifySets[frame],
+                       {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(),
+                        packedLists.visibleInstances.handle(), packedLists.mainVisibleInstances.handle(),
+                        packedLists.shadowVisibleInstances.handle(), packedLists.velocityVisibleInstances.handle(),
+                        packedLists.classifyCounts.handle(), packedLists.visibleCount.handle()},
+                       grassClassifyUniformBuffers[frame].handle());
+        const std::array<VkBuffer, 3> classified{packedLists.mainVisibleInstances.handle(),
+                                                 packedLists.shadowVisibleInstances.handle(),
+                                                 packedLists.velocityVisibleInstances.handle()};
+        const std::array<VkBuffer, 3> indirect{packedLists.mainIndirect.handle(), packedLists.shadowIndirect.handle(),
+                                               packedLists.velocityIndirect.handle()};
+        const std::array<VkBuffer, 3> drawCounts{packedLists.mainDrawCount.handle(),
+                                                 packedLists.shadowDrawCount.handle(),
+                                                 packedLists.velocityDrawCount.handle()};
+        for (uint32_t stream = 0; stream < 3; ++stream) {
+            const VkBuffer uniform = grassPackedStreamUniformBuffers[frame][stream].handle();
+            updateGrassSet(grassPackedBinSets[frame][stream],
+                           {generatedGrassInstanceBuffers[frame].handle(), classified[stream],
+                            packedLists.classifyCounts.handle(), packedLists.binCounts[stream].handle()},
+                           uniform);
+            updateGrassSet(grassPackedPrefixSets[frame][stream],
+                           {packedLists.binCounts[stream].handle(), packedLists.binOffsets[stream].handle()}, uniform);
+            updateGrassSet(grassPackedScatterSets[frame][stream],
+                           {generatedGrassInstanceBuffers[frame].handle(), classified[stream],
+                            packedLists.classifyCounts.handle(), packedLists.binOffsets[stream].handle(),
+                            packedLists.binCursors[stream].handle(), packedLists.drawInstances[stream].handle()},
+                           uniform);
+            updateGrassSet(grassPackedFinalizeSets[frame][stream],
+                           {grassClusterBuffers[frame].handle(), packedLists.binCounts[stream].handle(),
+                            packedLists.binOffsets[stream].handle(), indirect[stream], drawCounts[stream]},
+                           uniform);
+        }
+        auto& scenePackedLists = sceneGrassRenderLists[frame];
+        updateGrassSet(sceneGrassVisibleDispatchBuildSets[frame],
+                       {scenePackedLists.visibleCount.handle(), scenePackedLists.dispatchIndirect.handle()},
+                       VK_NULL_HANDLE);
+        updateGrassSet(sceneGrassStreamDispatchBuildSets[frame],
+                       {scenePackedLists.classifyCounts.handle(), scenePackedLists.dispatchIndirect.handle()},
+                       VK_NULL_HANDLE);
+        updateGrassSet(sceneGrassPackedCullSets[frame],
+                       {grassClusterBuffers[frame].handle(), scenePackedLists.visibleClusters.handle(),
+                        scenePackedLists.visibleClusterCount.handle(), scenePackedLists.bladeCullDispatch.handle()},
+                       sceneGrassPackedCullUniformBuffers[frame].handle());
+        updateGrassSet(sceneGrassBladeCullSets[frame],
+                       {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(),
+                        scenePackedLists.visibleClusters.handle(), scenePackedLists.visibleClusterCount.handle(),
+                        scenePackedLists.visibleInstances.handle(), scenePackedLists.visibleCount.handle()},
+                       sceneGrassPackedCullUniformBuffers[frame].handle());
+        const VkBuffer sceneUniform = sceneGrassPackedStreamUniformBuffers[frame][0].handle();
+        updateGrassSet(sceneGrassClassifySets[frame],
+                       {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(),
+                        scenePackedLists.visibleInstances.handle(), scenePackedLists.mainVisibleInstances.handle(),
+                        scenePackedLists.mainVisibleInstances.handle(), scenePackedLists.mainVisibleInstances.handle(),
+                        scenePackedLists.classifyCounts.handle(), scenePackedLists.visibleCount.handle()},
+                       sceneGrassClassifyUniformBuffers[frame].handle());
+        updateGrassSet(sceneGrassPackedBinSets[frame][0],
+                       {generatedGrassInstanceBuffers[frame].handle(), scenePackedLists.mainVisibleInstances.handle(),
+                        scenePackedLists.classifyCounts.handle(), scenePackedLists.binCounts[0].handle()},
+                       sceneUniform);
+        updateGrassSet(sceneGrassPackedPrefixSets[frame][0],
+                       {scenePackedLists.binCounts[0].handle(), scenePackedLists.binOffsets[0].handle()}, sceneUniform);
+        updateGrassSet(sceneGrassPackedScatterSets[frame][0],
+                       {generatedGrassInstanceBuffers[frame].handle(), scenePackedLists.mainVisibleInstances.handle(),
+                        scenePackedLists.classifyCounts.handle(), scenePackedLists.binOffsets[0].handle(),
+                        scenePackedLists.binCursors[0].handle(), scenePackedLists.drawInstances[0].handle()},
+                       sceneUniform);
+        updateGrassSet(sceneGrassPackedFinalizeSets[frame][0],
+                       {grassClusterBuffers[frame].handle(), scenePackedLists.binCounts[0].handle(),
+                        scenePackedLists.binOffsets[0].handle(), scenePackedLists.mainIndirect.handle(),
+                        scenePackedLists.mainDrawCount.handle()},
+                       sceneUniform);
+        updateGrassSet(grassBuildSets[frame],
+                       {gpuSceneInstanceBuffers[frame].handle(), visibleInstanceBuffers[frame].handle(),
+                        visibleInstanceCountBuffers[frame].handle(), gpuSceneMeshBuffers[frame].handle(),
+                        grassBinCountBuffers[frame].handle()},
+                       grassIndirectUniformBuffers[frame].handle());
+        updateGrassSet(grassPrefixSets[frame],
+                       {grassBinCountBuffers[frame].handle(), grassBinOffsetBuffers[frame].handle()},
+                       grassPrefixUniformBuffers[frame].handle());
+        updateGrassSet(grassScatterSets[frame],
+                       {gpuSceneInstanceBuffers[frame].handle(), visibleInstanceBuffers[frame].handle(),
+                        visibleInstanceCountBuffers[frame].handle(), grassBinOffsetBuffers[frame].handle(),
+                        grassBinCursorBuffers[frame].handle(), compactGrassInstanceBuffers[frame].handle()},
+                       grassIndirectUniformBuffers[frame].handle());
+        updateGrassSet(grassFinalizeSets[frame],
+                       {gpuSceneMeshBuffers[frame].handle(), grassBinCountBuffers[frame].handle(),
+                        grassBinOffsetBuffers[frame].handle(), grassIndirectBuffers[frame].handle(),
+                        grassDrawCountBuffers[frame].handle()},
+                       grassIndirectUniformBuffers[frame].handle());
+        // Binding 3 is retained by the shared culling pipeline.  When
+        // Hi-Z is disabled the shader's feature flag prevents a read,
+        // so HDR is a small, already-allocated valid fallback.
+        const auto previousHiZFrame = (frame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+        const auto& hiZBuffer = hiZBuffers[previousHiZFrame];
+        const VkDescriptorImageInfo hiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
+                                                  ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
+                                                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                                                  : VkDescriptorImageInfo{hdrBuffer.sampler(), hdrBuffer.imageView(),
+                                                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        const VkDescriptorBufferInfo vsmRequestInfo{vsmRequestedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo vsmUniformInfo{vsmPageMarkingUniformBuffers[frame].handle(), 0,
+                                                    sizeof(VsmPageMarkingUniforms)};
+        const VkWriteDescriptorSet vsmWrites[] = {
+            {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             .dstSet = vsmPageMarkingSets[frame],
+             .dstBinding = 0,
+             .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .pImageInfo = &hiZInfo},
+            {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             .dstSet = vsmPageMarkingSets[frame],
+             .dstBinding = 1,
+             .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+             .pBufferInfo = &vsmRequestInfo},
+            {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             .dstSet = vsmPageMarkingSets[frame],
+             .dstBinding = 2,
+             .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+             .pBufferInfo = &vsmUniformInfo},
+        };
+        vkUpdateDescriptorSets(device, std::size(vsmWrites), vsmWrites, 0, nullptr);
+        const VkDescriptorBufferInfo vsmCompactInfos[] = {
+            {vsmRequestedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            {vsmCompactedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            {vsmCompactedPageCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+        };
+        VkWriteDescriptorSet vsmCompactWrites[3]{};
+        for (std::uint32_t binding = 0; binding < std::size(vsmCompactWrites); ++binding) {
+            vsmCompactWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                         .dstSet = vsmPageCompactSets[frame],
+                                         .dstBinding = binding,
+                                         .descriptorCount = 1,
+                                         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                         .pBufferInfo = &vsmCompactInfos[binding]};
+        }
+        vkUpdateDescriptorSets(device, std::size(vsmCompactWrites), vsmCompactWrites, 0, nullptr);
+        struct CullingSetUpdate {
+            VkDescriptorSet set;
+            const Buffer& indirectBuffer;
+            const Buffer& countBuffer;
+            const Buffer& uniformBuffer;
+            const Buffer& candidateBuffer;
+            const Buffer& candidateCountBuffer;
+            const Buffer& candidateDispatchBuffer;
+            const Buffer& pageWorkBuffer;
+            const Buffer& shadowTransformBuffer;
+            const Buffer& shadowTransformCountBuffer;
+            const Buffer& shadowMaterialBuffer;
+            const Buffer& shadowVisibleInstanceBuffer;
+        };
+        const auto updateCullingSet = [&](const CullingSetUpdate& update) {
+            const VkDescriptorBufferInfo objectInfo{cullingObjectBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo indirectInfo{update.indirectBuffer.handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo countInfo{update.countBuffer.handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo uniformInfo{update.uniformBuffer.handle(), 0,
+                                                     sizeof(Culling::CullingUniformData)};
+            const VkDescriptorBufferInfo candidateInfo{update.candidateBuffer.handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo candidateCountInfo{update.candidateCountBuffer.handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo candidateDispatchInfo{update.candidateDispatchBuffer.handle(), 0,
+                                                               VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo pageWorkInfo{update.pageWorkBuffer.handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo rendererInstanceInfo{instanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo rendererInstanceIndexInfo{compactGrassInstanceBuffers[frame].handle(), 0,
+                                                                   VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo shadowTransformInfo{update.shadowTransformBuffer.handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo shadowTransformCountInfo{update.shadowTransformCountBuffer.handle(), 0,
+                                                                  VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo shadowMaterialInfo{update.shadowMaterialBuffer.handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo shadowVisibleInstanceInfo{update.shadowVisibleInstanceBuffer.handle(), 0,
+                                                                   VK_WHOLE_SIZE};
+            std::array<VkWriteDescriptorSet, cullingDescriptorBindingCount> writes{};
+            for (uint32_t i = 0; i < writes.size(); ++i) {
+                writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[i].dstSet = update.set;
+                writes[i].dstBinding = i;
+                writes[i].descriptorCount = 1;
             }
-            if (cullingDescriptorPool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
-}
-            if (hiZCopyPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, hiZCopyPipeline, nullptr);
-}
-            if (hiZReducePipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, hiZReducePipeline, nullptr);
-}
-            if (cullingPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, cullingPipeline, nullptr);
-}
-            if (instanceCullingPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, instanceCullingPipeline, nullptr);
-}
-            if (meshletCullingPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, meshletCullingPipeline, nullptr);
-}
-            if (meshletDispatchPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, meshletDispatchPipeline, nullptr);
-            if (meshletIndirectPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, meshletIndirectPipeline, nullptr);
-            if (grassBuildPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassBuildPipeline, nullptr);
-            if (grassDispatchBuildPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassDispatchBuildPipeline, nullptr);
-            if (grassPrefixPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPrefixPipeline, nullptr);
-            if (grassScatterPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassScatterPipeline, nullptr);
-            if (grassFinalizePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassFinalizePipeline, nullptr);
-            if (grassPackedCullPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedCullPipeline, nullptr);
-            if (grassShadowPageCullPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassShadowPageCullPipeline, nullptr);
-            if (grassBladeCullPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassBladeCullPipeline, nullptr);
-            if (grassClassifyPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassClassifyPipeline, nullptr);
-            if (grassPackedBinPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedBinPipeline, nullptr);
-            if (grassPackedPrefixPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedPrefixPipeline, nullptr);
-            if (grassPackedScatterPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedScatterPipeline, nullptr);
-            if (grassPackedFinalizePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedFinalizePipeline, nullptr);
-            if (clusteredLightingPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, clusteredLightingPipeline, nullptr);
-            if (vsmPageMarkingPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, vsmPageMarkingPipeline, nullptr);
-            if (vsmPageCompactPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, vsmPageCompactPipeline, nullptr);
-            if (hiZCopyPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
-}
-            if (hiZReducePipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZReducePipelineLayout, nullptr);
-}
-            if (cullingPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, cullingPipelineLayout, nullptr);
-}
-            if (instanceCullingPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, instanceCullingPipelineLayout, nullptr);
-}
-            if (meshletCullingPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, meshletCullingPipelineLayout, nullptr);
-}
-            if (meshletDispatchPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, meshletDispatchPipelineLayout, nullptr);
-            if (meshletIndirectPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, meshletIndirectPipelineLayout, nullptr);
-            if (grassBuildPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassBuildPipelineLayout, nullptr);
-            if (grassDispatchBuildPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassDispatchBuildPipelineLayout, nullptr);
-            if (grassPrefixPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPrefixPipelineLayout, nullptr);
-            if (grassScatterPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassScatterPipelineLayout, nullptr);
-            if (grassFinalizePipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassFinalizePipelineLayout, nullptr);
-            if (grassPackedCullPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedCullPipelineLayout, nullptr);
-            if (grassShadowPageCullPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassShadowPageCullPipelineLayout, nullptr);
-            if (grassBladeCullPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassBladeCullPipelineLayout, nullptr);
-            if (grassClassifyPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassClassifyPipelineLayout, nullptr);
-            if (grassPackedBinPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedBinPipelineLayout, nullptr);
-            if (grassPackedScatterPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedScatterPipelineLayout, nullptr);
-            if (grassPackedFinalizePipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedFinalizePipelineLayout, nullptr);
-            if (clusteredLightingPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, clusteredLightingPipelineLayout, nullptr);
-            if (vsmPageMarkingPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, vsmPageMarkingPipelineLayout, nullptr);
-            if (vsmPageCompactPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, vsmPageCompactPipelineLayout, nullptr);
-            if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
-}
-            if (hiZReduceDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZReduceDescriptorSetLayout, nullptr);
-}
-            if (cullingDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, cullingDescriptorSetLayout, nullptr);
-}
-            if (instanceCullingDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, instanceCullingDescriptorSetLayout, nullptr);
-}
-            if (meshletCullingDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, meshletCullingDescriptorSetLayout, nullptr);
-}
-            if (meshletDispatchDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, meshletDispatchDescriptorSetLayout, nullptr);
-            if (meshletIndirectDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, meshletIndirectDescriptorSetLayout, nullptr);
-            if (grassBuildDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassBuildDescriptorSetLayout, nullptr);
-            if (grassDispatchBuildDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassDispatchBuildDescriptorSetLayout, nullptr);
-            if (grassPrefixDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPrefixDescriptorSetLayout, nullptr);
-            if (grassScatterDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassScatterDescriptorSetLayout, nullptr);
-            if (grassFinalizeDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassFinalizeDescriptorSetLayout, nullptr);
-            if (grassPackedCullDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedCullDescriptorSetLayout, nullptr);
-            if (grassShadowPageCullDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassShadowPageCullDescriptorSetLayout, nullptr);
-            if (grassBladeCullDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassBladeCullDescriptorSetLayout, nullptr);
-            if (grassClassifyDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassClassifyDescriptorSetLayout, nullptr);
-            if (grassPackedBinDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedBinDescriptorSetLayout, nullptr);
-            if (grassPackedScatterDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedScatterDescriptorSetLayout, nullptr);
-            if (grassPackedFinalizeDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedFinalizeDescriptorSetLayout, nullptr);
-            if (clusteredLightingDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, clusteredLightingDescriptorSetLayout, nullptr);
-            if (vsmPageMarkingDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, vsmPageMarkingDescriptorSetLayout, nullptr);
-            if (vsmPageCompactDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, vsmPageCompactDescriptorSetLayout, nullptr);
-            cullingDescriptorPool = VK_NULL_HANDLE; hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
-            vsmPageMarkingPipeline = VK_NULL_HANDLE;
-            vsmPageCompactPipeline = VK_NULL_HANDLE;
-            instanceCullingPipeline = VK_NULL_HANDLE;
-            meshletCullingPipeline = VK_NULL_HANDLE;
-            meshletDispatchPipeline = VK_NULL_HANDLE;
-            meshletIndirectPipeline = VK_NULL_HANDLE;
-            grassBuildPipeline = grassPrefixPipeline = grassScatterPipeline = grassFinalizePipeline = VK_NULL_HANDLE;
-            grassPackedCullPipeline = grassBladeCullPipeline = grassClassifyPipeline = VK_NULL_HANDLE;
-            grassShadowPageCullPipeline = VK_NULL_HANDLE;
-            grassPackedBinPipeline = grassPackedPrefixPipeline = grassPackedScatterPipeline = grassPackedFinalizePipeline = VK_NULL_HANDLE;
-            hiZCopyPipelineLayout = hiZReducePipelineLayout = cullingPipelineLayout = VK_NULL_HANDLE;
-            vsmPageMarkingPipelineLayout = VK_NULL_HANDLE;
-            vsmPageCompactPipelineLayout = VK_NULL_HANDLE;
-            instanceCullingPipelineLayout = VK_NULL_HANDLE;
-            meshletCullingPipelineLayout = VK_NULL_HANDLE;
-            meshletDispatchPipelineLayout = VK_NULL_HANDLE;
-            meshletIndirectPipelineLayout = VK_NULL_HANDLE;
-            grassBuildPipelineLayout = grassPrefixPipelineLayout = grassScatterPipelineLayout = grassFinalizePipelineLayout = VK_NULL_HANDLE;
-            grassPackedCullPipelineLayout = grassBladeCullPipelineLayout = grassClassifyPipelineLayout = VK_NULL_HANDLE;
-            grassShadowPageCullPipelineLayout = VK_NULL_HANDLE;
-            grassPackedBinPipelineLayout = grassPackedScatterPipelineLayout = grassPackedFinalizePipelineLayout = VK_NULL_HANDLE;
-            hiZCopyDescriptorSetLayout = hiZReduceDescriptorSetLayout = cullingDescriptorSetLayout = VK_NULL_HANDLE;
-            vsmPageMarkingDescriptorSetLayout = VK_NULL_HANDLE;
-            vsmPageCompactDescriptorSetLayout = VK_NULL_HANDLE;
-            instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
-            meshletCullingDescriptorSetLayout = VK_NULL_HANDLE;
-            meshletDispatchDescriptorSetLayout = VK_NULL_HANDLE;
-            meshletIndirectDescriptorSetLayout = VK_NULL_HANDLE;
-            grassBuildDescriptorSetLayout = grassPrefixDescriptorSetLayout = grassScatterDescriptorSetLayout = grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
-            grassPackedCullDescriptorSetLayout = grassBladeCullDescriptorSetLayout = grassClassifyDescriptorSetLayout = VK_NULL_HANDLE;
-            grassShadowPageCullDescriptorSetLayout = VK_NULL_HANDLE;
-            grassPackedBinDescriptorSetLayout = grassPackedScatterDescriptorSetLayout = grassPackedFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
-            for (auto& hiZBuffer : hiZBuffers) hiZBuffer.destroy();
-            gpuObjects.clear(); hiZValid.fill(false);
+            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[0].pBufferInfo = &objectInfo;
+            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[1].pBufferInfo = &indirectInfo;
+            writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[2].pBufferInfo = &countInfo;
+            writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[3].pImageInfo = &hiZInfo;
+            writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[4].pBufferInfo = &uniformInfo;
+            writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[5].pBufferInfo = &candidateInfo;
+            writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[6].pBufferInfo = &candidateCountInfo;
+            writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[7].pBufferInfo = &candidateDispatchInfo;
+            writes[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[8].pBufferInfo = &pageWorkInfo;
+            writes[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[9].pBufferInfo = &rendererInstanceInfo;
+            writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[10].pBufferInfo = &rendererInstanceIndexInfo;
+            writes[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[11].pBufferInfo = &shadowTransformInfo;
+            writes[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[12].pBufferInfo = &shadowTransformCountInfo;
+            writes[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[13].pBufferInfo = &shadowMaterialInfo;
+            writes[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[14].pBufferInfo = &shadowVisibleInstanceInfo;
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        };
+        VkDescriptorSet cameraCullSet = cullSets[frame];
+        VkDescriptorSet foliageCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
+        VkDescriptorSet sceneCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 2 + frame];
+        VkDescriptorSet sceneFoliageCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 3 + frame];
+        VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 4 + frame];
+        VkDescriptorSet shadowTwoSidedCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 5 + frame];
+        const auto& candidates = shadowCandidateBuffers[frame];
+        const auto& candidateCounts = shadowCandidateCountBuffers[frame];
+        const auto& candidateDispatches = shadowCandidateDispatchBuffers[frame];
+        const auto& pageWork = shadowPageWorkBuffers[frame];
+        const auto& shadowTransforms = shadowInstanceTransformBuffers[frame];
+        const auto& shadowTransformCounts = shadowInstanceTransformCountBuffers[frame];
+        const auto& shadowTwoSidedTransforms = shadowTwoSidedInstanceTransformBuffers[frame];
+        const auto& shadowTwoSidedTransformCounts = shadowTwoSidedInstanceTransformCountBuffers[frame];
+        const auto& shadowMaterials = shadowInstanceMaterialBuffers[frame];
+        const auto& shadowTwoSidedMaterials = shadowTwoSidedInstanceMaterialBuffers[frame];
+        updateCullingSet({cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame], cullingUniformBuffers[frame],
+                          candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms,
+                          shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
+        updateCullingSet({foliageCullSet, foliageIndirectBuffers[frame], foliageDrawCountBuffers[frame],
+                          foliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches,
+                          pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials,
+                          shadowVisibleInstanceBuffers[frame]});
+        updateCullingSet({shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
+                          shadowCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches,
+                          pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials,
+                          shadowVisibleInstanceBuffers[frame]});
+        updateCullingSet({shadowTwoSidedCullSet, shadowTwoSidedIndirectBuffers[frame],
+                          shadowTwoSidedDrawCountBuffers[frame], shadowTwoSidedCullingUniformBuffers[frame],
+                          shadowTwoSidedCandidateBuffers[frame], shadowTwoSidedCandidateCountBuffers[frame],
+                          shadowTwoSidedCandidateDispatchBuffers[frame], pageWork, shadowTwoSidedTransforms,
+                          shadowTwoSidedTransformCounts, shadowTwoSidedMaterials,
+                          shadowTwoSidedVisibleInstanceBuffers[frame]});
+        updateCullingSet({sceneCullSet, sceneIndirectBuffers[frame], sceneDrawCountBuffers[frame],
+                          sceneCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork,
+                          shadowTransforms, shadowTransformCounts, shadowMaterials,
+                          shadowVisibleInstanceBuffers[frame]});
+        updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
+                          sceneFoliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches,
+                          pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials,
+                          shadowVisibleInstanceBuffers[frame]});
+        // Keep this indexed by descriptor binding. Binding 8 is the
+        // Hi-Z image, while binding 9 is the cluster hierarchy; the
+        // previous compact initializer put the hierarchy at index 8
+        // and made vkUpdateDescriptorSets read past the array.
+        const std::array<VkDescriptorBufferInfo, 10> meshletInfos{{
+            {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+            {gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            {gpuSceneMeshBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            {visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            {visibleInstanceCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+            {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+            {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
+            {}, // binding 8 is meshletHiZInfo below
+            {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
+        }};
+        // Meshlet culling keeps binding 8 populated even when the
+        // optional Hi-Z pyramid was not allocated for this renderer
+        // configuration.  A valid depth fallback is required because
+        // nullDescriptor is not enabled on the device.
+        const auto& meshletDepthFallback = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+        const VkDescriptorImageInfo meshletHiZInfo =
+            hiZBuffer.image() != VK_NULL_HANDLE
+                ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                : VkDescriptorImageInfo{meshletDepthFallback.sampler(), meshletDepthFallback.imageView(),
+                                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet meshletWrites[10]{};
+        for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
+            meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                      .dstSet = meshletCullSets[frame],
+                                      .dstBinding = binding,
+                                      .descriptorCount = 1,
+                                      .descriptorType = binding == 8
+                                                            ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                                            : (binding == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                                            : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                                      .pImageInfo = binding == 8 ? &meshletHiZInfo : nullptr,
+                                      .pBufferInfo = binding == 8 ? nullptr : &meshletInfos[binding]};
         }
-
-        void createFramebuffers() {
-            const VkExtent2D extent = swapchain.extent();
-            // The prepass writes velocity and view-normal MRTs at single sample.
-            // Velocity is retained even without TAA to keep attachment locations
-            // stable: view normals are fragment output location 2.
-            if (!msaa.enabled()) {
-                const std::array normalFamilies{
-                    vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
-                const std::span<const std::uint32_t> sharingFamilies =
-                    vulkanDevice.hasAsyncComputeQueue() && normalFamilies[0] != normalFamilies[1]
-                        ? std::span<const std::uint32_t>(normalFamilies)
-                        : std::span<const std::uint32_t>{};
-                velocityBuffer.create(vulkanDevice.physical(), device, extent,
-                                      vulkanDevice.allocator(), VK_FILTER_NEAREST,
-                                      VK_FORMAT_R16G16_SFLOAT);
-                gtaoViewNormalBuffer.create(vulkanDevice.physical(), device, extent,
-                                            vulkanDevice.allocator(), VK_FILTER_NEAREST,
-                                            VK_FORMAT_R16G16_SNORM, false, sharingFamilies);
-            }
-            createVirtualWaterResources();
+        vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
+        const VkDescriptorBufferInfo meshletDispatchInfos[] = {
+            {visibleInstanceCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+            {meshletCullDispatchBuffers[frame].handle(), 0, sizeof(VkDispatchIndirectCommand)},
+        };
+        VkWriteDescriptorSet meshletDispatchWrites[2]{};
+        for (std::uint32_t binding = 0; binding < std::size(meshletDispatchWrites); ++binding) {
+            meshletDispatchWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                              .dstSet = meshletDispatchSets[frame],
+                                              .dstBinding = binding,
+                                              .descriptorCount = 1,
+                                              .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                              .pBufferInfo = &meshletDispatchInfos[binding]};
         }
+        vkUpdateDescriptorSets(device, std::size(meshletDispatchWrites), meshletDispatchWrites, 0, nullptr);
+        instanceCullingPasses[frame].create(instanceCullingPipeline, instanceCullingPipelineLayout,
+                                            instanceCullSets[frame], visibleInstanceCountBuffers[frame].handle(),
+                                            visibleInstanceBuffers[frame].handle());
+        gpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, cullSets[frame],
+                                       indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), passCapacity);
+        indirectDraws[frame].create(indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), passCapacity);
+        foliageGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, foliageCullSet,
+                                              foliageIndirectBuffers[frame].handle(),
+                                              foliageDrawCountBuffers[frame].handle(), passCapacity);
+        // Grass is culled as terrain chunks in the production draw
+        // path.  The experimental GPU-scene per-instance list remains
+        // available for the compaction passes, but must not replace a
+        // valid chunk command list until its bounds source is shared
+        // with terrain extraction.
+        foliageIndirectDraws[frame].create(foliageIndirectBuffers[frame].handle(),
+                                           foliageDrawCountBuffers[frame].handle(), passCapacity);
+        sceneGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneCullSet,
+                                            sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(),
+                                            passCapacity);
+        sceneIndirectDraws[frame].create(sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(),
+                                         passCapacity);
+        sceneFoliageGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneFoliageCullSet,
+                                                   sceneFoliageIndirectBuffers[frame].handle(),
+                                                   sceneFoliageDrawCountBuffers[frame].handle(), passCapacity);
+        sceneFoliageIndirectDraws[frame].create(sceneFoliageIndirectBuffers[frame].handle(),
+                                                sceneFoliageDrawCountBuffers[frame].handle(), passCapacity);
+        shadowCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowCullSet,
+                                          shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(),
+                                          shadowPassCapacity, shadowCandidateCountBuffers[frame].handle(),
+                                          shadowCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame],
+                                          shadowInstanceTransformCountBuffers[frame].handle());
+        shadowIndirectDraws[frame].create(shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(),
+                                          shadowPassCapacity);
+        shadowTwoSidedCullingPasses[frame].create(
+            device, cullingPipeline, cullingPipelineLayout, shadowTwoSidedCullSet,
+            shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(),
+            shadowPassCapacity, shadowTwoSidedCandidateCountBuffers[frame].handle(),
+            shadowTwoSidedCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame],
+            shadowTwoSidedInstanceTransformCountBuffers[frame].handle());
+        shadowTwoSidedIndirectDraws[frame].create(shadowTwoSidedIndirectBuffers[frame].handle(),
+                                                  shadowTwoSidedDrawCountBuffers[frame].handle(), shadowPassCapacity);
+    }
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+        refreshGPUSceneDescriptors(frame);
+    hiZValid.fill(false);
+    [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
+}
 
-        void createVirtualWaterResources() {
-            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> instances{};
-            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> culling{};
-            for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-                instances[i] = instanceBuffers[i].handle();
-                culling[i] = cullingUniformBuffers[i].handle();
-            }
-            const DepthBuffer& sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
-            const VkDescriptorImageInfo depthInfo{
-                sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-            std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> hiZInfos{};
-            for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-                const auto previousHiZFrame = (i + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
-                hiZInfos[i] = {hiZBuffers[previousHiZFrame].sampler(), hiZBuffers[previousHiZFrame].fullView(),
-                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                if (hiZInfos[i].imageView == VK_NULL_HANDLE) hiZInfos[i] = depthInfo;
-            }
-            virtualWaterRenderer.create(
-                vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager,
-                swapchain.extent(), sampledDepth.format(), sampledDepth.imageView(),
-                shadowPass.descriptorSetLayout(), hdrBuffer.imageView(),
-                {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                depthInfo, hiZInfos, instances, culling);
-            const Water::WaterRenderWorld waterWorld =
-                Water::WaterRenderWorld::capture(registry, sceneGpu);
-            virtualWaterRenderer.rebuild(waterWorld);
+void destroyCullingResources() noexcept {
+    for (auto& hiZPass : hiZPasses)
+        hiZPass.destroy();
+    for (auto& draw : indirectDraws)
+        draw.destroy();
+    for (auto& draw : foliageIndirectDraws)
+        draw.destroy();
+    for (auto& draw : sceneIndirectDraws)
+        draw.destroy();
+    for (auto& draw : sceneFoliageIndirectDraws)
+        draw.destroy();
+    for (auto& draw : shadowIndirectDraws)
+        draw.destroy();
+    for (auto& draw : shadowTwoSidedIndirectDraws)
+        draw.destroy();
+    for (auto& draw : meshletIndexedIndirectDraws)
+        draw.destroy();
+    for (Buffer& buffer : cullingUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : sceneCullingUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : foliageCullingUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowCullingUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedCullingUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : indirectBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : foliageIndirectBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowIndirectBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedIndirectBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowCandidateBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedCandidateBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowCandidateCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedCandidateCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowCandidateDispatchBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedCandidateDispatchBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowInstanceTransformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowVisibleInstanceBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedInstanceTransformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedVisibleInstanceBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowInstanceTransformCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedInstanceTransformCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowInstanceMaterialBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedInstanceMaterialBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowPageWorkBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : vsmRequestedPageBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : vsmCompactedPageBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : vsmCompactedPageCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : vsmPageMarkingUniformBuffers)
+        buffer.destroy();
+    vsmRequestsReady.fill(false);
+    vsmRequestsFromScene.fill(false);
+    sceneVsmFeedbackPending.fill(false);
+    sceneVsmFeedbackCache = {};
+    sceneVsmReceiverFeedbackValid = false;
+    sceneVsmReceiverRequests.clear();
+    for (Buffer& buffer : clusteredLightRangeBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : clusteredLightIndexBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : sceneClusteredLightRangeBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : sceneClusteredLightIndexBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : clusteredLightingUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : sceneClusteredLightingUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : drawCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : foliageDrawCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowDrawCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : shadowTwoSidedDrawCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : cullingObjectBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : visibleInstanceBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : visibleInstanceCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : meshletCullDispatchBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : visibleMeshletBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : visibleMeshletCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : meshletIndexedIndirectBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : meshletIndexedDrawCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : meshletCullingUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassBinCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassBinOffsetBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassBinCursorBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : generatedGrassInstanceBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassDeformationBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassIndirectBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassDrawCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassShadowPageMatricesBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassShadowPageIndirectBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassShadowPageDrawCountBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassShadowPageCullUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassIndirectUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassPrefixUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassClassifyUniformBuffers)
+        buffer.destroy();
+    for (Buffer& buffer : grassPackedCullUniformBuffers)
+        buffer.destroy();
+    for (auto& streamUniforms : grassPackedStreamUniformBuffers) {
+        for (Buffer& buffer : streamUniforms)
+            buffer.destroy();
+    }
+    for (GrassRenderLists& lists : grassRenderLists) {
+        lists.visibleInstances.destroy();
+        lists.visibleCount.destroy();
+        lists.visibleClusters.destroy();
+        lists.visibleClusterCount.destroy();
+        lists.bladeCullDispatch.destroy();
+        lists.dispatchIndirect.destroy();
+        lists.mainVisibleInstances.destroy();
+        lists.shadowVisibleInstances.destroy();
+        lists.velocityVisibleInstances.destroy();
+        lists.classifyCounts.destroy();
+        for (Buffer& buffer : lists.binCounts)
+            buffer.destroy();
+        for (Buffer& buffer : lists.binOffsets)
+            buffer.destroy();
+        for (Buffer& buffer : lists.binCursors)
+            buffer.destroy();
+        for (Buffer& buffer : lists.drawInstances)
+            buffer.destroy();
+        lists.mainIndirect.destroy();
+        lists.mainDrawCount.destroy();
+        lists.shadowIndirect.destroy();
+        lists.shadowDrawCount.destroy();
+        lists.velocityIndirect.destroy();
+        lists.velocityDrawCount.destroy();
+    }
+    if (cullingDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
+    }
+    if (hiZCopyPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, hiZCopyPipeline, nullptr);
+    }
+    if (hiZReducePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, hiZReducePipeline, nullptr);
+    }
+    if (cullingPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, cullingPipeline, nullptr);
+    }
+    if (instanceCullingPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, instanceCullingPipeline, nullptr);
+    }
+    if (meshletCullingPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, meshletCullingPipeline, nullptr);
+    }
+    if (meshletDispatchPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, meshletDispatchPipeline, nullptr);
+    if (meshletIndirectPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, meshletIndirectPipeline, nullptr);
+    if (grassBuildPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassBuildPipeline, nullptr);
+    if (grassDispatchBuildPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassDispatchBuildPipeline, nullptr);
+    if (grassPrefixPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassPrefixPipeline, nullptr);
+    if (grassScatterPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassScatterPipeline, nullptr);
+    if (grassFinalizePipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassFinalizePipeline, nullptr);
+    if (grassPackedCullPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassPackedCullPipeline, nullptr);
+    if (grassShadowPageCullPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassShadowPageCullPipeline, nullptr);
+    if (grassBladeCullPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassBladeCullPipeline, nullptr);
+    if (grassClassifyPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassClassifyPipeline, nullptr);
+    if (grassPackedBinPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassPackedBinPipeline, nullptr);
+    if (grassPackedPrefixPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassPackedPrefixPipeline, nullptr);
+    if (grassPackedScatterPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassPackedScatterPipeline, nullptr);
+    if (grassPackedFinalizePipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, grassPackedFinalizePipeline, nullptr);
+    if (clusteredLightingPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, clusteredLightingPipeline, nullptr);
+    if (vsmPageMarkingPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, vsmPageMarkingPipeline, nullptr);
+    if (vsmPageCompactPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, vsmPageCompactPipeline, nullptr);
+    if (hiZCopyPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
+    }
+    if (hiZReducePipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, hiZReducePipelineLayout, nullptr);
+    }
+    if (cullingPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, cullingPipelineLayout, nullptr);
+    }
+    if (instanceCullingPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, instanceCullingPipelineLayout, nullptr);
+    }
+    if (meshletCullingPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, meshletCullingPipelineLayout, nullptr);
+    }
+    if (meshletDispatchPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, meshletDispatchPipelineLayout, nullptr);
+    if (meshletIndirectPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, meshletIndirectPipelineLayout, nullptr);
+    if (grassBuildPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassBuildPipelineLayout, nullptr);
+    if (grassDispatchBuildPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassDispatchBuildPipelineLayout, nullptr);
+    if (grassPrefixPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassPrefixPipelineLayout, nullptr);
+    if (grassScatterPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassScatterPipelineLayout, nullptr);
+    if (grassFinalizePipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassFinalizePipelineLayout, nullptr);
+    if (grassPackedCullPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassPackedCullPipelineLayout, nullptr);
+    if (grassShadowPageCullPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassShadowPageCullPipelineLayout, nullptr);
+    if (grassBladeCullPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassBladeCullPipelineLayout, nullptr);
+    if (grassClassifyPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassClassifyPipelineLayout, nullptr);
+    if (grassPackedBinPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassPackedBinPipelineLayout, nullptr);
+    if (grassPackedScatterPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassPackedScatterPipelineLayout, nullptr);
+    if (grassPackedFinalizePipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, grassPackedFinalizePipelineLayout, nullptr);
+    if (clusteredLightingPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, clusteredLightingPipelineLayout, nullptr);
+    if (vsmPageMarkingPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, vsmPageMarkingPipelineLayout, nullptr);
+    if (vsmPageCompactPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, vsmPageCompactPipelineLayout, nullptr);
+    if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
+    }
+    if (hiZReduceDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, hiZReduceDescriptorSetLayout, nullptr);
+    }
+    if (cullingDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, cullingDescriptorSetLayout, nullptr);
+    }
+    if (instanceCullingDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, instanceCullingDescriptorSetLayout, nullptr);
+    }
+    if (meshletCullingDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, meshletCullingDescriptorSetLayout, nullptr);
+    }
+    if (meshletDispatchDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, meshletDispatchDescriptorSetLayout, nullptr);
+    if (meshletIndirectDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, meshletIndirectDescriptorSetLayout, nullptr);
+    if (grassBuildDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassBuildDescriptorSetLayout, nullptr);
+    if (grassDispatchBuildDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassDispatchBuildDescriptorSetLayout, nullptr);
+    if (grassPrefixDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassPrefixDescriptorSetLayout, nullptr);
+    if (grassScatterDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassScatterDescriptorSetLayout, nullptr);
+    if (grassFinalizeDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassFinalizeDescriptorSetLayout, nullptr);
+    if (grassPackedCullDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassPackedCullDescriptorSetLayout, nullptr);
+    if (grassShadowPageCullDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassShadowPageCullDescriptorSetLayout, nullptr);
+    if (grassBladeCullDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassBladeCullDescriptorSetLayout, nullptr);
+    if (grassClassifyDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassClassifyDescriptorSetLayout, nullptr);
+    if (grassPackedBinDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassPackedBinDescriptorSetLayout, nullptr);
+    if (grassPackedScatterDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassPackedScatterDescriptorSetLayout, nullptr);
+    if (grassPackedFinalizeDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, grassPackedFinalizeDescriptorSetLayout, nullptr);
+    if (clusteredLightingDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, clusteredLightingDescriptorSetLayout, nullptr);
+    if (vsmPageMarkingDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, vsmPageMarkingDescriptorSetLayout, nullptr);
+    if (vsmPageCompactDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, vsmPageCompactDescriptorSetLayout, nullptr);
+    cullingDescriptorPool = VK_NULL_HANDLE;
+    hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
+    vsmPageMarkingPipeline = VK_NULL_HANDLE;
+    vsmPageCompactPipeline = VK_NULL_HANDLE;
+    instanceCullingPipeline = VK_NULL_HANDLE;
+    meshletCullingPipeline = VK_NULL_HANDLE;
+    meshletDispatchPipeline = VK_NULL_HANDLE;
+    meshletIndirectPipeline = VK_NULL_HANDLE;
+    grassBuildPipeline = grassPrefixPipeline = grassScatterPipeline = grassFinalizePipeline = VK_NULL_HANDLE;
+    grassPackedCullPipeline = grassBladeCullPipeline = grassClassifyPipeline = VK_NULL_HANDLE;
+    grassShadowPageCullPipeline = VK_NULL_HANDLE;
+    grassPackedBinPipeline = grassPackedPrefixPipeline = grassPackedScatterPipeline = grassPackedFinalizePipeline =
+        VK_NULL_HANDLE;
+    hiZCopyPipelineLayout = hiZReducePipelineLayout = cullingPipelineLayout = VK_NULL_HANDLE;
+    vsmPageMarkingPipelineLayout = VK_NULL_HANDLE;
+    vsmPageCompactPipelineLayout = VK_NULL_HANDLE;
+    instanceCullingPipelineLayout = VK_NULL_HANDLE;
+    meshletCullingPipelineLayout = VK_NULL_HANDLE;
+    meshletDispatchPipelineLayout = VK_NULL_HANDLE;
+    meshletIndirectPipelineLayout = VK_NULL_HANDLE;
+    grassBuildPipelineLayout = grassPrefixPipelineLayout = grassScatterPipelineLayout = grassFinalizePipelineLayout =
+        VK_NULL_HANDLE;
+    grassPackedCullPipelineLayout = grassBladeCullPipelineLayout = grassClassifyPipelineLayout = VK_NULL_HANDLE;
+    grassShadowPageCullPipelineLayout = VK_NULL_HANDLE;
+    grassPackedBinPipelineLayout = grassPackedScatterPipelineLayout = grassPackedFinalizePipelineLayout =
+        VK_NULL_HANDLE;
+    hiZCopyDescriptorSetLayout = hiZReduceDescriptorSetLayout = cullingDescriptorSetLayout = VK_NULL_HANDLE;
+    vsmPageMarkingDescriptorSetLayout = VK_NULL_HANDLE;
+    vsmPageCompactDescriptorSetLayout = VK_NULL_HANDLE;
+    instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
+    meshletCullingDescriptorSetLayout = VK_NULL_HANDLE;
+    meshletDispatchDescriptorSetLayout = VK_NULL_HANDLE;
+    meshletIndirectDescriptorSetLayout = VK_NULL_HANDLE;
+    grassBuildDescriptorSetLayout = grassPrefixDescriptorSetLayout = grassScatterDescriptorSetLayout =
+        grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
+    grassPackedCullDescriptorSetLayout = grassBladeCullDescriptorSetLayout = grassClassifyDescriptorSetLayout =
+        VK_NULL_HANDLE;
+    grassShadowPageCullDescriptorSetLayout = VK_NULL_HANDLE;
+    grassPackedBinDescriptorSetLayout = grassPackedScatterDescriptorSetLayout = grassPackedFinalizeDescriptorSetLayout =
+        VK_NULL_HANDLE;
+    for (auto& hiZBuffer : hiZBuffers)
+        hiZBuffer.destroy();
+    gpuObjects.clear();
+    hiZValid.fill(false);
+}
+
+void createFramebuffers() {
+    const VkExtent2D extent = swapchain.extent();
+    // The prepass writes velocity and view-normal MRTs at single sample.
+    // Velocity is retained even without TAA to keep attachment locations
+    // stable: view normals are fragment output location 2.
+    if (!msaa.enabled()) {
+        const std::array normalFamilies{vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+        const std::span<const std::uint32_t> sharingFamilies =
+            vulkanDevice.hasAsyncComputeQueue() && normalFamilies[0] != normalFamilies[1]
+                ? std::span<const std::uint32_t>(normalFamilies)
+                : std::span<const std::uint32_t>{};
+        velocityBuffer.create(vulkanDevice.physical(), device, extent, vulkanDevice.allocator(), VK_FILTER_NEAREST,
+                              VK_FORMAT_R16G16_SFLOAT);
+        gtaoViewNormalBuffer.create(vulkanDevice.physical(), device, extent, vulkanDevice.allocator(),
+                                    VK_FILTER_NEAREST, VK_FORMAT_R16G16_SNORM, false, sharingFamilies);
+    }
+    createVirtualWaterResources();
+}
+
+void createVirtualWaterResources() {
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> instances{};
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> culling{};
+    for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        instances[i] = instanceBuffers[i].handle();
+        culling[i] = cullingUniformBuffers[i].handle();
+    }
+    const DepthBuffer& sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+    const VkDescriptorImageInfo depthInfo{sampledDepth.sampler(), sampledDepth.imageView(),
+                                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> hiZInfos{};
+    for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        const auto previousHiZFrame = (i + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+        hiZInfos[i] = {hiZBuffers[previousHiZFrame].sampler(), hiZBuffers[previousHiZFrame].fullView(),
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        if (hiZInfos[i].imageView == VK_NULL_HANDLE)
+            hiZInfos[i] = depthInfo;
+    }
+    virtualWaterRenderer.create(
+        vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager, swapchain.extent(),
+        sampledDepth.format(), sampledDepth.imageView(), shadowPass.descriptorSetLayout(), hdrBuffer.imageView(),
+        {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, depthInfo,
+        hiZInfos, instances, culling);
+    const Water::WaterRenderWorld waterWorld = Water::WaterRenderWorld::capture(registry, sceneGpu);
+    virtualWaterRenderer.rebuild(waterWorld);
+}
+
+void destroyVelocityResources() noexcept {
+    velocityBuffer.destroy();
+    gtaoViewNormalBuffer.destroy();
+}
+
+void createSceneViewportResources() {
+    // Start with the drawable extent. The editor will later supply its
+    // panel extent through the renderer viewport API; creating it here
+    // also makes the off-screen lifecycle valid for non-editor users.
+    sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+    sceneViewportDepthBuffer.create(sceneViewportTarget.extent(), VK_SAMPLE_COUNT_1_BIT,
+                                    msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format());
+    sceneViewportDepthInitialized = false;
+    createSceneViewportForwardPass();
+    createSceneVirtualWaterResources();
+}
+
+void createSceneVirtualWaterResources() {
+    sceneVirtualWaterRenderer.destroy();
+    sceneGlassPass.destroy();
+    sceneOpaqueColor.destroy();
+    sceneOpaqueColor.create(vulkanDevice.physical(), device, sceneViewportTarget.extent(), vulkanDevice.allocator());
+    sceneOpaqueColorInitialized = false;
+
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> instances{};
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> culling{};
+    for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        instances[i] = instanceBuffers[i].handle();
+        culling[i] = sceneCullingUniformBuffers[i].handle();
+    }
+    const DepthBuffer& sampledDepth = sceneViewportDepthBuffer;
+    const VkDescriptorImageInfo depthInfo{sampledDepth.sampler(), sampledDepth.imageView(),
+                                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> noHiZInfos{};
+    noHiZInfos.fill(depthInfo);
+    sceneGlassPass.create(
+        device, vulkanDevice.allocator(), HdrBuffer::Format, sampledDepth.format(), VK_SAMPLE_COUNT_1_BIT,
+        VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE, sceneDescriptorPass.descriptorSetLayout(), assetManager, false,
+        {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, depthInfo,
+        glassAtlasPaneCount);
+    // Bind depth to keep the descriptor valid, but deliberately turn
+    // Hi-Z off: the Scene View owns no independent pyramid yet.
+    sceneVirtualWaterRenderer.create(
+        vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager, sceneViewportTarget.extent(),
+        sampledDepth.format(), sampledDepth.imageView(), sceneDescriptorPass.descriptorSetLayout(),
+        sceneViewportTarget.color().imageView(),
+        {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, depthInfo,
+        noHiZInfos, instances, culling, false);
+    sceneVirtualWaterRenderer.rebuild(Water::WaterRenderWorld::capture(registry, sceneGpu));
+}
+
+void applyPendingSceneViewportResize() {
+    const VkExtent2D requested = requestedSceneViewportExtent;
+    if (requested.width == 0 || requested.height == 0 ||
+        (requested.width == sceneViewportTarget.extent().width &&
+         requested.height == sceneViewportTarget.extent().height))
+        return;
+
+    // Resolution changes replace color, depth and water attachments at
+    // once. This path is user-driven and infrequent, so wait for every
+    // queue explicitly; frame fences do not cover every submission
+    // made by optional async renderer paths on all drivers.
+    waitIdle();
+    sceneViewportTarget.resize(requested);
+    sceneViewportDepthBuffer.create(requested, VK_SAMPLE_COUNT_1_BIT,
+                                    msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format());
+    sceneViewportDepthInitialized = false;
+    createSceneVirtualWaterResources();
+
+    if (sceneViewportDescriptor != VK_NULL_HANDLE) {
+        // Recent ImGui Vulkan backends use a SAMPLED_IMAGE descriptor
+        // plus a separate sampler. Its descriptor type is backend
+        // owned, so a direct COMBINED_IMAGE_SAMPLER write is invalid.
+        if (editorUiBackend)
+            editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(sceneViewportDescriptor));
+        sceneViewportDescriptor = VK_NULL_HANDLE;
+    }
+    sceneViewportCacheValid = false;
+    sceneViewportImageInitialized = false;
+    sceneViewportNeedsRender = true;
+}
+
+void destroySceneViewportResources() noexcept {
+    sceneVirtualWaterRenderer.destroy();
+    sceneGlassPass.destroy();
+    sceneOpaqueColor.destroy();
+    sceneOpaqueColorInitialized = false;
+    sceneViewportDepthBuffer.destroy();
+    sceneViewportDepthInitialized = false;
+    sceneViewportForwardPass.destroy();
+    sceneViewportTarget.destroy();
+}
+
+// Transitional no-op hooks: callers are shared by resize and shader
+// reload paths. Dynamic rendering binds the target views directly.
+void createSceneViewportFramebuffer() noexcept {
+    sceneViewportFramebuffer = VK_NULL_HANDLE;
+}
+
+void destroySceneViewportFramebuffer() noexcept {
+    sceneViewportFramebuffer = VK_NULL_HANDLE;
+}
+
+void createCommandPool() {
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = vulkanDevice.graphicsQueueFamily();
+
+    if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create command pool");
+    }
+
+    if (vulkanDevice.hasAsyncComputeQueue()) {
+        poolInfo.queueFamilyIndex = vulkanDevice.computeQueueFamily();
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &asyncComputeCommandPool) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create async compute command pool");
         }
+    }
+    poolInfo.queueFamilyIndex = vulkanDevice.transferQueueFamily();
+    if (vkCreateCommandPool(device, &poolInfo, nullptr, &transferCommandPool) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create transfer command pool");
+    }
+}
 
-        void destroyVelocityResources() noexcept {
-            velocityBuffer.destroy();
-            gtaoViewNormalBuffer.destroy();
-        }
+void createCommandBuffers() {
+    commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    postViewportGraphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
-        void createSceneViewportResources() {
-            // Start with the drawable extent. The editor will later supply its
-            // panel extent through the renderer viewport API; creating it here
-            // also makes the off-screen lifecycle valid for non-editor users.
-            sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(),
-                                       vulkanDevice.allocator());
-            sceneViewportDepthBuffer.create(
-                sceneViewportTarget.extent(), VK_SAMPLE_COUNT_1_BIT,
-                msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format());
-            sceneViewportDepthInitialized = false;
-            createSceneViewportForwardPass();
-            createSceneVirtualWaterResources();
-        }
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
 
-        void createSceneVirtualWaterResources() {
-            sceneVirtualWaterRenderer.destroy();
-            sceneGlassPass.destroy();
-            sceneOpaqueColor.destroy();
-            sceneOpaqueColor.create(vulkanDevice.physical(), device, sceneViewportTarget.extent(),
-                                    vulkanDevice.allocator());
-            sceneOpaqueColorInitialized = false;
+    if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate command buffers");
+    }
+    if (vkAllocateCommandBuffers(device, &allocInfo, postViewportGraphicsCommandBuffers.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Could not allocate post-viewport graphics command buffers");
+    }
+}
 
-            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> instances{};
-            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> culling{};
-            for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-                instances[i] = instanceBuffers[i].handle();
-                culling[i] = sceneCullingUniformBuffers[i].handle();
-            }
-            const DepthBuffer& sampledDepth = sceneViewportDepthBuffer;
-            const VkDescriptorImageInfo depthInfo{
-                sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-            std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> noHiZInfos{};
-            noHiZInfos.fill(depthInfo);
-            sceneGlassPass.create(device, vulkanDevice.allocator(), HdrBuffer::Format, sampledDepth.format(),
-                VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE,
-                sceneDescriptorPass.descriptorSetLayout(), assetManager, false,
-                {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                depthInfo, glassAtlasPaneCount);
-            // Bind depth to keep the descriptor valid, but deliberately turn
-            // Hi-Z off: the Scene View owns no independent pyramid yet.
-            sceneVirtualWaterRenderer.create(
-                vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager,
-                sceneViewportTarget.extent(), sampledDepth.format(), sampledDepth.imageView(),
-                sceneDescriptorPass.descriptorSetLayout(), sceneViewportTarget.color().imageView(),
-                {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                depthInfo, noHiZInfos, instances, culling, false);
-            sceneVirtualWaterRenderer.rebuild(Water::WaterRenderWorld::capture(registry, sceneGpu));
-        }
-
-        void applyPendingSceneViewportResize() {
-            const VkExtent2D requested = requestedSceneViewportExtent;
-            if (requested.width == 0 || requested.height == 0 ||
-                (requested.width == sceneViewportTarget.extent().width &&
-                 requested.height == sceneViewportTarget.extent().height)) return;
-
-            // Resolution changes replace color, depth and water attachments at
-            // once. This path is user-driven and infrequent, so wait for every
-            // queue explicitly; frame fences do not cover every submission
-            // made by optional async renderer paths on all drivers.
-            waitIdle();
-            sceneViewportTarget.resize(requested);
-            sceneViewportDepthBuffer.create(
-                requested, VK_SAMPLE_COUNT_1_BIT,
-                msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format());
-            sceneViewportDepthInitialized = false;
-            createSceneVirtualWaterResources();
-
-            if (sceneViewportDescriptor != VK_NULL_HANDLE) {
-                // Recent ImGui Vulkan backends use a SAMPLED_IMAGE descriptor
-                // plus a separate sampler. Its descriptor type is backend
-                // owned, so a direct COMBINED_IMAGE_SAMPLER write is invalid.
-                if (editorUiBackend) editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(sceneViewportDescriptor));
-                sceneViewportDescriptor = VK_NULL_HANDLE;
-            }
-            sceneViewportCacheValid = false;
-            sceneViewportImageInitialized = false;
-            sceneViewportNeedsRender = true;
-        }
-
-        void destroySceneViewportResources() noexcept {
-            sceneVirtualWaterRenderer.destroy();
-            sceneGlassPass.destroy();
-            sceneOpaqueColor.destroy();
-            sceneOpaqueColorInitialized = false;
-            sceneViewportDepthBuffer.destroy();
-            sceneViewportDepthInitialized = false;
-            sceneViewportForwardPass.destroy();
-            sceneViewportTarget.destroy();
-        }
-
-        // Transitional no-op hooks: callers are shared by resize and shader
-        // reload paths. Dynamic rendering binds the target views directly.
-        void createSceneViewportFramebuffer() noexcept {
-            sceneViewportFramebuffer = VK_NULL_HANDLE;
-        }
-
-        void destroySceneViewportFramebuffer() noexcept {
-            sceneViewportFramebuffer = VK_NULL_HANDLE;
-        }
-
-        void createCommandPool() {
-            VkCommandPoolCreateInfo poolInfo{};
-            poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-            poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-            poolInfo.queueFamilyIndex = vulkanDevice.graphicsQueueFamily();
-
-            if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create command pool");
-            }
-
-            if (vulkanDevice.hasAsyncComputeQueue()) {
-                poolInfo.queueFamilyIndex = vulkanDevice.computeQueueFamily();
-                if (vkCreateCommandPool(device, &poolInfo, nullptr, &asyncComputeCommandPool) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create async compute command pool");
-                }
-            }
-            poolInfo.queueFamilyIndex = vulkanDevice.transferQueueFamily();
-            if (vkCreateCommandPool(device, &poolInfo, nullptr, &transferCommandPool) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create transfer command pool");
-            }
-        }
-
-        void createCommandBuffers() {
-            commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-            postViewportGraphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-
-            VkCommandBufferAllocateInfo allocInfo{};
-            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            allocInfo.commandPool = commandPool;
-            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
-
-            if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate command buffers");
-            }
-            if (vkAllocateCommandBuffers(device, &allocInfo, postViewportGraphicsCommandBuffers.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate post-viewport graphics command buffers");
-            }
-        }
-
-        [[nodiscard]] Mat4 lightSpaceMatrix() const {
-            const auto light = directionalLight();
-            const float extent = sceneRadius;
-            const Vec3 lightTarget = sceneCenter;
-            const Vec3 lightPosition = lightTarget - (light.direction * (extent * 5.0F));
-            constexpr Vec3 worldUp{0.0F, 1.0F, 0.0F};
-            const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
-            const Mat4 lightProjection = Mat4::scale(
-                Mat4::ortho(-extent * 2.25F, extent * 2.25F,
-                            -extent * 2.25F, extent * 2.25F,
-                            0.1F, extent * 8.0F),
-                Vec3{1.0F, -1.0F, 1.0F});
-            return lightProjection * lightView;
-        }
-
-        std::uint32_t updateVirtualShadowClipmaps(
-            const Vec3& cameraPosition,
-            std::array<Mat4, ShadowMap::ClipLevelCount>& matrices,
-            Vec3& previousCameraPosition, Vec3& previousLightDirection,
-            bool& valid) const {
-            const DirectionalLight light = directionalLight();
-            std::uint32_t updateMask = 0;
-
-            constexpr std::array<float, 6> baseExtents{
-                6.0F, 12.0F, 24.0F, 48.0F, 96.0F, 192.0F};
-            // sceneRadius is the largest AABB half-extent, not a sphere radius.
-            // Enclose its diagonal for every light orientation. The final level
-            // is scene-centred and fits in the permanently requested 10x10 tiles.
-            const float sceneBoundingRadius = sceneRadius * std::sqrt(3.0F);
-            const float farExtent = std::max(324.0F,
-                sceneBoundingRadius * ShadowMap::FallbackExtentScale);
-            const Vec3 direction = light.direction.normalized();
-            Vec3 up{0.0F, 1.0F, 0.0F};
-            if (std::abs(dot(direction, up)) > 0.98F) up = Vec3{0.0F, 0.0F, 1.0F};
-            const Vec3 right = cross(direction, up).normalized();
-            const Vec3 lightUp = cross(right, direction).normalized();
-
-            for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
-                const float extent = level < baseExtents.size() ? baseExtents[level] : farExtent;
-                const Vec3 clipCenter = level + 1 == ShadowMap::ClipLevelCount
-                    ? sceneCenter : cameraPosition;
-                // Page-sized snapping makes the virtual address space stable
-                // while the camera moves inside a page. Cached physical pages
-                // therefore survive ordinary sub-page camera motion.
-                const float worldUnitsPerPage = extent * 2.0F /
-                    static_cast<float>(ShadowMap::VirtualPagesPerAxis);
-                const float snappedX = std::round(dot(clipCenter, right) / worldUnitsPerPage) *
-                                       worldUnitsPerPage;
-                const float snappedY = std::round(dot(clipCenter, lightUp) / worldUnitsPerPage) *
-                                       worldUnitsPerPage;
-                // Keep depth encoding independent of the camera so pages can
-                // be remapped when the clipmap scrolls without being redrawn.
-                const float alongLight = dot(sceneCenter, direction);
-                const float lightDistance = sceneRadius * 2.0F + extent;
-                // Construct the basis directly. lookAt(target - direction * d,
-                // target) loses precision when subtracting large world positions,
-                // changing the depth/basis during what should be a pure scroll.
-                glm::mat4 view{1.0F};
-                view[0] = {right.x(), lightUp.x(), -direction.x(), 0.0F};
-                view[1] = {right.y(), lightUp.y(), -direction.y(), 0.0F};
-                view[2] = {right.z(), lightUp.z(), -direction.z(), 0.0F};
-                view[3] = {-snappedX, -snappedY, alongLight - lightDistance, 1.0F};
-                const Mat4 lightView{view};
-                const Mat4 lightProjection = Mat4::scale(
-                    Mat4::ortho(-extent, extent, -extent, extent, 0.1F,
-                                sceneRadius * 4.0F + extent * 2.0F),
+[[nodiscard]] Mat4 lightSpaceMatrix() const {
+    const auto light = directionalLight();
+    const float extent = sceneRadius;
+    const Vec3 lightTarget = sceneCenter;
+    const Vec3 lightPosition = lightTarget - (light.direction * (extent * 5.0F));
+    constexpr Vec3 worldUp{0.0F, 1.0F, 0.0F};
+    const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
+    const Mat4 lightProjection =
+        Mat4::scale(Mat4::ortho(-extent * 2.25F, extent * 2.25F, -extent * 2.25F, extent * 2.25F, 0.1F, extent * 8.0F),
                     Vec3{1.0F, -1.0F, 1.0F});
-                const Mat4 next = lightProjection * lightView;
-                // Matrix work is tiny compared with rerasterization. Update all
-                // changed levels immediately, including slow light motion and
-                // scene-bound changes, instead of leaving coarse levels stale.
-                if (!valid || matrices[level].native() != next.native()) {
-                    matrices[level] = next;
-                    updateMask |= 1u << level;
-                }
-            }
-            previousCameraPosition = cameraPosition;
-            previousLightDirection = light.direction;
-            valid = true;
-            return updateMask;
+    return lightProjection * lightView;
+}
+
+std::uint32_t updateVirtualShadowClipmaps(const Vec3& cameraPosition,
+                                          std::array<Mat4, ShadowMap::ClipLevelCount>& matrices,
+                                          Vec3& previousCameraPosition, Vec3& previousLightDirection,
+                                          bool& valid) const {
+    const DirectionalLight light = directionalLight();
+    std::uint32_t updateMask = 0;
+
+    constexpr std::array<float, 6> baseExtents{6.0F, 12.0F, 24.0F, 48.0F, 96.0F, 192.0F};
+    // sceneRadius is the largest AABB half-extent, not a sphere radius.
+    // Enclose its diagonal for every light orientation. The final level
+    // is scene-centred and fits in the permanently requested 10x10 tiles.
+    const float sceneBoundingRadius = sceneRadius * std::sqrt(3.0F);
+    const float farExtent = std::max(324.0F, sceneBoundingRadius * ShadowMap::FallbackExtentScale);
+    const Vec3 direction = light.direction.normalized();
+    Vec3 up{0.0F, 1.0F, 0.0F};
+    if (std::abs(dot(direction, up)) > 0.98F)
+        up = Vec3{0.0F, 0.0F, 1.0F};
+    const Vec3 right = cross(direction, up).normalized();
+    const Vec3 lightUp = cross(right, direction).normalized();
+
+    for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
+        const float extent = level < baseExtents.size() ? baseExtents[level] : farExtent;
+        const Vec3 clipCenter = level + 1 == ShadowMap::ClipLevelCount ? sceneCenter : cameraPosition;
+        // Page-sized snapping makes the virtual address space stable
+        // while the camera moves inside a page. Cached physical pages
+        // therefore survive ordinary sub-page camera motion.
+        const float worldUnitsPerPage = extent * 2.0F / static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+        const float snappedX = std::round(dot(clipCenter, right) / worldUnitsPerPage) * worldUnitsPerPage;
+        const float snappedY = std::round(dot(clipCenter, lightUp) / worldUnitsPerPage) * worldUnitsPerPage;
+        // Keep depth encoding independent of the camera so pages can
+        // be remapped when the clipmap scrolls without being redrawn.
+        const float alongLight = dot(sceneCenter, direction);
+        const float lightDistance = sceneRadius * 2.0F + extent;
+        // Construct the basis directly. lookAt(target - direction * d,
+        // target) loses precision when subtracting large world positions,
+        // changing the depth/basis during what should be a pure scroll.
+        glm::mat4 view{1.0F};
+        view[0] = {right.x(), lightUp.x(), -direction.x(), 0.0F};
+        view[1] = {right.y(), lightUp.y(), -direction.y(), 0.0F};
+        view[2] = {right.z(), lightUp.z(), -direction.z(), 0.0F};
+        view[3] = {-snappedX, -snappedY, alongLight - lightDistance, 1.0F};
+        const Mat4 lightView{view};
+        const Mat4 lightProjection =
+            Mat4::scale(Mat4::ortho(-extent, extent, -extent, extent, 0.1F, sceneRadius * 4.0F + extent * 2.0F),
+                        Vec3{1.0F, -1.0F, 1.0F});
+        const Mat4 next = lightProjection * lightView;
+        // Matrix work is tiny compared with rerasterization. Update all
+        // changed levels immediately, including slow light motion and
+        // scene-bound changes, instead of leaving coarse levels stale.
+        if (!valid || matrices[level].native() != next.native()) {
+            matrices[level] = next;
+            updateMask |= 1u << level;
         }
+    }
+    previousCameraPosition = cameraPosition;
+    previousLightDirection = light.direction;
+    valid = true;
+    return updateMask;
+}

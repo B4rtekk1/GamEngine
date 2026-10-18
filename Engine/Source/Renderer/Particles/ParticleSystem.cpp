@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Particles/ParticleSystem.h"
+
 #include "Engine/Renderer/Vulkan/upload_context.h"
 
 #include <algorithm>
@@ -8,29 +9,31 @@
 
 namespace Engine::Particles {
 namespace {
-void makeBuffer(VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage,
-                VkBuffer& buffer, VmaAllocation& allocation, void** mapped = nullptr,
-                const bool deviceLocal = false) {
+void makeBuffer(VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buffer,
+                VmaAllocation& allocation, void** mapped = nullptr, const bool deviceLocal = false) {
     VkBufferCreateInfo create{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     create.size = size;
     create.usage = usage;
     create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     VmaAllocationCreateInfo allocationInfo{};
     allocationInfo.usage = deviceLocal ? VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE : VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-    if (mapped) allocationInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                       VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    if (mapped)
+        allocationInfo.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
     VmaAllocationInfo details{};
-    if (vmaCreateBuffer(allocator, &create, &allocationInfo, &buffer, &allocation, mapped ? &details : nullptr) != VK_SUCCESS) {
+    if (vmaCreateBuffer(allocator, &create, &allocationInfo, &buffer, &allocation, mapped ? &details : nullptr) !=
+        VK_SUCCESS) {
         throw std::runtime_error("ParticleSystem: buffer memory allocation failed");
     }
-    if (mapped) *mapped = details.pMappedData;
+    if (mapped)
+        *mapped = details.pMappedData;
 }
-}
+} // namespace
 
-ParticleSystem::ParticleSystem(VkDevice device, VmaAllocator allocator, VkQueue computeQueue,
-                               VkCommandPool commandPool, uint32_t maxParticles)
-    : device_(device), allocator_(allocator), computeQueue_(computeQueue),
-      commandPool_(commandPool), maxParticles_(std::max(256u, (maxParticles + 255u) / 256u * 256u)) {
+ParticleSystem::ParticleSystem(VkDevice device, VmaAllocator allocator, VkQueue computeQueue, VkCommandPool commandPool,
+                               uint32_t maxParticles)
+    : device_(device), allocator_(allocator), computeQueue_(computeQueue), commandPool_(commandPool),
+      maxParticles_(std::max(256u, (maxParticles + 255u) / 256u * 256u)) {
     if (!device_ || !allocator_ || !computeQueue_ || !commandPool_) {
         throw std::invalid_argument("ParticleSystem requires valid Vulkan handles");
     }
@@ -45,7 +48,9 @@ ParticleSystem::ParticleSystem(VkDevice device, VmaAllocator allocator, VkQueue 
     }
 }
 
-ParticleSystem::~ParticleSystem() { destroy(); }
+ParticleSystem::~ParticleSystem() {
+    destroy();
+}
 
 void ParticleSystem::update(float deltaTime) {
     const float dt = std::clamp(deltaTime, 0.0F, 0.1F);
@@ -86,8 +91,7 @@ void ParticleSystem::update(float deltaTime) {
     // margin, while avoiding an O(particles * all scene colliders) shader
     // workload for unrelated parts of the scene.
     const float maxVelocity = std::max(emitter_.minVelocity.length(), emitter_.maxVelocity.length());
-    const float interactionRange = std::max(2.0F,
-        emitter_.maxLifeTime * maxVelocity + emitter_.maxSize * 2.0F + 1.0F);
+    const float interactionRange = std::max(2.0F, emitter_.maxLifeTime * maxVelocity + emitter_.maxSize * 2.0F + 1.0F);
     const float interactionRangeSquared = interactionRange * interactionRange;
     activeColliders_.clear();
     activeColliders_.reserve(std::min<std::size_t>(colliders_.size(), MaxColliders));
@@ -101,15 +105,17 @@ void ParticleSystem::update(float deltaTime) {
         const float deltaSquared = delta.x() * delta.x() + delta.y() * delta.y() + delta.z() * delta.z();
         if (deltaSquared <= interactionRangeSquared) {
             activeColliders_.push_back(collider);
-            if (activeColliders_.size() == MaxColliders) break;
+            if (activeColliders_.size() == MaxColliders)
+                break;
         }
     }
     simulation_.colliderCount = static_cast<uint32_t>(activeColliders_.size());
     // Collider data is host visible. Avoid rewriting the complete fixed-size
     // GPU buffer when the emitter remains in the same local obstacle set.
-    const bool colliderSetChanged = activeColliders_.size() != uploadedColliders_.size() ||
+    const bool colliderSetChanged =
+        activeColliders_.size() != uploadedColliders_.size() ||
         (!activeColliders_.empty() && std::memcmp(activeColliders_.data(), uploadedColliders_.data(),
-            activeColliders_.size() * sizeof(ParticleCollider)) != 0);
+                                                  activeColliders_.size() * sizeof(ParticleCollider)) != 0);
     if (colliderSetChanged) {
         uploadColliders();
         uploadedColliders_ = activeColliders_;
@@ -117,22 +123,31 @@ void ParticleSystem::update(float deltaTime) {
     glassBurstSimulations_.clear();
     nextSpawnIndex_ = (nextSpawnIndex_ + spawnCount) % maxParticles_;
     uint32_t burstBudget = maxParticles_ / 2;
-    for (const auto &burst : pendingGlassBursts_) {
+    for (const auto& burst : pendingGlassBursts_) {
         const auto count = std::min(burst.count, burstBudget);
-        if (count == 0) break;
+        if (count == 0)
+            break;
         ParticleSimulationData data{};
-        data.spawnStart = nextSpawnIndex_; data.spawnCount = count;
-        data.maxParticles = maxParticles_; data.spawnSeed = burst.seed;
-        data.emitterPositionMinLife[0] = burst.position.x; data.emitterPositionMinLife[1] = burst.position.y;
-        data.emitterPositionMinLife[2] = burst.position.z; data.emitterPositionMinLife[3] = burst.lifetime;
+        data.spawnStart = nextSpawnIndex_;
+        data.spawnCount = count;
+        data.maxParticles = maxParticles_;
+        data.spawnSeed = burst.seed;
+        data.emitterPositionMinLife[0] = burst.position.x;
+        data.emitterPositionMinLife[1] = burst.position.y;
+        data.emitterPositionMinLife[2] = burst.position.z;
+        data.emitterPositionMinLife[3] = burst.lifetime;
         for (unsigned axis = 0; axis < 3; ++axis) {
             data.minVelocityMinSize[axis] = burst.velocity[axis] - 0.2F;
             data.maxVelocity[axis] = burst.velocity[axis] + 0.2F;
         }
         data.minVelocityMinSize[3] = burst.size;
         data.maxVelocity[3] = 1.0F; // Spawn-only dispatch, before compaction.
-        data.color[0] = 0.68F; data.color[1] = 0.82F; data.color[2] = 0.92F; data.color[3] = 0.65F;
-        data.maxLifeMaxSize[0] = burst.lifetime; data.maxLifeMaxSize[1] = burst.size;
+        data.color[0] = 0.68F;
+        data.color[1] = 0.82F;
+        data.color[2] = 0.92F;
+        data.color[3] = 0.65F;
+        data.maxLifeMaxSize[0] = burst.lifetime;
+        data.maxLifeMaxSize[1] = burst.size;
         data.maxLifeMaxSize[2] = 1.0F; // Glass LOD, stored persistently on the particle.
         glassBurstSimulations_.push_back(data);
         nextSpawnIndex_ = (nextSpawnIndex_ + count) % maxParticles_;
@@ -142,8 +157,8 @@ void ParticleSystem::update(float deltaTime) {
     spawnSeed_ += spawnCount;
 }
 
-void ParticleSystem::recordCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline,
-                                   VkPipelineLayout pipelineLayout, uint32_t frameIndex) const {
+void ParticleSystem::recordCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline, VkPipelineLayout pipelineLayout,
+                                   uint32_t frameIndex) const {
     const uint32_t frame = frameIndex % FramesInFlight;
     vkCmdFillBuffer(commandBuffer, drawBuffers_[frame], drawOffsets_[frame] + sizeof(std::uint32_t),
                     sizeof(std::uint32_t), 0);
@@ -151,8 +166,7 @@ void ParticleSystem::recordCompute(VkCommandBuffer commandBuffer, VkPipeline pip
     resetBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     resetBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     resetBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    resetBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    resetBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     resetBarrier.buffer = drawBuffers_[frame];
     resetBarrier.offset = sizeof(std::uint32_t);
     resetBarrier.size = sizeof(std::uint32_t);
@@ -175,22 +189,24 @@ void ParticleSystem::recordCompute(VkCommandBuffer commandBuffer, VkPipeline pip
     vkCmdPipelineBarrier2(commandBuffer, &previousRenderDependency);
 
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout,
-                            0, 1, &descriptorSets_[0][frame], 0, nullptr);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1,
+                            &descriptorSets_[0][frame], 0, nullptr);
     VkBufferMemoryBarrier2 spawnBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
     spawnBarrier.srcStageMask = spawnBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     spawnBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     spawnBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    spawnBarrier.buffer = particleBuffer_; spawnBarrier.size = VK_WHOLE_SIZE;
+    spawnBarrier.buffer = particleBuffer_;
+    spawnBarrier.size = VK_WHOLE_SIZE;
     VkDependencyInfo spawnDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    spawnDependency.bufferMemoryBarrierCount = 1; spawnDependency.pBufferMemoryBarriers = &spawnBarrier;
-    for (const auto &burst : glassBurstSimulations_) {
+    spawnDependency.bufferMemoryBarrierCount = 1;
+    spawnDependency.pBufferMemoryBarriers = &spawnBarrier;
+    for (const auto& burst : glassBurstSimulations_) {
         vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(burst), &burst);
-        vkCmdDispatch(commandBuffer, (burst.spawnCount + 255U)/256U, 1, 1);
+        vkCmdDispatch(commandBuffer, (burst.spawnCount + 255U) / 256U, 1, 1);
         vkCmdPipelineBarrier2(commandBuffer, &spawnDependency);
     }
-    vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                       sizeof(ParticleSimulationData), &simulation_);
+    vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ParticleSimulationData),
+                       &simulation_);
     vkCmdDispatch(commandBuffer, (maxParticles_ + 255u) / 256u, 1, 1);
 
     VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
@@ -222,65 +238,60 @@ void ParticleSystem::recordCompute(VkCommandBuffer commandBuffer, VkPipeline pip
 }
 
 void ParticleSystem::recordRender(VkCommandBuffer commandBuffer, const ParticleFrameData& frameData,
-                                  VkPipeline pipeline, VkPipelineLayout pipelineLayout,
-                                  uint32_t frameIndex, bool sceneView) const {
+                                  VkPipeline pipeline, VkPipelineLayout pipelineLayout, uint32_t frameIndex,
+                                  bool sceneView) const {
     const uint32_t frame = frameIndex % FramesInFlight;
     const uint32_t target = sceneView ? 1u : 0u;
     std::memcpy(frameMapped_[target][frame], &frameData, sizeof(frameData));
     vmaFlushAllocation(allocator_, smallArenaAllocations_[frame], frameOffsets_[target][frame], sizeof(frameData));
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
-                            0, 1, &descriptorSets_[target][frame], 0, nullptr);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
+                            &descriptorSets_[target][frame], 0, nullptr);
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &quadBuffer_, &offset);
-    vkCmdDrawIndirect(commandBuffer, drawBuffers_[frame], drawOffsets_[frame], 1,
-                      sizeof(VkDrawIndirectCommand));
+    vkCmdDrawIndirect(commandBuffer, drawBuffers_[frame], drawOffsets_[frame], 1, sizeof(VkDrawIndirectCommand));
 }
 
 void ParticleSystem::createBuffers() {
     makeBuffer(allocator_, sizeof(Particle) * maxParticles_,
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-               particleBuffer_, particleMemory_, nullptr, true);
-    makeBuffer(allocator_, sizeof(ParticleCollider) * MaxColliders,
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, colliderBuffer_, colliderMemory_,
-               &colliderMapped_);
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, particleBuffer_, particleMemory_,
+               nullptr, true);
+    makeBuffer(allocator_, sizeof(ParticleCollider) * MaxColliders, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, colliderBuffer_,
+               colliderMemory_, &colliderMapped_);
     for (uint32_t target = 0; target < RenderTargets; ++target) {
         for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
             frameOffsets_[target][frame] = target * 256;
         }
     }
     for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
-        makeBuffer(allocator_, sizeof(std::uint32_t) * maxParticles_,
-                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        makeBuffer(allocator_, sizeof(std::uint32_t) * maxParticles_, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                    activeIndexBuffers_[frame], activeIndexMemories_[frame], nullptr, true);
         constexpr VkDeviceSize arenaSize = 1024;
-        makeBuffer(allocator_, arenaSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                   VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        makeBuffer(allocator_, arenaSize,
+                   VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                       VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    smallArenaBuffers_[frame], smallArenaAllocations_[frame], &smallArenaMapped_[frame]);
         for (uint32_t target = 0; target < RenderTargets; ++target) {
             frameBuffers_[target][frame] = smallArenaBuffers_[frame];
-            frameMapped_[target][frame] = static_cast<std::byte*>(smallArenaMapped_[frame]) + frameOffsets_[target][frame];
+            frameMapped_[target][frame] =
+                static_cast<std::byte*>(smallArenaMapped_[frame]) + frameOffsets_[target][frame];
         }
         drawBuffers_[frame] = smallArenaBuffers_[frame];
         drawOffsets_[frame] = 512;
         constexpr VkDrawIndirectCommand initialDraw{6, 0, 0, 0};
-        std::memcpy(static_cast<std::byte*>(smallArenaMapped_[frame]) + drawOffsets_[frame], &initialDraw, sizeof(initialDraw));
+        std::memcpy(static_cast<std::byte*>(smallArenaMapped_[frame]) + drawOffsets_[frame], &initialDraw,
+                    sizeof(initialDraw));
         vmaFlushAllocation(allocator_, smallArenaAllocations_[frame], drawOffsets_[frame], sizeof(initialDraw));
     }
 }
 
 void ParticleSystem::createDescriptorResources() {
     constexpr VkDescriptorSetLayoutBinding bindings[] = {
-        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}
-        ,{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-          VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
-        ,{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-          VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
-        ,{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-          VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
-    };
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.bindingCount = std::size(bindings);
     layout.pBindings = bindings;
@@ -312,31 +323,30 @@ void ParticleSystem::createDescriptorResources() {
         for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
             descriptorSets_[target][frame] = flatSets[target * FramesInFlight + frame];
             VkDescriptorBufferInfo particles{particleBuffer_, 0, sizeof(Particle) * maxParticles_};
-            VkDescriptorBufferInfo uniform{frameBuffers_[target][frame], frameOffsets_[target][frame], sizeof(ParticleFrameData)};
-            VkDescriptorBufferInfo activeIndices{activeIndexBuffers_[frame], 0,
-                                                 sizeof(std::uint32_t) * maxParticles_};
-            VkDescriptorBufferInfo drawCommand{drawBuffers_[frame], drawOffsets_[frame],
-                                               sizeof(VkDrawIndirectCommand)};
+            VkDescriptorBufferInfo uniform{frameBuffers_[target][frame], frameOffsets_[target][frame],
+                                           sizeof(ParticleFrameData)};
+            VkDescriptorBufferInfo activeIndices{activeIndexBuffers_[frame], 0, sizeof(std::uint32_t) * maxParticles_};
+            VkDescriptorBufferInfo drawCommand{drawBuffers_[frame], drawOffsets_[frame], sizeof(VkDrawIndirectCommand)};
             VkDescriptorBufferInfo colliders{colliderBuffer_, 0, sizeof(ParticleCollider) * MaxColliders};
             VkWriteDescriptorSet writes[] = {
                 {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 0, 0, 1,
                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &particles, nullptr},
                 {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 1, 0, 1,
-                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr}
-                ,{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 2, 0, 1,
-                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &activeIndices, nullptr}
-                ,{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 3, 0, 1,
-                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &drawCommand, nullptr}
-                ,{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 4, 0, 1,
-                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &colliders, nullptr}
-            };
+                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 2, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &activeIndices, nullptr},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 3, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &drawCommand, nullptr},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 4, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &colliders, nullptr}};
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
     }
 }
 
 void ParticleSystem::uploadColliders() {
-    if (!colliderMapped_) return;
+    if (!colliderMapped_)
+        return;
     const auto count = std::min<std::size_t>(activeColliders_.size(), MaxColliders);
     std::memset(colliderMapped_, 0, sizeof(ParticleCollider) * MaxColliders);
     std::memcpy(colliderMapped_, activeColliders_.data(), sizeof(ParticleCollider) * count);
@@ -344,12 +354,8 @@ void ParticleSystem::uploadColliders() {
 }
 
 void ParticleSystem::createQuadBuffer() {
-    constexpr float quad[] = {
-        -1, -1, 0, 0, 1, -1, 1, 0, 1, 1, 1, 1,
-        -1, -1, 0, 0, 1, 1, 1, 1, -1, 1, 0, 1
-    };
-    makeBuffer(allocator_, sizeof(quad), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-               quadBuffer_, quadMemory_, &quadMapped_);
+    constexpr float quad[] = {-1, -1, 0, 0, 1, -1, 1, 0, 1, 1, 1, 1, -1, -1, 0, 0, 1, 1, 1, 1, -1, 1, 0, 1};
+    makeBuffer(allocator_, sizeof(quad), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, quadBuffer_, quadMemory_, &quadMapped_);
     std::memcpy(quadMapped_, quad, sizeof(quad));
     vmaFlushAllocation(allocator_, quadMemory_, 0, sizeof(quad));
 }
@@ -361,20 +367,23 @@ void ParticleSystem::uploadInitialParticles() {
         throw std::logic_error("ParticleSystem initial upload requires the central UploadContext");
     }
     const bool ownsBatch = !upload->recording();
-    if (ownsBatch) upload->begin();
+    if (ownsBatch)
+        upload->begin();
     std::vector<std::byte> initialData(static_cast<size_t>(size));
     upload->copyBuffer(particleBuffer_, initialData.data(), size);
     readyTimeline_ = upload->pendingTicket().timelineValue;
-    if (ownsBatch) readyTimeline_ = upload->submit().timelineValue;
+    if (ownsBatch)
+        readyTimeline_ = upload->submit().timelineValue;
 }
 
 void ParticleSystem::destroy() {
-    if (!device_) return;
+    if (!device_)
+        return;
     // Destruction is a resource-lifetime boundary, not an upload-path stall:
     // the transfer write must finish before its destination is released.
     if (readyTimeline_ != 0) {
-        if (UploadContext* const upload = UploadContext::current(); upload != nullptr &&
-            upload->isSubmitted(readyTimeline_)) {
+        if (UploadContext* const upload = UploadContext::current();
+            upload != nullptr && upload->isSubmitted(readyTimeline_)) {
             upload->wait(readyTimeline_);
         }
     }

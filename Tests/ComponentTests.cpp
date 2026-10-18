@@ -1,30 +1,29 @@
-#include <gtest/gtest.h>
-
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/MeshRendererComponent.h"
+#include "Engine/ECS/Components/ProceduralCloudComponent.h"
+#include "Engine/ECS/Components/ReflectionProbeComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
-#include "Engine/ECS/Components/ProceduralCloudComponent.h"
-#include "Engine/ECS/Components/ReflectionProbeComponent.h"
-#include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
+#include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
 #include "Engine/Renderer/Lighting/EnvironmentBaker.h"
 #include "Engine/Renderer/Lighting/ReflectionProbeCapture.h"
-#include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
-#include "Engine/Renderer/RenderConfig.h"
+#include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
+#include "Engine/Renderer/RenderConfig.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/UI/Components/TextComponent.h"
 #include "Engine/UI/UIVertex.h"
 
-#include <limits>
 #include <cstddef>
+#include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <variant>
@@ -66,8 +65,8 @@ TEST(EnvironmentBaker, MapsCompleteCubemapMipChainToRoughness) {
 TEST(EnvironmentBaker, DiffuseIrradianceFoldsInLambertianNormalization) {
     constexpr Engine::Vec3 Radiance{0.25F, 0.5F, 0.75F};
 
-    const Engine::Vec3 baked = Engine::EnvironmentBaker::diffuseIrradiance(
-        {0.0F, 1.0F, 0.0F}, [](const Engine::Vec3&) { return Radiance; });
+    const Engine::Vec3 baked =
+        Engine::EnvironmentBaker::diffuseIrradiance({0.0F, 1.0F, 0.0F}, [](const Engine::Vec3&) { return Radiance; });
 
     EXPECT_FLOAT_EQ(baked.x(), Radiance.x());
     EXPECT_FLOAT_EQ(baked.y(), Radiance.y());
@@ -284,11 +283,9 @@ TEST(TerrainComponent, BuildsCheckerboardGridAndSculptsHeightmap) {
     const auto& first = flatMesh.vertices[flatMesh.indices[0]];
     const auto& second = flatMesh.vertices[flatMesh.indices[1]];
     const auto& third = flatMesh.vertices[flatMesh.indices[2]];
-    EXPECT_GT(Engine::cross(second.position - first.position,
-                            third.position - first.position).y(), 0.0F);
+    EXPECT_GT(Engine::cross(second.position - first.position, third.position - first.position).y(), 0.0F);
 
-    EXPECT_TRUE(terrain.sculpt(0.0F, 0.0F, 1.5F, 0.5F,
-                               Engine::TerrainSculptMode::Raise));
+    EXPECT_TRUE(terrain.sculpt(0.0F, 0.0F, 1.5F, 0.5F, Engine::TerrainSculptMode::Raise));
     EXPECT_GT(terrain.height(2, 2), 0.0F);
     EXPECT_FLOAT_EQ(terrain.height(0, 0), 0.0F);
     Engine::Mesh sculptedMesh = flatMesh;

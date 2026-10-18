@@ -1,7 +1,6 @@
-#include <gtest/gtest.h>
-
 #include "Engine/Core/Time.h"
 
+#include <gtest/gtest.h>
 #include <stdexcept>
 
 namespace {

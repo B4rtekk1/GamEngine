@@ -1,40 +1,43 @@
+#include "Engine/Scripting/DynamicLibrary.h"
 #include "Platform/FileWatcher.h"
 #include "Platform/Terminal/TerminalSession.h"
 #include "Platform/UserPaths.h"
-#include "Engine/Scripting/DynamicLibrary.h"
-
-#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <optional>
 #include <thread>
 
 namespace {
 class Environment final {
-public:
+  public:
     Environment(const char* name, const std::string& value) : name_(name) {
-        if (const char* previous = std::getenv(name)) previous_ = previous;
+        if (const char* previous = std::getenv(name))
+            previous_ = previous;
         ::setenv(name, value.c_str(), 1);
     }
     ~Environment() {
-        if (previous_) ::setenv(name_.c_str(), previous_->c_str(), 1);
-        else ::unsetenv(name_.c_str());
+        if (previous_)
+            ::setenv(name_.c_str(), previous_->c_str(), 1);
+        else
+            ::unsetenv(name_.c_str());
     }
-private:
+
+  private:
     std::string name_;
     std::optional<std::string> previous_;
 };
 
 class LinuxPlatformTest : public testing::Test {
-protected:
+  protected:
     std::filesystem::path root;
     void SetUp() override {
-        root = std::filesystem::temp_directory_path() / ("ge-platform-test-" + std::to_string(
-            std::chrono::steady_clock::now().time_since_epoch().count()));
+        root = std::filesystem::temp_directory_path() /
+               ("ge-platform-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(root);
     }
     void TearDown() override {
@@ -62,9 +65,8 @@ TEST_F(LinuxPlatformTest, WatchesNewRenamedAndRemovedDirectoryTrees) {
     EXPECT_FALSE(watcher.poll().empty());
     std::ofstream{root / "scripts/new/Test.cpp"} << "// script";
     const auto changes = watcher.poll();
-    EXPECT_TRUE(std::ranges::any_of(changes, [&](const auto& change) {
-        return change.path == root / "scripts/new/Test.cpp";
-    }));
+    EXPECT_TRUE(
+        std::ranges::any_of(changes, [&](const auto& change) { return change.path == root / "scripts/new/Test.cpp"; }));
     std::filesystem::remove_all(root / "scripts/new");
     EXPECT_FALSE(watcher.poll().empty());
     std::filesystem::create_directories(root / "scripts/nested/deeper");
@@ -96,7 +98,8 @@ TEST_F(LinuxPlatformTest, RunsInteractiveShellAndReapsIt) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
     while (std::chrono::steady_clock::now() < deadline) {
         output += terminal->readAvailable();
-        if (!terminal->running()) break;
+        if (!terminal->running())
+            break;
         std::this_thread::sleep_for(std::chrono::milliseconds{10});
     }
     output += terminal->readAvailable();

@@ -4,20 +4,22 @@
 #include "Platform/RuntimePaths.h"
 
 #include <SDL3/SDL.h>
-#include <gtest/gtest.h>
-
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 
 namespace {
 TEST(GameBuildPipeline, ExportsScriptsAndRuntimeFromSdkInUnicodeProjectPath) {
     const auto root = std::filesystem::temp_directory_path() / std::filesystem::path{u8"ge gra żółw "} /
-        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     struct Cleanup {
         std::filesystem::path path;
-        ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
     } cleanup{root};
     const auto project = Engine::Project::create(root / "Project", "SdkTestGame");
     const auto writeScript = [&](int generation) {

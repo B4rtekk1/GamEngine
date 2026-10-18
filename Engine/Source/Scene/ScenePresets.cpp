@@ -1,21 +1,21 @@
-#include "Engine/Physics/GlassDestructionSystem.h"
-#include "Platform/DefaultFonts.h"
 #include "Engine/Scene/ScenePresets.h"
 
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
-#include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
-#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
-#include "Engine/Renderer/Geometry/Cube.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Renderer/Geometry/Capsule.h"
+#include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Geometry/Ramp.h"
 #include "Engine/Renderer/Geometry/Sphere.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Components/LightComponent.h"
+#include "Platform/DefaultFonts.h"
 
 #include <array>
 #include <cmath>
@@ -26,313 +26,311 @@
 // NOLINTBEGIN(readability-magic-numbers)
 
 namespace Engine {
-    namespace {
-        constexpr std::size_t CubesPerAxis = 30;
-        constexpr float CubeSpacing = 1.25F;
-        constexpr int DefaultFontPixelHeight = 24;
-        constexpr int DefaultFontFirstCharacter = 32;
-        constexpr int DefaultFontLastCharacter = 126;
+namespace {
+constexpr std::size_t CubesPerAxis = 30;
+constexpr float CubeSpacing = 1.25F;
+constexpr int DefaultFontPixelHeight = 24;
+constexpr int DefaultFontFirstCharacter = 32;
+constexpr int DefaultFontLastCharacter = 126;
 
-        constexpr float ParticleHeight = 0.25F;
-        constexpr float GroundPlanePadding = 4.0F;
-        constexpr float GroundColliderHalfHeight = 0.05F;
-        constexpr float GroundColliderOffsetY = -0.05F;
+constexpr float ParticleHeight = 0.25F;
+constexpr float GroundPlanePadding = 4.0F;
+constexpr float GroundColliderHalfHeight = 0.05F;
+constexpr float GroundColliderOffsetY = -0.05F;
 
-        constexpr float CubeHalfHeight = 0.5F;
-        constexpr float CubeColor = 0.72F;
-        constexpr float CubeMetallic = 0.05F;
-        constexpr float CubeRoughness = 0.62F;
+constexpr float CubeHalfHeight = 0.5F;
+constexpr float CubeColor = 0.72F;
+constexpr float CubeMetallic = 0.05F;
+constexpr float CubeRoughness = 0.62F;
 
-        constexpr float CameraFieldOfView = 45.0F;
-        constexpr float CameraNearClip = 0.1F;
-        constexpr float CameraFarClip = 100000.0F;
-        constexpr float CameraViewportWidth = 800.0F;
-        constexpr float CameraViewportHeight = 600.0F;
-        constexpr float ParticleCameraTargetY = 3.0F;
-        constexpr float ParticleCameraX = 6.0F;
-        constexpr float ParticleCameraY = 5.8F;
-        constexpr float ParticleCameraZ = 8.0F;
-        constexpr float CubeCameraXScale = 2.9F;
-        constexpr float CubeCameraYScale = 2.6F;
-        constexpr float CubeCameraZScale = 3.9F;
+constexpr float CameraFieldOfView = 45.0F;
+constexpr float CameraNearClip = 0.1F;
+constexpr float CameraFarClip = 100000.0F;
+constexpr float CameraViewportWidth = 800.0F;
+constexpr float CameraViewportHeight = 600.0F;
+constexpr float ParticleCameraTargetY = 3.0F;
+constexpr float ParticleCameraX = 6.0F;
+constexpr float ParticleCameraY = 5.8F;
+constexpr float ParticleCameraZ = 8.0F;
+constexpr float CubeCameraXScale = 2.9F;
+constexpr float CubeCameraYScale = 2.6F;
+constexpr float CubeCameraZScale = 3.9F;
 
-        constexpr float EditorPlaneScale = 2.0F;
-        constexpr float EditorObjectHeight = 0.5F;
-        constexpr float RampObjectHeight = 2.0F;
-        constexpr float SphereRadius = 0.5F;
-        constexpr float CapsuleRadius = 0.5F;
-        constexpr float CapsuleHeight = 2.0F;
-        constexpr float CapsuleObjectHeight = CapsuleHeight * 0.5F;
-        constexpr int DefaultCullingBatch = 1;
+constexpr float EditorPlaneScale = 2.0F;
+constexpr float EditorObjectHeight = 0.5F;
+constexpr float RampObjectHeight = 2.0F;
+constexpr float SphereRadius = 0.5F;
+constexpr float CapsuleRadius = 0.5F;
+constexpr float CapsuleHeight = 2.0F;
+constexpr float CapsuleObjectHeight = CapsuleHeight * 0.5F;
+constexpr int DefaultCullingBatch = 1;
 
-        constexpr float SphereColorRed = 0.35F;
-        constexpr float SphereColorGreen = 0.65F;
-        constexpr float SphereColorBlue = 0.95F;
-        constexpr float SphereMetallic = 0.1F;
-        constexpr float SphereRoughness = 0.42F;
-        constexpr float RampColorRed = 0.95F;
-        constexpr float RampColorGreen = 0.62F;
-        constexpr float RampColorBlue = 0.25F;
-        constexpr float RampMetallic = 0.0F;
-        constexpr float RampRoughness = 0.72F;
+constexpr float SphereColorRed = 0.35F;
+constexpr float SphereColorGreen = 0.65F;
+constexpr float SphereColorBlue = 0.95F;
+constexpr float SphereMetallic = 0.1F;
+constexpr float SphereRoughness = 0.42F;
+constexpr float RampColorRed = 0.95F;
+constexpr float RampColorGreen = 0.62F;
+constexpr float RampColorBlue = 0.25F;
+constexpr float RampMetallic = 0.0F;
+constexpr float RampRoughness = 0.72F;
 
-        void buildFont(UI::UIFontAtlas &atlas) {
-            if (atlas.width() != 0 && atlas.height() != 0) return;
-            const auto font = Platform::defaultUiFont();
-            if (font.empty()) {
-                throw std::runtime_error("No default TrueType font found");
-            }
-            if (const std::string error = atlas.build(font.string(), DefaultFontPixelHeight,
-                                                      DefaultFontFirstCharacter, DefaultFontLastCharacter);
-                !error.empty()) {
-                throw std::runtime_error("Could not build sample font atlas: " + error);
-            }
-        }
-    } // namespace
+void buildFont(UI::UIFontAtlas& atlas) {
+    if (atlas.width() != 0 && atlas.height() != 0)
+        return;
+    const auto font = Platform::defaultUiFont();
+    if (font.empty()) {
+        throw std::runtime_error("No default TrueType font found");
+    }
+    if (const std::string error =
+            atlas.build(font.string(), DefaultFontPixelHeight, DefaultFontFirstCharacter, DefaultFontLastCharacter);
+        !error.empty()) {
+        throw std::runtime_error("Could not build sample font atlas: " + error);
+    }
+}
+} // namespace
 
-    ScenePreset::ScenePreset(const SceneType type) {
-        // These meshes back the editor's GameObject menu.  Initializing them
-        // is independent from adding sample objects to the new scene.
-        planeMesh_ = std::make_shared<Mesh>(Plane::createMesh());
-        cubeMesh_ = std::make_shared<Mesh>(Cube::createMesh());
-        sphereMesh_ = std::make_shared<Mesh>(Sphere::createMesh());
-        capsuleMesh_ = std::make_shared<Mesh>(Capsule::createMesh(CapsuleRadius, CapsuleHeight));
-        rampMesh_ = std::make_shared<Mesh>(Ramp::createMesh());
-        buildFont(uiFontAtlas());
-        if (type == SceneType::Particles) {
-            Particles::ParticleEmitter emitter;
-            emitter.position = {0.0F, ParticleHeight, 0.0F};
-            setParticleEmitter(emitter);
-            auto &particleObject = Scene::createGameObject("Particle System");
-            particleSystem = particleObject.entity();
-            setParticleEntity(particleSystem);
-            particleObject.setPosition(particleEmitter().position);
-            particleObject.add<ParticleEmitterComponent>(ParticleEmitterComponent{emitter});
-        }
+ScenePreset::ScenePreset(const SceneType type) {
+    // These meshes back the editor's GameObject menu.  Initializing them
+    // is independent from adding sample objects to the new scene.
+    planeMesh_ = std::make_shared<Mesh>(Plane::createMesh());
+    cubeMesh_ = std::make_shared<Mesh>(Cube::createMesh());
+    sphereMesh_ = std::make_shared<Mesh>(Sphere::createMesh());
+    capsuleMesh_ = std::make_shared<Mesh>(Capsule::createMesh(CapsuleRadius, CapsuleHeight));
+    rampMesh_ = std::make_shared<Mesh>(Ramp::createMesh());
+    buildFont(uiFontAtlas());
+    if (type == SceneType::Particles) {
+        Particles::ParticleEmitter emitter;
+        emitter.position = {0.0F, ParticleHeight, 0.0F};
+        setParticleEmitter(emitter);
+        auto& particleObject = Scene::createGameObject("Particle System");
+        particleSystem = particleObject.entity();
+        setParticleEntity(particleSystem);
+        particleObject.setPosition(particleEmitter().position);
+        particleObject.add<ParticleEmitterComponent>(ParticleEmitterComponent{emitter});
+    }
 
-        constexpr float halfExtent = (((CubesPerAxis - 1) * CubeSpacing) + 1.0F) * 0.5F;
-        if (type != SceneType::Empty) {
-            auto &planeObject = createMeshObject("Plane", planeMesh_,
-                                                 PBRMaterial{});
-            planeObject.setScale({
-                (halfExtent * 2) + GroundPlanePadding, 1, (halfExtent * 2) + GroundPlanePadding
-            });
-            planeObject.setCastShadow(false);
-            plane = planeObject.entity();
-            planeObject.add<ColliderComponent>(ColliderComponent{
-                .shape = BoxCollider{.halfExtents = {CubeHalfHeight, GroundColliderHalfHeight, CubeHalfHeight}},
-                .offset = {0.0F, GroundColliderOffsetY, 0.0F},
-            });
-        }
+    constexpr float halfExtent = (((CubesPerAxis - 1) * CubeSpacing) + 1.0F) * 0.5F;
+    if (type != SceneType::Empty) {
+        auto& planeObject = createMeshObject("Plane", planeMesh_, PBRMaterial{});
+        planeObject.setScale({(halfExtent * 2) + GroundPlanePadding, 1, (halfExtent * 2) + GroundPlanePadding});
+        planeObject.setCastShadow(false);
+        plane = planeObject.entity();
+        planeObject.add<ColliderComponent>(ColliderComponent{
+            .shape = BoxCollider{.halfExtents = {CubeHalfHeight, GroundColliderHalfHeight, CubeHalfHeight}},
+            .offset = {0.0F, GroundColliderOffsetY, 0.0F},
+        });
+    }
 
-        if (type == SceneType::Cubes) {
-            constexpr float halfGrid = (CubesPerAxis - 1) * CubeSpacing * 0.5F;
-            for (std::size_t y = 0; y < CubesPerAxis; ++y) { // NOLINT(readability-identifier-length)
-                for (std::size_t z = 0; z < CubesPerAxis; ++z) { // NOLINT(readability-identifier-length)
-                    for (std::size_t x = 0; x < CubesPerAxis; ++x) { // NOLINT(readability-identifier-length)
-                        auto &cube = createMeshObject("Cube " + std::to_string(x) + " " +
-                                                      std::to_string(y) + " " + std::to_string(z), cubeMesh_,
-                                                      PBRMaterial{
-                                                          .baseColor = {CubeColor, CubeColor, CubeColor},
-                                                          .metallic = CubeMetallic,
-                                                          .roughness = CubeRoughness,
-                                                      });
-                        cube.setPosition({
-                            (static_cast<float>(x) * CubeSpacing) - halfGrid,
-                            (static_cast<float>(y) * CubeSpacing) + CubeHalfHeight,
-                            (static_cast<float>(z) * CubeSpacing) - halfGrid
+    if (type == SceneType::Cubes) {
+        constexpr float halfGrid = (CubesPerAxis - 1) * CubeSpacing * 0.5F;
+        for (std::size_t y = 0; y < CubesPerAxis; ++y) {         // NOLINT(readability-identifier-length)
+            for (std::size_t z = 0; z < CubesPerAxis; ++z) {     // NOLINT(readability-identifier-length)
+                for (std::size_t x = 0; x < CubesPerAxis; ++x) { // NOLINT(readability-identifier-length)
+                    auto& cube = createMeshObject(
+                        "Cube " + std::to_string(x) + " " + std::to_string(y) + " " + std::to_string(z), cubeMesh_,
+                        PBRMaterial{
+                            .baseColor = {CubeColor, CubeColor, CubeColor},
+                            .metallic = CubeMetallic,
+                            .roughness = CubeRoughness,
                         });
-                        cube.setCastShadow(false);
-                        cube.setCullingBatch(DefaultCullingBatch);
-                    }
+                    cube.setPosition({(static_cast<float>(x) * CubeSpacing) - halfGrid,
+                                      (static_cast<float>(y) * CubeSpacing) + CubeHalfHeight,
+                                      (static_cast<float>(z) * CubeSpacing) - halfGrid});
+                    cube.setCastShadow(false);
+                    cube.setCullingBatch(DefaultCullingBatch);
                 }
             }
         }
-
-        const bool particleScene = isParticleScene();
-        float targetY = halfExtent;
-        Vec3 position{};
-        if (particleScene) {
-            targetY = ParticleCameraTargetY;
-            position = {ParticleCameraX, ParticleCameraY, ParticleCameraZ};
-        } else if (type == SceneType::Cubes) {
-            position = {
-                static_cast<float>(halfExtent) * CubeCameraXScale,
-                targetY + (static_cast<float>(halfExtent) * CubeCameraYScale),
-                static_cast<float>(halfExtent) * CubeCameraZScale
-            };
-        }
-        const Vec3 direction = Vec3{0, targetY, 0} - position;
-        const Actor cameraActor = Scene::createCamera("Camera", CameraComponent{
-                                                          .fieldOfView = CameraFieldOfView, .nearClip = CameraNearClip,
-                                                          .farClip = CameraFarClip,
-                                                          .aspectRatio = CameraViewportWidth / CameraViewportHeight,
-                                                      });
-        cameraActor.setPosition(position);
-        if (type != SceneType::Empty) {
-            cameraActor.setRotation({
-                Degrees{Radians{std::atan2(direction.y(), Vec2{direction.x(), direction.z()}.length())}}.value(),
-                Degrees{Radians{std::atan2(direction.z(), direction.x())}}.value(), 0
-            });
-        }
-        camera = findEntity(cameraActor.id());
-
-        // Every editor scene starts with an explicit directional light.  This
-        // keeps illumination editable and visible in the hierarchy instead of
-        // relying on the renderer's fallback light.
-        static_cast<void>(createLight());
     }
 
-    Entity ScenePreset::createGameObject() {
-        const Entity entity = Scene::createGameObject("GameObject").entity();
-        editorGameObjects.push_back(entity);
-        return entity;
+    const bool particleScene = isParticleScene();
+    float targetY = halfExtent;
+    Vec3 position{};
+    if (particleScene) {
+        targetY = ParticleCameraTargetY;
+        position = {ParticleCameraX, ParticleCameraY, ParticleCameraZ};
+    } else if (type == SceneType::Cubes) {
+        position = {static_cast<float>(halfExtent) * CubeCameraXScale,
+                    targetY + (static_cast<float>(halfExtent) * CubeCameraYScale),
+                    static_cast<float>(halfExtent) * CubeCameraZScale};
     }
-
-    Entity ScenePreset::createOcean() {
-        const Entity entity = findEntity(Scene::createOcean().id());
-        return entity;
+    const Vec3 direction = Vec3{0, targetY, 0} - position;
+    const Actor cameraActor =
+        Scene::createCamera("Camera", CameraComponent{
+                                          .fieldOfView = CameraFieldOfView,
+                                          .nearClip = CameraNearClip,
+                                          .farClip = CameraFarClip,
+                                          .aspectRatio = CameraViewportWidth / CameraViewportHeight,
+                                      });
+    cameraActor.setPosition(position);
+    if (type != SceneType::Empty) {
+        cameraActor.setRotation(
+            {Degrees{Radians{std::atan2(direction.y(), Vec2{direction.x(), direction.z()}.length())}}.value(),
+             Degrees{Radians{std::atan2(direction.z(), direction.x())}}.value(), 0});
     }
+    camera = findEntity(cameraActor.id());
 
-    Entity ScenePreset::createLake() {
-        const Entity entity = findEntity(Scene::createLake().id());
-        return entity;
-    }
+    // Every editor scene starts with an explicit directional light.  This
+    // keeps illumination editable and visible in the hierarchy instead of
+    // relying on the renderer's fallback light.
+    static_cast<void>(createLight());
+}
 
-    Entity ScenePreset::createRiver() {
-        const Entity entity = findEntity(Scene::createRiver().id());
-        return entity;
-    }
+Entity ScenePreset::createGameObject() {
+    const Entity entity = Scene::createGameObject("GameObject").entity();
+    editorGameObjects.push_back(entity);
+    return entity;
+}
 
-    Entity ScenePreset::createCube() {
-        auto &object = createMeshObject("Cube", cubeMesh_,
-                                        PBRMaterial{
-                                            .baseColor = {CubeColor, CubeColor, CubeColor}, .metallic = CubeMetallic,
-                                            .roughness = CubeRoughness,
-                                        });
-        object.setPosition({0, EditorObjectHeight, 0});
-        const Entity entity = object.entity();
-        object.add<ColliderComponent>();
-        editorCubes.push_back(entity);
-        return entity;
-    }
+Entity ScenePreset::createOcean() {
+    const Entity entity = findEntity(Scene::createOcean().id());
+    return entity;
+}
 
-    Entity ScenePreset::createGlass() {
-        constexpr float GlassThickness = 0.01F;
-        // A slight tint and surface haze keep the sample pane readable even
-        // when viewed head-on against a uniform background.
-        const Actor object = GlassDestructionSystem::createPane(*this, "Glass",
-                                       GlassDestructionComponent{.size = {1.0F, 2.0F}, .thickness = GlassThickness},
-                                       PBRMaterial{
-                                           .baseColor = {0.92F, 0.98F, 0.95F},
-                                           .metallic = 0.0F,
-                                           .roughness = 0.12F,
-                                           .ior = 1.5F,
-                                           .transmission = 0.96F,
-                                           .thickness = GlassThickness,
-                                           .attenuationColor = {0.80F, 0.95F, 0.88F},
-                                           .attenuationDistance = 0.10F,
-                                           .dirtIntensity = 0.05F,
-                                       });
-        object.setPosition({0.0F, 1.0F, 0.0F});
-        return findEntity(object.id());
-    }
+Entity ScenePreset::createLake() {
+    const Entity entity = findEntity(Scene::createLake().id());
+    return entity;
+}
 
-    Entity ScenePreset::createPlane() {
-        auto &object = createMeshObject("Plane", planeMesh_);
-        object.setScale({EditorPlaneScale, 1, EditorPlaneScale});
-        const Entity entity = object.entity();
-        editorPlanes.push_back(entity);
-        return entity;
-    }
+Entity ScenePreset::createRiver() {
+    const Entity entity = findEntity(Scene::createRiver().id());
+    return entity;
+}
 
-    Entity ScenePreset::createSphere() {
-        auto &object = createMeshObject("Sphere", sphereMesh_,
-                                        PBRMaterial{
-                                            .baseColor = {SphereColorRed, SphereColorGreen, SphereColorBlue},
-                                            .metallic = SphereMetallic, .roughness = SphereRoughness,
-                                        });
-        object.setPosition({0, EditorObjectHeight, 0});
-        const Entity entity = object.entity();
-        object.add<ColliderComponent>(ColliderComponent{.shape = SphereCollider{.radius = SphereRadius}});
-        object.add<RigidbodyComponent>();
-        editorSpheres.push_back(entity);
-        return entity;
-    }
+Entity ScenePreset::createCube() {
+    auto& object = createMeshObject("Cube", cubeMesh_,
+                                    PBRMaterial{
+                                        .baseColor = {CubeColor, CubeColor, CubeColor},
+                                        .metallic = CubeMetallic,
+                                        .roughness = CubeRoughness,
+                                    });
+    object.setPosition({0, EditorObjectHeight, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>();
+    editorCubes.push_back(entity);
+    return entity;
+}
 
-    Entity ScenePreset::createCapsule() {
-        auto &object = createMeshObject("Capsule", capsuleMesh_,
-                                        PBRMaterial{
-                                            .baseColor = {0.45F, 0.80F, 0.48F},
-                                            .metallic = SphereMetallic, .roughness = SphereRoughness,
-                                        });
-        object.setPosition({0, CapsuleObjectHeight, 0});
-        const Entity entity = object.entity();
-        object.add<ColliderComponent>(ColliderComponent{
-            .shape = CapsuleCollider{.radius = CapsuleRadius, .height = CapsuleHeight},
+Entity ScenePreset::createGlass() {
+    constexpr float GlassThickness = 0.01F;
+    // A slight tint and surface haze keep the sample pane readable even
+    // when viewed head-on against a uniform background.
+    const Actor object = GlassDestructionSystem::createPane(
+        *this, "Glass", GlassDestructionComponent{.size = {1.0F, 2.0F}, .thickness = GlassThickness},
+        PBRMaterial{
+            .baseColor = {0.92F, 0.98F, 0.95F},
+            .metallic = 0.0F,
+            .roughness = 0.12F,
+            .ior = 1.5F,
+            .transmission = 0.96F,
+            .thickness = GlassThickness,
+            .attenuationColor = {0.80F, 0.95F, 0.88F},
+            .attenuationDistance = 0.10F,
+            .dirtIntensity = 0.05F,
         });
-        object.add<RigidbodyComponent>();
-        editorCapsules.push_back(entity);
-        return entity;
-    }
+    object.setPosition({0.0F, 1.0F, 0.0F});
+    return findEntity(object.id());
+}
 
-    Entity ScenePreset::createRamp() {
-        auto &object = createMeshObject("Ramp", rampMesh_,
-                                        PBRMaterial{
-                                            .baseColor = {RampColorRed, RampColorGreen, RampColorBlue},
-                                            .metallic = RampMetallic, .roughness = RampRoughness,
-                                            .doubleSided = true,
-                                        });
-        object.setPosition({0, RampObjectHeight, 0});
-        const Entity entity = object.entity();
-        object.add<ColliderComponent>(ColliderComponent{.shape = RampCollider{.halfExtents = Ramp::halfExtents()}});
-        editorRamps.push_back(entity);
-        return entity;
-    }
+Entity ScenePreset::createPlane() {
+    auto& object = createMeshObject("Plane", planeMesh_);
+    object.setScale({EditorPlaneScale, 1, EditorPlaneScale});
+    const Entity entity = object.entity();
+    editorPlanes.push_back(entity);
+    return entity;
+}
 
-    Entity ScenePreset::createCamera() {
-        const Actor object = Scene::createCamera("Camera");
-        object.setPosition({0.0F, 2.0F, 5.0F});
-        const Entity entity = findEntity(object.id());
-        camera = entity;
-        return entity;
-    }
+Entity ScenePreset::createSphere() {
+    auto& object = createMeshObject("Sphere", sphereMesh_,
+                                    PBRMaterial{
+                                        .baseColor = {SphereColorRed, SphereColorGreen, SphereColorBlue},
+                                        .metallic = SphereMetallic,
+                                        .roughness = SphereRoughness,
+                                    });
+    object.setPosition({0, EditorObjectHeight, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>(ColliderComponent{.shape = SphereCollider{.radius = SphereRadius}});
+    object.add<RigidbodyComponent>();
+    editorSpheres.push_back(entity);
+    return entity;
+}
 
-    Entity ScenePreset::createLight() {
-        LightComponent light;
-        light.intensity = 4.0F;
-        light.mainLight = true;
-        const Actor object = Scene::createLight("Light", light);
-        object.setPosition({3.0F, 5.0F, -3.0F});
-        object.setRotation({-55.0F, 35.0F, 0.0F});
-        const Entity entity = findEntity(object.id());
-        editorLights.push_back(entity);
-        return entity;
-    }
+Entity ScenePreset::createCapsule() {
+    auto& object = createMeshObject("Capsule", capsuleMesh_,
+                                    PBRMaterial{
+                                        .baseColor = {0.45F, 0.80F, 0.48F},
+                                        .metallic = SphereMetallic,
+                                        .roughness = SphereRoughness,
+                                    });
+    object.setPosition({0, CapsuleObjectHeight, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>(ColliderComponent{
+        .shape = CapsuleCollider{.radius = CapsuleRadius, .height = CapsuleHeight},
+    });
+    object.add<RigidbodyComponent>();
+    editorCapsules.push_back(entity);
+    return entity;
+}
 
-    Entity ScenePreset::createTerrain() {
-        const Actor actor = Scene::createTerrain("Terrain");
-        const Entity entity = findEntity(actor.id());
-        editorTerrains.push_back(entity);
-        return entity;
-    }
+Entity ScenePreset::createRamp() {
+    auto& object = createMeshObject("Ramp", rampMesh_,
+                                    PBRMaterial{
+                                        .baseColor = {RampColorRed, RampColorGreen, RampColorBlue},
+                                        .metallic = RampMetallic,
+                                        .roughness = RampRoughness,
+                                        .doubleSided = true,
+                                    });
+    object.setPosition({0, RampObjectHeight, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>(ColliderComponent{.shape = RampCollider{.halfExtents = Ramp::halfExtents()}});
+    editorRamps.push_back(entity);
+    return entity;
+}
 
-    Entity ScenePreset::createProceduralCloud() {
-        ProceduralCloudComponent cloud;
-        auto &object = createMeshObject("Procedural Cloud",
-                                        std::make_shared<Mesh>(ProceduralCloud::createMesh(cloud)),
-                                        PBRMaterial{
-                                            .baseColor = {0.94F, 0.96F, 1.0F},
-                                            .metallic = 0.0F,
-                                            .roughness = 0.92F,
-                                        });
-        object.setPosition({0.0F, 12.0F, 0.0F});
-        object.setCastShadow(false);
-        object.add<ProceduralCloudComponent>(cloud);
-        const Entity entity = object.entity();
-        editorClouds.push_back(entity);
-        return entity;
-    }
+Entity ScenePreset::createCamera() {
+    const Actor object = Scene::createCamera("Camera");
+    object.setPosition({0.0F, 2.0F, 5.0F});
+    const Entity entity = findEntity(object.id());
+    camera = entity;
+    return entity;
+}
+
+Entity ScenePreset::createLight() {
+    LightComponent light;
+    light.intensity = 4.0F;
+    light.mainLight = true;
+    const Actor object = Scene::createLight("Light", light);
+    object.setPosition({3.0F, 5.0F, -3.0F});
+    object.setRotation({-55.0F, 35.0F, 0.0F});
+    const Entity entity = findEntity(object.id());
+    editorLights.push_back(entity);
+    return entity;
+}
+
+Entity ScenePreset::createTerrain() {
+    const Actor actor = Scene::createTerrain("Terrain");
+    const Entity entity = findEntity(actor.id());
+    editorTerrains.push_back(entity);
+    return entity;
+}
+
+Entity ScenePreset::createProceduralCloud() {
+    ProceduralCloudComponent cloud;
+    auto& object = createMeshObject("Procedural Cloud", std::make_shared<Mesh>(ProceduralCloud::createMesh(cloud)),
+                                    PBRMaterial{
+                                        .baseColor = {0.94F, 0.96F, 1.0F},
+                                        .metallic = 0.0F,
+                                        .roughness = 0.92F,
+                                    });
+    object.setPosition({0.0F, 12.0F, 0.0F});
+    object.setCastShadow(false);
+    object.add<ProceduralCloudComponent>(cloud);
+    const Entity entity = object.entity();
+    editorClouds.push_back(entity);
+    return entity;
+}
 } // namespace Engine
 
 // NOLINTEND(readability-magic-numbers)

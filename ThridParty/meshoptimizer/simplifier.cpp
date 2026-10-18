@@ -1,11 +1,10 @@
 // This file is part of meshoptimizer library; see meshoptimizer.h for version/license details
 #include "meshoptimizer.h"
 
+#include <algorithm>
 #include <assert.h>
 #include <math.h>
 #include <string.h>
-
-#include <algorithm>
 
 // This work is based on:
 // Michael Garland and Paul S. Heckbert. Surface simplification using quadric error metrics. 1997
@@ -29,8 +28,7 @@ static size_t hashBuckets(size_t count) {
     return buckets;
 }
 
-template <typename T>
-static T* hashLookup(T* table, size_t buckets, const T& key, const T& empty) {
+template <typename T> static T* hashLookup(T* table, size_t buckets, const T& key, const T& empty) {
     assert(buckets > 0);
     assert((buckets & (buckets - 1)) == 0);
 
@@ -118,7 +116,8 @@ static float quadricError(Quadric& Q, const Vector3& v) {
     float yz = v.y * v.z;
     float zz = v.z * v.z;
 
-    float vTQv = Q.a00 * xx + Q.a10 * xy * 2 + Q.a11 * yy + Q.a20 * xz * 2 + Q.a21 * yz * 2 + Q.a22 * zz + Q.b0 * v.x * 2 + Q.b1 * v.y * 2 + Q.b2 * v.z * 2 + Q.c;
+    float vTQv = Q.a00 * xx + Q.a10 * xy * 2 + Q.a11 * yy + Q.a20 * xz * 2 + Q.a21 * yz * 2 + Q.a22 * zz +
+                 Q.b0 * v.x * 2 + Q.b1 * v.y * 2 + Q.b2 * v.z * 2 + Q.c;
 
     return fabsf(vTQv);
 }
@@ -173,7 +172,9 @@ static unsigned long long edgeId(unsigned int a, unsigned int b) {
     return (static_cast<unsigned long long>(a) << 32) | b;
 }
 
-static size_t simplifyEdgeCollapse(unsigned int* result, const unsigned int* indices, size_t index_count, const float* vertex_positions_data, size_t vertex_positions_stride, size_t vertex_count, size_t target_index_count) {
+static size_t simplifyEdgeCollapse(unsigned int* result, const unsigned int* indices, size_t index_count,
+                                   const float* vertex_positions_data, size_t vertex_positions_stride,
+                                   size_t vertex_count, size_t target_index_count) {
     size_t vertex_stride_float = vertex_positions_stride / sizeof(float);
 
     meshopt_Buffer<Vector3> vertex_positions(vertex_count);
@@ -192,7 +193,8 @@ static size_t simplifyEdgeCollapse(unsigned int* result, const unsigned int* ind
     // face quadrics
     for (size_t i = 0; i < index_count; i += 3) {
         Quadric Q;
-        quadricFromTriangle(Q, vertex_positions[indices[i + 0]], vertex_positions[indices[i + 1]], vertex_positions[indices[i + 2]]);
+        quadricFromTriangle(Q, vertex_positions[indices[i + 0]], vertex_positions[indices[i + 1]],
+                            vertex_positions[indices[i + 2]]);
 
         quadricAdd(vertex_quadrics[indices[i + 0]], Q);
         quadricAdd(vertex_quadrics[indices[i + 1]], Q);
@@ -282,7 +284,9 @@ static size_t simplifyEdgeCollapse(unsigned int* result, const unsigned int* ind
         size_t collapses = 0;
         float pass_error = 0;
 
-        float error_goal = edge_collapses[edge_collapse_goal < edge_collapse_count ? edge_collapse_goal : edge_collapse_count - 1].error;
+        float error_goal =
+            edge_collapses[edge_collapse_goal < edge_collapse_count ? edge_collapse_goal : edge_collapse_count - 1]
+                .error;
         float error_limit = error_goal * 1.5f;
 
         for (size_t i = 0; i < edge_collapse_count; ++i) {
@@ -311,7 +315,8 @@ static size_t simplifyEdgeCollapse(unsigned int* result, const unsigned int* ind
                 break;
         }
 
-        // printf("pass %d: collapses: %d/%d, error: %e\n", int(pass_count), int(collapses), int(edge_collapse_count), pass_error);
+        // printf("pass %d: collapses: %d/%d, error: %e\n", int(pass_count), int(collapses), int(edge_collapse_count),
+        // pass_error);
 
         pass_count++;
         worst_error = (worst_error < pass_error) ? pass_error : worst_error;
@@ -349,7 +354,9 @@ static size_t simplifyEdgeCollapse(unsigned int* result, const unsigned int* ind
 
 } // namespace meshopt
 
-size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, size_t index_count, const float* vertex_positions, size_t vertex_count, size_t vertex_positions_stride, size_t target_index_count) {
+size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, size_t index_count,
+                        const float* vertex_positions, size_t vertex_count, size_t vertex_positions_stride,
+                        size_t target_index_count) {
     using namespace meshopt;
 
     assert(index_count % 3 == 0);
@@ -357,5 +364,6 @@ size_t meshopt_simplify(unsigned int* destination, const unsigned int* indices, 
     assert(vertex_positions_stride % sizeof(float) == 0);
     assert(target_index_count <= index_count);
 
-    return simplifyEdgeCollapse(destination, indices, index_count, vertex_positions, vertex_positions_stride, vertex_count, target_index_count);
+    return simplifyEdgeCollapse(destination, indices, index_count, vertex_positions, vertex_positions_stride,
+                                vertex_count, target_index_count);
 }
