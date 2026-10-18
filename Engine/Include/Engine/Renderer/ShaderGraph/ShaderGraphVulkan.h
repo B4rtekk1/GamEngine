@@ -11,70 +11,68 @@
 #include <unordered_map>
 
 namespace Engine {
-    /** Output of the graph cooker, ready for a Vulkan graphics pipeline. */
-    struct ShaderGraphProgram final {
-        ShaderProgramId id{};
-        std::filesystem::path slangPath;
-        std::filesystem::path spirvPath;
-        /// Color-only module used by passes without a velocity attachment.
-        std::filesystem::path noVelocitySpirvPath;
-    };
+/** Output of the graph cooker, ready for a Vulkan graphics pipeline. */
+struct ShaderGraphProgram final {
+    ShaderProgramId id{};
+    std::filesystem::path slangPath;
+    std::filesystem::path spirvPath;
+    /// Color-only module used by passes without a velocity attachment.
+    std::filesystem::path noVelocitySpirvPath;
+};
 
+/**
+ * Turns a graph into a complete forward shader module. The graph controls
+ * only the surface contract; vertex transform, lighting and shadows remain
+ * in Forward/forward_pbr.slang.
+ */
+class ShaderGraphSlangCompiler final {
+  public:
+    [[nodiscard]] ShaderGraphCompileResult compile(const ShaderGraphAsset& graph,
+                                                   const std::filesystem::path& forwardTemplate,
+                                                   const std::filesystem::path& generatedDirectory,
+                                                   ShaderGraphProgram& program) const;
+
+  private:
+    [[nodiscard]] static ShaderProgramId makeProgramId(std::string_view generatedSurface) noexcept;
+};
+
+/** Resolves the authoring .shadergraph reference on a material to cooked runtime data. */
+class ShaderGraphMaterialCompiler final {
+  public:
     /**
-     * Turns a graph into a complete forward shader module. The graph controls
-     * only the surface contract; vertex transform, lighting and shadows remain
-     * in Forward/forward_pbr.slang.
+     * Compiles material.shaderGraphAsset relative to assetRoot.  On failure
+     * the material is unchanged, so a visible renderer never receives a
+     * half-cooked program.
      */
-    class ShaderGraphSlangCompiler final {
-    public:
-        [[nodiscard]] ShaderGraphCompileResult compile(const ShaderGraphAsset& graph,
-                                                        const std::filesystem::path& forwardTemplate,
-                                                        const std::filesystem::path& generatedDirectory,
-                                                        ShaderGraphProgram& program) const;
+    [[nodiscard]] ShaderGraphCompileResult resolve(Material& material, const std::filesystem::path& assetRoot,
+                                                   const std::filesystem::path& forwardTemplate,
+                                                   const std::filesystem::path& generatedDirectory) const;
+};
 
-    private:
-        [[nodiscard]] static ShaderProgramId makeProgramId(std::string_view generatedSurface) noexcept;
+/** Render-thread owned cache. One graph program creates one VkPipeline per render state. */
+class ShaderGraphPipelineCache final {
+  public:
+    void initialize(VkDevice device, GraphicsPipelineOptions baseOptions);
+    // Releases Vulkan pipelines but preserves program-to-slot mappings
+    // across render-pass recreation.
+    void destroy() noexcept;
+
+    [[nodiscard]] std::uint32_t getOrCreate(ShaderProgramId program, const std::filesystem::path& spirv,
+                                            const MaterialRenderState& state);
+    [[nodiscard]] const GraphicsPipeline* find(std::uint32_t slot) const noexcept;
+
+  private:
+    struct Entry final {
+        std::filesystem::path spirv;
+        MaterialRenderState state{};
+        std::uint32_t slot{};
+        std::unique_ptr<GraphicsPipeline> pipeline;
     };
 
-    /** Resolves the authoring .shadergraph reference on a material to cooked runtime data. */
-    class ShaderGraphMaterialCompiler final {
-    public:
-        /**
-         * Compiles material.shaderGraphAsset relative to assetRoot.  On failure
-         * the material is unchanged, so a visible renderer never receives a
-         * half-cooked program.
-         */
-        [[nodiscard]] ShaderGraphCompileResult resolve(Material& material,
-                                                        const std::filesystem::path& assetRoot,
-                                                        const std::filesystem::path& forwardTemplate,
-                                                        const std::filesystem::path& generatedDirectory) const;
-    };
+    void createPipeline(Entry& entry);
 
-    /** Render-thread owned cache. One graph program creates one VkPipeline per render state. */
-    class ShaderGraphPipelineCache final {
-    public:
-        void initialize(VkDevice device, GraphicsPipelineOptions baseOptions);
-        // Releases Vulkan pipelines but preserves program-to-slot mappings
-        // across render-pass recreation.
-        void destroy() noexcept;
-
-        [[nodiscard]] std::uint32_t getOrCreate(ShaderProgramId program,
-                                                const std::filesystem::path& spirv,
-                                                const MaterialRenderState& state);
-        [[nodiscard]] const GraphicsPipeline* find(std::uint32_t slot) const noexcept;
-
-    private:
-        struct Entry final {
-            std::filesystem::path spirv;
-            MaterialRenderState state{};
-            std::uint32_t slot{};
-            std::unique_ptr<GraphicsPipeline> pipeline;
-        };
-
-        void createPipeline(Entry& entry);
-
-        VkDevice device_{VK_NULL_HANDLE};
-        GraphicsPipelineOptions baseOptions_{};
-        std::unordered_map<ShaderProgramId, Entry> entries_;
-    };
+    VkDevice device_{VK_NULL_HANDLE};
+    GraphicsPipelineOptions baseOptions_{};
+    std::unordered_map<ShaderProgramId, Entry> entries_;
+};
 } // namespace Engine

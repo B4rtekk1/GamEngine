@@ -1,20 +1,20 @@
 #pragma once
 
 #include "Engine/Assets/AssetTypes.h"
-#include <vulkan/vulkan.h>
-#include <vk_mem_alloc.h>
 
 #include <cstdint>
 #include <span>
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
 
-enum class TextureColorSpace:uint8_t {
+enum class TextureColorSpace : uint8_t {
     Linear,
     SRGB,
 };
 
-enum class TexturePixelFormat:uint8_t {
+enum class TexturePixelFormat : uint8_t {
     RGBA8,
     R8,
     /** Two 16-bit floating-point channels, for data textures such as a BRDF LUT. */
@@ -27,7 +27,7 @@ enum class TexturePixelFormat:uint8_t {
 // Image decoding intentionally stays outside this class so callers may use any
 // asset library (for example stb_image or a glTF importer).
 class Texture2D final {
-public:
+  public:
     Texture2D() = default;
     ~Texture2D();
 
@@ -37,36 +37,22 @@ public:
     Texture2D(Texture2D&& other) noexcept;
     Texture2D& operator=(Texture2D&& other) noexcept;
 
-    void create(
-        VkPhysicalDevice physicalDevice,
-        VkDevice device,
-        VkCommandPool commandPool,
-        VkQueue queue,
-        std::uint32_t width,
-        std::uint32_t height,
-        std::span<const std::uint8_t> rgbaPixels,
-        TextureColorSpace colorSpace = TextureColorSpace::SRGB,
-        bool generateMipmaps = true,
-        VmaAllocator allocator = VK_NULL_HANDLE,
-        TexturePixelFormat pixelFormat = TexturePixelFormat::RGBA8,
-        VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                std::uint32_t width, std::uint32_t height, std::span<const std::uint8_t> rgbaPixels,
+                TextureColorSpace colorSpace = TextureColorSpace::SRGB, bool generateMipmaps = true,
+                VmaAllocator allocator = VK_NULL_HANDLE, TexturePixelFormat pixelFormat = TexturePixelFormat::RGBA8,
+                VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
     /** Uploads pre-cooked RGBA/BC mip blocks without runtime decompression or blits. */
-    void createCooked(
-        VkPhysicalDevice physicalDevice,
-        VkDevice device,
-        VkCommandPool commandPool,
-        VkQueue queue,
-        const Assets::CookedTexture& texture,
-        VmaAllocator allocator = VK_NULL_HANDLE,
-        VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    void createCooked(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                      const Assets::CookedTexture& texture, VmaAllocator allocator = VK_NULL_HANDLE,
+                      VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
     /** Allocates only the GTEX mip tail beginning at firstResidentMip. */
-    void createGtex(
-        VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
-        const Assets::GtexTexture& texture, std::uint32_t firstResidentMip,
-        VmaAllocator allocator = VK_NULL_HANDLE,
-        VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    void createGtex(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                    const Assets::GtexTexture& texture, std::uint32_t firstResidentMip,
+                    VmaAllocator allocator = VK_NULL_HANDLE,
+                    VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
     /**
      * Builds a new physical mip tail for promotion or demotion and installs it.
@@ -74,38 +60,50 @@ public:
      * frames referencing its image view have retired. The new image must be
      * synchronized with readyTimeline() before sampling.
      */
-    [[nodiscard]] Texture2D replaceGtex(
-        VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue queue,
-        const Assets::GtexTexture& texture, std::uint32_t newFirstResidentMip);
+    [[nodiscard]] Texture2D replaceGtex(VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue queue,
+                                        const Assets::GtexTexture& texture, std::uint32_t newFirstResidentMip);
 
     /** Uses the cooked payload when available; decoded RGBA remains a development fallback. */
-    void createFromAsset(
-        VkPhysicalDevice physicalDevice,
-        VkDevice device,
-        VkCommandPool commandPool,
-        VkQueue queue,
-        const Assets::TextureAsset& asset,
-        TextureColorSpace colorSpace = TextureColorSpace::SRGB,
-        VmaAllocator allocator = VK_NULL_HANDLE);
+    void createFromAsset(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                         const Assets::TextureAsset& asset, TextureColorSpace colorSpace = TextureColorSpace::SRGB,
+                         VmaAllocator allocator = VK_NULL_HANDLE);
 
     void destroy() noexcept;
 
-    [[nodiscard]] VkImage image() const noexcept { return image_; }
-    [[nodiscard]] VkImageView imageView() const noexcept { return imageView_; }
-    [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
-    [[nodiscard]] VkFormat format() const noexcept { return format_; }
-    [[nodiscard]] std::uint32_t width() const noexcept { return width_; }
-    [[nodiscard]] std::uint32_t height() const noexcept { return height_; }
-    [[nodiscard]] std::uint32_t mipLevels() const noexcept { return mipLevels_; }
-    [[nodiscard]] std::uint32_t residentFirstMip() const noexcept { return residentFirstMip_; }
-    [[nodiscard]] bool valid() const noexcept { return image_ != VK_NULL_HANDLE; }
-    [[nodiscard]] std::uint64_t readyTimeline() const noexcept { return readyTimeline_; }
+    [[nodiscard]] VkImage image() const noexcept {
+        return image_;
+    }
+    [[nodiscard]] VkImageView imageView() const noexcept {
+        return imageView_;
+    }
+    [[nodiscard]] VkSampler sampler() const noexcept {
+        return sampler_;
+    }
+    [[nodiscard]] VkFormat format() const noexcept {
+        return format_;
+    }
+    [[nodiscard]] std::uint32_t width() const noexcept {
+        return width_;
+    }
+    [[nodiscard]] std::uint32_t height() const noexcept {
+        return height_;
+    }
+    [[nodiscard]] std::uint32_t mipLevels() const noexcept {
+        return mipLevels_;
+    }
+    [[nodiscard]] std::uint32_t residentFirstMip() const noexcept {
+        return residentFirstMip_;
+    }
+    [[nodiscard]] bool valid() const noexcept {
+        return image_ != VK_NULL_HANDLE;
+    }
+    [[nodiscard]] std::uint64_t readyTimeline() const noexcept {
+        return readyTimeline_;
+    }
 
-private:
-    [[nodiscard]] static std::uint32_t findMemoryType(
-        VkPhysicalDevice physicalDevice,
-        std::uint32_t typeFilter,
-        VkMemoryPropertyFlags properties);
+  private:
+    [[nodiscard]] static std::uint32_t findMemoryType(VkPhysicalDevice physicalDevice, std::uint32_t typeFilter,
+                                                      VkMemoryPropertyFlags properties);
 
     VkDevice device_ = VK_NULL_HANDLE;
     VkImage image_ = VK_NULL_HANDLE;

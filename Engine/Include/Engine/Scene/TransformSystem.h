@@ -6,29 +6,31 @@
 #include <span>
 
 namespace Engine {
-    /** Resolves local ParentComponent transforms into cached world matrices. */
-    class TransformSystem final {
-    public:
-        /** Updates only changed transforms and their descendants, parent first. */
-        static void updateDirty(Registry &registry);
+/** Resolves local ParentComponent transforms into cached world matrices. */
+class TransformSystem final {
+  public:
+    /** Updates only changed transforms and their descendants, parent first. */
+    static void updateDirty(Registry& registry);
 
-        /**
-         * Entities whose cached world matrix was resolved during the latest
-         * dirty update. Descendants affected by a changed parent are included.
-         * The result remains available when a later update finds no work.
-         */
-        [[nodiscard]] static std::span<const Entity> changedWorldTransforms(const Registry &registry);
+    /**
+     * Entities whose cached world matrix was resolved during the latest
+     * dirty update. Descendants affected by a changed parent are included.
+     * The result remains available when a later update finds no work.
+     */
+    [[nodiscard]] static std::span<const Entity> changedWorldTransforms(const Registry& registry);
 
-        /** Discards runtime hierarchy data after the registry contents are replaced. */
-        static void invalidate(const Registry &registry) noexcept;
+    /** Discards runtime hierarchy data after the registry contents are replaced. */
+    static void invalidate(const Registry& registry) noexcept;
 
-        /** Compatibility name for updateDirty(). */
-        static void update(Registry &registry) { updateDirty(registry); }
+    /** Compatibility name for updateDirty(). */
+    static void update(Registry& registry) {
+        updateDirty(registry);
+    }
 
-        /** Returns an entity's cached world matrix in O(1); call update first. */
-        [[nodiscard]] static const Mat4 &worldMatrix(const Registry &registry, Entity entity);
+    /** Returns an entity's cached world matrix in O(1); call update first. */
+    [[nodiscard]] static const Mat4& worldMatrix(const Registry& registry, Entity entity);
 
-        /** Returns cached world-space TRS in O(1); call update first. */
-        [[nodiscard]] static Transform worldTransform(const Registry &registry, Entity entity);
-    };
+    /** Returns cached world-space TRS in O(1); call update first. */
+    [[nodiscard]] static Transform worldTransform(const Registry& registry, Entity entity);
+};
 } // namespace Engine

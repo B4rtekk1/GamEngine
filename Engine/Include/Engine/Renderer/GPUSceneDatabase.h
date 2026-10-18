@@ -3,141 +3,145 @@
 #include "Engine/ECS/Entity.h"
 #include "Engine/Math/AABB.h"
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <limits>
 #include <unordered_map>
 #include <vector>
 
 namespace Engine {
-    using GPUSceneInstanceId = std::uint32_t;
-    using GPUSceneMeshId = std::uint32_t;
-    using GPUSceneMaterialId = std::uint32_t;
+using GPUSceneInstanceId = std::uint32_t;
+using GPUSceneMeshId = std::uint32_t;
+using GPUSceneMaterialId = std::uint32_t;
 
-    /// GPU submission timeline value at which a retired scene slot is reusable.
-    struct GPUSceneRetireValue final {
-        constexpr GPUSceneRetireValue(const std::uint64_t value = 0) noexcept : value(value) {}
+/// GPU submission timeline value at which a retired scene slot is reusable.
+struct GPUSceneRetireValue final {
+    constexpr GPUSceneRetireValue(const std::uint64_t value = 0) noexcept : value(value) {}
 
-        std::uint64_t value;
+    std::uint64_t value;
+};
+
+inline constexpr GPUSceneInstanceId InvalidGPUSceneInstanceId = std::numeric_limits<GPUSceneInstanceId>::max();
+
+/**
+ * Stable renderer-facing identity for an extracted ECS renderable.  These
+ * are table indices, not offsets into transient draw lists, so a change
+ * to another entity can never invalidate this proxy.
+ */
+struct RenderProxyHandle final {
+    GPUSceneInstanceId instance{InvalidGPUSceneInstanceId};
+    GPUSceneMeshId mesh{InvalidGPUSceneInstanceId};
+    GPUSceneMaterialId material{InvalidGPUSceneInstanceId};
+};
+
+/**
+ * Persistent, renderer-owned scene table.  IDs are indices, never CPU
+ * pointers, so shaders can follow instance -> mesh -> material links.
+ * The class is deliberately API/Vulkan agnostic: the backend consumes its
+ * dirty lists to upload only changed records to storage buffers.
+ */
+class GPUSceneDatabase final {
+  public:
+    struct GPUInstance {
+        std::array<float, 16> worldMatrix{};
+        AABB localBounds{};
+        float displacementBoundsPadding{0.0F};
+        GPUSceneMeshId meshId{InvalidGPUSceneInstanceId};
+        GPUSceneMaterialId materialId{InvalidGPUSceneInstanceId};
+        std::uint32_t objectId{0};
+        std::uint32_t flags{0};
+        bool alive{false};
     };
 
-    inline constexpr GPUSceneInstanceId InvalidGPUSceneInstanceId =
-        std::numeric_limits<GPUSceneInstanceId>::max();
-
-    /**
-     * Stable renderer-facing identity for an extracted ECS renderable.  These
-     * are table indices, not offsets into transient draw lists, so a change
-     * to another entity can never invalidate this proxy.
-     */
-    struct RenderProxyHandle final {
-        GPUSceneInstanceId instance{InvalidGPUSceneInstanceId};
-        GPUSceneMeshId mesh{InvalidGPUSceneInstanceId};
-        GPUSceneMaterialId material{InvalidGPUSceneInstanceId};
+    struct GPUMesh {
+        std::uint32_t firstIndex{0};
+        std::uint32_t indexCount{0};
+        std::int32_t vertexOffset{0};
+        std::uint32_t lod1IndexCount{0};
+        std::uint32_t lod2IndexCount{0};
+        // Range in the global meshlet payload.  These are deliberately
+        // GPU-scene data: meshlet bounds are local to an instance's mesh.
+        std::uint32_t firstMeshlet{0};
+        std::uint32_t meshletCount{0};
+        std::uint32_t firstMeshletCluster{0};
+        std::uint32_t meshletClusterRoot{0};
     };
 
-    /**
-     * Persistent, renderer-owned scene table.  IDs are indices, never CPU
-     * pointers, so shaders can follow instance -> mesh -> material links.
-     * The class is deliberately API/Vulkan agnostic: the backend consumes its
-     * dirty lists to upload only changed records to storage buffers.
-     */
-    class GPUSceneDatabase final {
-    public:
-        struct GPUInstance {
-            std::array<float, 16> worldMatrix{};
-            AABB localBounds{};
-            float displacementBoundsPadding{0.0F};
-            GPUSceneMeshId meshId{InvalidGPUSceneInstanceId};
-            GPUSceneMaterialId materialId{InvalidGPUSceneInstanceId};
-            std::uint32_t objectId{0};
-            std::uint32_t flags{0};
-            bool alive{false};
-        };
-
-        struct GPUMesh {
-            std::uint32_t firstIndex{0};
-            std::uint32_t indexCount{0};
-            std::int32_t vertexOffset{0};
-            std::uint32_t lod1IndexCount{0};
-            std::uint32_t lod2IndexCount{0};
-            // Range in the global meshlet payload.  These are deliberately
-            // GPU-scene data: meshlet bounds are local to an instance's mesh.
-            std::uint32_t firstMeshlet{0};
-            std::uint32_t meshletCount{0};
-            std::uint32_t firstMeshletCluster{0};
-            std::uint32_t meshletClusterRoot{0};
-        };
-
-        struct GPUMaterial {
-            std::uint32_t materialTableOffset{0};
-            std::uint32_t pipelineClass{0};
-            std::uint32_t flags{0};
-            std::uint32_t shaderSlot{0};
-        };
-
-        struct DirtyRanges {
-            std::vector<GPUSceneInstanceId> instances;
-            std::vector<GPUSceneMeshId> meshes;
-            std::vector<GPUSceneMaterialId> materials;
-            std::vector<GPUSceneInstanceId> removedInstances;
-        };
-
-        /// @p sourceKey identifies one extracted renderable (an entity or one
-        /// compact instance owned by an entity, such as terrain grass).
-        [[nodiscard]] GPUSceneInstanceId upsertInstance(std::uint64_t sourceKey, const GPUInstance& instance);
-        /// Updates only the per-instance spatial data.  Mesh/material links
-        /// stay untouched, which makes transform animation a single table
-        /// write and a single dirty instance range.
-        void updateInstanceTransform(GPUSceneInstanceId instanceId,
-                                     const std::array<float, 16>& worldMatrix,
-                                     const AABB& localBounds,
-                                     float displacementBoundsPadding = 0.0F);
-        void updateInstanceFlags(GPUSceneInstanceId instanceId, std::uint32_t flags);
-        void updateInstanceObjectId(GPUSceneInstanceId instanceId, std::uint32_t objectId);
-        /// Marks an instance inactive immediately. Its slot is reusable only
-        /// after reclaimDeferredInstances() observes the submission value
-        /// which was current when it was removed.
-        void removeInstance(std::uint64_t sourceKey, GPUSceneRetireValue retireValue = {});
-        void reclaimDeferredInstances(std::uint64_t completedValue);
-        [[nodiscard]] GPUSceneMeshId upsertMesh(std::uint64_t sourceKey, const GPUMesh& mesh);
-        [[nodiscard]] GPUSceneMaterialId upsertMaterial(std::uint64_t sourceKey, const GPUMaterial& material);
-        void updateMesh(GPUSceneMeshId meshId, const GPUMesh& mesh);
-        void updateMaterial(GPUSceneMaterialId materialId, const GPUMaterial& material);
-
-        [[nodiscard]] GPUSceneInstanceId instanceId(std::uint64_t sourceKey) const noexcept;
-        [[nodiscard]] const std::vector<GPUInstance>& instances() const noexcept { return m_instances; }
-        [[nodiscard]] const std::vector<GPUMesh>& meshes() const noexcept { return m_meshes; }
-        [[nodiscard]] const std::vector<GPUMaterial>& materials() const noexcept { return m_materials; }
-        [[nodiscard]] const DirtyRanges& dirty() const noexcept { return m_dirty; }
-        void clearDirty() noexcept;
-        void clear() noexcept;
-
-    private:
-        template <typename Id>
-        static void markDirty(std::vector<Id>& list, std::vector<std::uint32_t>& stamps,
-                              std::uint32_t generation, Id id);
-        void markRemovedInstanceDirty(GPUSceneInstanceId id);
-        void unmarkRemovedInstanceDirty(GPUSceneInstanceId id) noexcept;
-        void advanceDirtyGeneration() noexcept;
-
-        std::vector<GPUInstance> m_instances;
-        std::vector<GPUMesh> m_meshes;
-        std::vector<GPUMaterial> m_materials;
-        struct DeferredInstanceFree final {
-            GPUSceneInstanceId id;
-            std::uint64_t retireValue;
-        };
-        std::vector<GPUSceneInstanceId> m_freeInstances;
-        std::vector<DeferredInstanceFree> m_deferredInstanceFrees;
-        std::unordered_map<std::uint64_t, GPUSceneInstanceId> m_instanceIds;
-        std::unordered_map<std::uint64_t, GPUSceneMeshId> m_meshIds;
-        std::unordered_map<std::uint64_t, GPUSceneMaterialId> m_materialIds;
-        DirtyRanges m_dirty;
-        std::vector<std::uint32_t> m_dirtyInstanceStamps;
-        std::vector<std::uint32_t> m_dirtyMeshStamps;
-        std::vector<std::uint32_t> m_dirtyMaterialStamps;
-        std::vector<std::uint32_t> m_removedInstanceStamps;
-        std::vector<std::uint32_t> m_removedInstancePositions;
-        std::uint32_t m_dirtyGeneration{1};
+    struct GPUMaterial {
+        std::uint32_t materialTableOffset{0};
+        std::uint32_t pipelineClass{0};
+        std::uint32_t flags{0};
+        std::uint32_t shaderSlot{0};
     };
+
+    struct DirtyRanges {
+        std::vector<GPUSceneInstanceId> instances;
+        std::vector<GPUSceneMeshId> meshes;
+        std::vector<GPUSceneMaterialId> materials;
+        std::vector<GPUSceneInstanceId> removedInstances;
+    };
+
+    /// @p sourceKey identifies one extracted renderable (an entity or one
+    /// compact instance owned by an entity, such as terrain grass).
+    [[nodiscard]] GPUSceneInstanceId upsertInstance(std::uint64_t sourceKey, const GPUInstance& instance);
+    /// Updates only the per-instance spatial data.  Mesh/material links
+    /// stay untouched, which makes transform animation a single table
+    /// write and a single dirty instance range.
+    void updateInstanceTransform(GPUSceneInstanceId instanceId, const std::array<float, 16>& worldMatrix,
+                                 const AABB& localBounds, float displacementBoundsPadding = 0.0F);
+    void updateInstanceFlags(GPUSceneInstanceId instanceId, std::uint32_t flags);
+    void updateInstanceObjectId(GPUSceneInstanceId instanceId, std::uint32_t objectId);
+    /// Marks an instance inactive immediately. Its slot is reusable only
+    /// after reclaimDeferredInstances() observes the submission value
+    /// which was current when it was removed.
+    void removeInstance(std::uint64_t sourceKey, GPUSceneRetireValue retireValue = {});
+    void reclaimDeferredInstances(std::uint64_t completedValue);
+    [[nodiscard]] GPUSceneMeshId upsertMesh(std::uint64_t sourceKey, const GPUMesh& mesh);
+    [[nodiscard]] GPUSceneMaterialId upsertMaterial(std::uint64_t sourceKey, const GPUMaterial& material);
+    void updateMesh(GPUSceneMeshId meshId, const GPUMesh& mesh);
+    void updateMaterial(GPUSceneMaterialId materialId, const GPUMaterial& material);
+
+    [[nodiscard]] GPUSceneInstanceId instanceId(std::uint64_t sourceKey) const noexcept;
+    [[nodiscard]] const std::vector<GPUInstance>& instances() const noexcept {
+        return m_instances;
+    }
+    [[nodiscard]] const std::vector<GPUMesh>& meshes() const noexcept {
+        return m_meshes;
+    }
+    [[nodiscard]] const std::vector<GPUMaterial>& materials() const noexcept {
+        return m_materials;
+    }
+    [[nodiscard]] const DirtyRanges& dirty() const noexcept {
+        return m_dirty;
+    }
+    void clearDirty() noexcept;
+    void clear() noexcept;
+
+  private:
+    template <typename Id>
+    static void markDirty(std::vector<Id>& list, std::vector<std::uint32_t>& stamps, std::uint32_t generation, Id id);
+    void markRemovedInstanceDirty(GPUSceneInstanceId id);
+    void unmarkRemovedInstanceDirty(GPUSceneInstanceId id) noexcept;
+    void advanceDirtyGeneration() noexcept;
+
+    std::vector<GPUInstance> m_instances;
+    std::vector<GPUMesh> m_meshes;
+    std::vector<GPUMaterial> m_materials;
+    struct DeferredInstanceFree final {
+        GPUSceneInstanceId id;
+        std::uint64_t retireValue;
+    };
+    std::vector<GPUSceneInstanceId> m_freeInstances;
+    std::vector<DeferredInstanceFree> m_deferredInstanceFrees;
+    std::unordered_map<std::uint64_t, GPUSceneInstanceId> m_instanceIds;
+    std::unordered_map<std::uint64_t, GPUSceneMeshId> m_meshIds;
+    std::unordered_map<std::uint64_t, GPUSceneMaterialId> m_materialIds;
+    DirtyRanges m_dirty;
+    std::vector<std::uint32_t> m_dirtyInstanceStamps;
+    std::vector<std::uint32_t> m_dirtyMeshStamps;
+    std::vector<std::uint32_t> m_dirtyMaterialStamps;
+    std::vector<std::uint32_t> m_removedInstanceStamps;
+    std::vector<std::uint32_t> m_removedInstancePositions;
+    std::uint32_t m_dirtyGeneration{1};
+};
 } // namespace Engine

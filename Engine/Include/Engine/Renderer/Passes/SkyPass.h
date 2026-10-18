@@ -2,42 +2,39 @@
 
 #include "Engine/Renderer/Skybox/Skybox.h"
 
-#include <vulkan/vulkan.h>
-#include <vk_mem_alloc.h>
-
 #include <cstdint>
 #include <vector>
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
-    namespace Assets {
-        class AssetManager;
-    }
+namespace Assets {
+class AssetManager;
+}
 
-    class SkyPass final {
-    public:
-        SkyPass() = default;
+class SkyPass final {
+  public:
+    SkyPass() = default;
 
-        ~SkyPass();
+    ~SkyPass();
 
-        SkyPass(const SkyPass &) = delete;
+    SkyPass(const SkyPass&) = delete;
 
-        SkyPass &operator=(const SkyPass &) = delete;
+    SkyPass& operator=(const SkyPass&) = delete;
 
-        void create(VkPhysicalDevice physicalDevice, VkDevice device,
-                    VkCommandPool commandPool, VkQueue queue, VkFormat colorFormat, VkFormat depthFormat,
-                    VkSampleCountFlagBits samples,
-                    const std::vector<VkBuffer> &uniformBuffers,
-                    VkDeviceSize uniformBufferRange, Assets::AssetManager &assets,
-                    VmaAllocator allocator, VkFormat velocityFormat = VK_FORMAT_UNDEFINED);
+    void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples,
+                const std::vector<VkBuffer>& uniformBuffers, VkDeviceSize uniformBufferRange,
+                Assets::AssetManager& assets, VmaAllocator allocator, VkFormat velocityFormat = VK_FORMAT_UNDEFINED);
 
-        void destroy() noexcept;
+    void destroy() noexcept;
 
-        void record(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
-        void setEnvironment(const VkDescriptorImageInfo& environment) const;
+    void record(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
+    void setEnvironment(const VkDescriptorImageInfo& environment) const;
 
-    private:
-        VkDevice device_{VK_NULL_HANDLE};
-        VkDescriptorSetLayout descriptorSetLayout_{VK_NULL_HANDLE};
-        Skybox skybox_;
-    };
+  private:
+    VkDevice device_{VK_NULL_HANDLE};
+    VkDescriptorSetLayout descriptorSetLayout_{VK_NULL_HANDLE};
+    Skybox skybox_;
+};
 } // namespace Engine

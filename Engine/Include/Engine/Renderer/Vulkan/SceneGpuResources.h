@@ -3,10 +3,10 @@
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
-#include "Engine/Renderer/Materials/MaterialBuffer.h"
-#include "Engine/Renderer/Materials/Material.h"
-#include "Engine/Renderer/Geometry/MeshGpuResource.h"
 #include "Engine/Renderer/GPUSceneDatabase.h"
+#include "Engine/Renderer/Geometry/MeshGpuResource.h"
+#include "Engine/Renderer/Materials/Material.h"
+#include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 
 #include <algorithm>
@@ -14,183 +14,185 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <vector>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace Engine {
-    /** ECS-derived CPU data shared by the scene upload and culling stages. */
-    class SceneGpuResources final {
-    public:
-        static constexpr float InstanceCellSize = 32.0F;
-        static constexpr std::uint32_t MaxInstancesPerBatch = 64;
-        using InstanceCell = std::array<std::int64_t, 3>;
+/** ECS-derived CPU data shared by the scene upload and culling stages. */
+class SceneGpuResources final {
+  public:
+    static constexpr float InstanceCellSize = 32.0F;
+    static constexpr std::uint32_t MaxInstancesPerBatch = 64;
+    using InstanceCell = std::array<std::int64_t, 3>;
 
-        struct InstanceCellHash {
-            [[nodiscard]] std::size_t operator()(const InstanceCell& cell) const noexcept {
-                std::size_t hash = 0;
-                for (const auto coordinate : cell) {
-                    const auto value = std::hash<std::int64_t>{}(coordinate);
-                    hash ^= value + 0x9e3779b9U + (hash << 6U) + (hash >> 2U);
-                }
-                return hash;
+    struct InstanceCellHash {
+        [[nodiscard]] std::size_t operator()(const InstanceCell& cell) const noexcept {
+            std::size_t hash = 0;
+            for (const auto coordinate : cell) {
+                const auto value = std::hash<std::int64_t>{}(coordinate);
+                hash ^= value + 0x9e3779b9U + (hash << 6U) + (hash >> 2U);
             }
-        };
-
-        [[nodiscard]] static InstanceCell cellFor(const AABB& bounds) noexcept {
-            const auto center = (bounds.min.native() + bounds.max.native()) * 0.5F;
-            return {static_cast<std::int64_t>(std::floor(center.x / InstanceCellSize)),
-                    static_cast<std::int64_t>(std::floor(center.y / InstanceCellSize)),
-                    static_cast<std::int64_t>(std::floor(center.z / InstanceCellSize))};
+            return hash;
         }
-
-        [[nodiscard]] static std::uint64_t instanceSourceKey(const Entity entity,
-                                                               const std::uint32_t sectionIndex) noexcept {
-            // Entity already uses all 64 bits (index and generation).
-            std::uint64_t key = entity +
-                (static_cast<std::uint64_t>(sectionIndex) + 1U) * 0xd6e8feb86659fd93ULL;
-            key += 0x9e3779b97f4a7c15ULL;
-            key = (key ^ (key >> 30U)) * 0xbf58476d1ce4e5b9ULL;
-            key = (key ^ (key >> 27U)) * 0x94d049bb133111ebULL;
-            return key ^ (key >> 31U);
-        }
-
-        GPUSceneDatabase database;
-
-        struct RenderableRecord {
-            Entity entity{NullEntity};
-            AABB geometryLocalBounds{};
-            AABB localBounds{};
-            AABB worldBounds{}; // Cached; batch unions never decompose unchanged poses.
-            std::size_t batchIndex{0};
-            InstanceCell spatialCell{};
-            std::uint32_t firstVertex{0};
-            std::uint32_t vertexCount{0};
-            /// Imported render-section identity; keeps GPU-scene records distinct.
-            std::uint32_t sectionIndex{0};
-            std::uint32_t materialIndex{0};
-            float displacementBoundsPadding{0.0F};
-            float sourceDisplacementBoundsPadding{0.0F};
-            bool materialFromRenderer{false};
-            bool dynamic{false};
-            bool visible{true};
-            /// Instance data consumed only by VirtualWaterRenderer. It has no
-            /// generic mesh draw or material-table allocation.
-            bool waterOnly{false};
-            // Revision of the ECS world transform last uploaded to the GPU.
-            // Do not retain a second full Transform here: ECS owns it.
-            std::uint64_t lastWorldRevision{std::numeric_limits<std::uint64_t>::max()};
-            Entity lastTransformEntity{NullEntity}; // Detect pane-to-shard pose ownership changes.
-            std::uint8_t transformDirtyFrames{0};
-            std::uint8_t materialDirtyFrames{0};
-            std::uint8_t cullingDirtyFrames{0};
-            // Offset into the compact material table.
-            std::uint32_t materialTableOffset{};
-            // Stable links into the retained GPU scene. Draw-list compaction
-            // never changes these IDs.
-            RenderProxyHandle renderProxy{};
-        };
-
-        struct InstanceBatch {
-            // Stable MeshGpuResource identity for MeshRenderer batches; terrain
-            // grass uses its separately owned immutable Mesh identity.
-            const void *mesh{nullptr};
-            std::uint32_t firstIndex{0};
-            std::uint32_t indexCount{0};
-            std::uint32_t lod1IndexCount{0};
-            std::uint32_t lod2IndexCount{0};
-            std::uint32_t firstMeshlet{0};
-            std::uint32_t meshletCount{0};
-            std::uint32_t firstMeshletCluster{0};
-            std::uint32_t meshletClusterRoot{0};
-            float lod1Distance{28.0F};
-            float lod2Distance{60.0F};
-            std::uint32_t firstInstance{0};
-            std::uint32_t instanceCount{0};
-            /// GPU-culling bin of the built-in or cooked Shader Graph pipeline.
-            std::uint32_t shaderSlot{};
-            bool castShadow{true};
-            ShadowCacheMode shadowCacheMode{ShadowCacheMode::Auto};
-            /// Actual material sidedness, independent of alpha mode.
-            bool twoSided{false};
-            /// Raster stream selection for masked/blended foliage materials.
-            bool foliagePipeline{false};
-            /// Tracks whether any instance has displaced geometry. RT contact
-            /// rays filter each instance before referencing the source BLAS.
-            bool displacedGeometry{false};
-            AlphaMode alphaMode{AlphaMode::Opaque};
-            AABB worldBounds{};
-        };
-
-        std::vector<RenderableRecord> renderables;
-        std::vector<InstanceBatch> instanceBatches;
-        std::vector<std::vector<std::size_t> > batchRenderableIndices;
-        // Spatial membership is independent of the stable indirect-draw ranges.
-        // Moving an instance updates these local sets without reordering GPU IDs.
-        std::unordered_map<InstanceCell, std::unordered_set<std::size_t>, InstanceCellHash> cellRenderableIndices;
-
-        void moveRenderableToCell(const std::size_t index, const InstanceCell& cell) {
-            auto& record = renderables[index];
-            if (record.spatialCell == cell) return;
-            const auto old = cellRenderableIndices.find(record.spatialCell);
-            if (old != cellRenderableIndices.end()) {
-                old->second.erase(index);
-                if (old->second.empty()) cellRenderableIndices.erase(old);
-            }
-            cellRenderableIndices[cell].insert(index);
-            record.spatialCell = cell;
-        }
-        // A normal entity has one record. Virtual-water meshes expand into
-        // independently culled page records which all retain the same owner.
-        std::unordered_map<Entity, std::vector<std::size_t>> renderableIndices;
-        std::vector<RendererInstanceData> instanceModels;
-        std::vector<RendererPreviousTransformData> previousInstanceTransforms;
-        // Dedicated source data for the next grass draw path. These records
-        // are 16 B and cluster-relative; normal scene objects never enter it.
-        std::vector<GPUGrassInstance> grassInstances;
-        std::vector<GPUGrassDeformation> grassDeformations;
-        // Maps a terrain-local instance index to its packed GPU record.
-        std::unordered_map<Entity, std::vector<std::uint32_t>> grassInstanceGpuIndices;
-        std::vector<GPUGrassCluster> grassClusters;
-        // Parallel ownership table used only during topology extraction to
-        // resolve the shared material table for each GPU grass cluster.
-        std::vector<Entity> grassClusterEntities;
-        std::vector<GPUMaterialData> materials;
-        std::uint32_t materialSlots{1};
-        std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
-        std::uint64_t lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
-        std::uint64_t lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
-        std::uint64_t lastParentRevision = std::numeric_limits<std::uint64_t>::max();
-        std::array<std::vector<std::size_t>, 2> dirtyTransforms;
-        std::array<std::vector<std::size_t>, 2> dirtyMaterials;
-        std::array<std::vector<std::size_t>, 2> dirtyCullingObjects;
-        struct PendingDatabaseUploads final : GPUSceneDatabase::DirtyRanges {
-            std::vector<std::uint32_t> instanceStamps;
-            std::vector<std::uint32_t> meshStamps;
-            std::vector<std::uint32_t> materialStamps;
-            std::vector<std::uint32_t> removedInstanceStamps;
-            std::uint32_t generation{1};
-
-            void clear() noexcept {
-                instances.clear();
-                meshes.clear();
-                materials.clear();
-                removedInstances.clear();
-
-                ++generation;
-                if (generation != 0) return;
-
-                std::fill(instanceStamps.begin(), instanceStamps.end(), 0U);
-                std::fill(meshStamps.begin(), meshStamps.end(), 0U);
-                std::fill(materialStamps.begin(), materialStamps.end(), 0U);
-                std::fill(removedInstanceStamps.begin(), removedInstanceStamps.end(), 0U);
-                generation = 1;
-            }
-        };
-        // Changes waiting to be copied to each frame-in-flight GPU Scene SSBO.
-        std::array<PendingDatabaseUploads, 3> pendingDatabaseUploads;
-        Vec3 sceneCenter;
-        float sceneRadius{1.0F};
-        bool hasShadowCasters{false};
     };
+
+    [[nodiscard]] static InstanceCell cellFor(const AABB& bounds) noexcept {
+        const auto center = (bounds.min.native() + bounds.max.native()) * 0.5F;
+        return {static_cast<std::int64_t>(std::floor(center.x / InstanceCellSize)),
+                static_cast<std::int64_t>(std::floor(center.y / InstanceCellSize)),
+                static_cast<std::int64_t>(std::floor(center.z / InstanceCellSize))};
+    }
+
+    [[nodiscard]] static std::uint64_t instanceSourceKey(const Entity entity,
+                                                         const std::uint32_t sectionIndex) noexcept {
+        // Entity already uses all 64 bits (index and generation).
+        std::uint64_t key = entity + (static_cast<std::uint64_t>(sectionIndex) + 1U) * 0xd6e8feb86659fd93ULL;
+        key += 0x9e3779b97f4a7c15ULL;
+        key = (key ^ (key >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+        key = (key ^ (key >> 27U)) * 0x94d049bb133111ebULL;
+        return key ^ (key >> 31U);
+    }
+
+    GPUSceneDatabase database;
+
+    struct RenderableRecord {
+        Entity entity{NullEntity};
+        AABB geometryLocalBounds{};
+        AABB localBounds{};
+        AABB worldBounds{}; // Cached; batch unions never decompose unchanged poses.
+        std::size_t batchIndex{0};
+        InstanceCell spatialCell{};
+        std::uint32_t firstVertex{0};
+        std::uint32_t vertexCount{0};
+        /// Imported render-section identity; keeps GPU-scene records distinct.
+        std::uint32_t sectionIndex{0};
+        std::uint32_t materialIndex{0};
+        float displacementBoundsPadding{0.0F};
+        float sourceDisplacementBoundsPadding{0.0F};
+        bool materialFromRenderer{false};
+        bool dynamic{false};
+        bool visible{true};
+        /// Instance data consumed only by VirtualWaterRenderer. It has no
+        /// generic mesh draw or material-table allocation.
+        bool waterOnly{false};
+        // Revision of the ECS world transform last uploaded to the GPU.
+        // Do not retain a second full Transform here: ECS owns it.
+        std::uint64_t lastWorldRevision{std::numeric_limits<std::uint64_t>::max()};
+        Entity lastTransformEntity{NullEntity}; // Detect pane-to-shard pose ownership changes.
+        std::uint8_t transformDirtyFrames{0};
+        std::uint8_t materialDirtyFrames{0};
+        std::uint8_t cullingDirtyFrames{0};
+        // Offset into the compact material table.
+        std::uint32_t materialTableOffset{};
+        // Stable links into the retained GPU scene. Draw-list compaction
+        // never changes these IDs.
+        RenderProxyHandle renderProxy{};
+    };
+
+    struct InstanceBatch {
+        // Stable MeshGpuResource identity for MeshRenderer batches; terrain
+        // grass uses its separately owned immutable Mesh identity.
+        const void* mesh{nullptr};
+        std::uint32_t firstIndex{0};
+        std::uint32_t indexCount{0};
+        std::uint32_t lod1IndexCount{0};
+        std::uint32_t lod2IndexCount{0};
+        std::uint32_t firstMeshlet{0};
+        std::uint32_t meshletCount{0};
+        std::uint32_t firstMeshletCluster{0};
+        std::uint32_t meshletClusterRoot{0};
+        float lod1Distance{28.0F};
+        float lod2Distance{60.0F};
+        std::uint32_t firstInstance{0};
+        std::uint32_t instanceCount{0};
+        /// GPU-culling bin of the built-in or cooked Shader Graph pipeline.
+        std::uint32_t shaderSlot{};
+        bool castShadow{true};
+        ShadowCacheMode shadowCacheMode{ShadowCacheMode::Auto};
+        /// Actual material sidedness, independent of alpha mode.
+        bool twoSided{false};
+        /// Raster stream selection for masked/blended foliage materials.
+        bool foliagePipeline{false};
+        /// Tracks whether any instance has displaced geometry. RT contact
+        /// rays filter each instance before referencing the source BLAS.
+        bool displacedGeometry{false};
+        AlphaMode alphaMode{AlphaMode::Opaque};
+        AABB worldBounds{};
+    };
+
+    std::vector<RenderableRecord> renderables;
+    std::vector<InstanceBatch> instanceBatches;
+    std::vector<std::vector<std::size_t>> batchRenderableIndices;
+    // Spatial membership is independent of the stable indirect-draw ranges.
+    // Moving an instance updates these local sets without reordering GPU IDs.
+    std::unordered_map<InstanceCell, std::unordered_set<std::size_t>, InstanceCellHash> cellRenderableIndices;
+
+    void moveRenderableToCell(const std::size_t index, const InstanceCell& cell) {
+        auto& record = renderables[index];
+        if (record.spatialCell == cell)
+            return;
+        const auto old = cellRenderableIndices.find(record.spatialCell);
+        if (old != cellRenderableIndices.end()) {
+            old->second.erase(index);
+            if (old->second.empty())
+                cellRenderableIndices.erase(old);
+        }
+        cellRenderableIndices[cell].insert(index);
+        record.spatialCell = cell;
+    }
+    // A normal entity has one record. Virtual-water meshes expand into
+    // independently culled page records which all retain the same owner.
+    std::unordered_map<Entity, std::vector<std::size_t>> renderableIndices;
+    std::vector<RendererInstanceData> instanceModels;
+    std::vector<RendererPreviousTransformData> previousInstanceTransforms;
+    // Dedicated source data for the next grass draw path. These records
+    // are 16 B and cluster-relative; normal scene objects never enter it.
+    std::vector<GPUGrassInstance> grassInstances;
+    std::vector<GPUGrassDeformation> grassDeformations;
+    // Maps a terrain-local instance index to its packed GPU record.
+    std::unordered_map<Entity, std::vector<std::uint32_t>> grassInstanceGpuIndices;
+    std::vector<GPUGrassCluster> grassClusters;
+    // Parallel ownership table used only during topology extraction to
+    // resolve the shared material table for each GPU grass cluster.
+    std::vector<Entity> grassClusterEntities;
+    std::vector<GPUMaterialData> materials;
+    std::uint32_t materialSlots{1};
+    std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t lastParentRevision = std::numeric_limits<std::uint64_t>::max();
+    std::array<std::vector<std::size_t>, 2> dirtyTransforms;
+    std::array<std::vector<std::size_t>, 2> dirtyMaterials;
+    std::array<std::vector<std::size_t>, 2> dirtyCullingObjects;
+    struct PendingDatabaseUploads final : GPUSceneDatabase::DirtyRanges {
+        std::vector<std::uint32_t> instanceStamps;
+        std::vector<std::uint32_t> meshStamps;
+        std::vector<std::uint32_t> materialStamps;
+        std::vector<std::uint32_t> removedInstanceStamps;
+        std::uint32_t generation{1};
+
+        void clear() noexcept {
+            instances.clear();
+            meshes.clear();
+            materials.clear();
+            removedInstances.clear();
+
+            ++generation;
+            if (generation != 0)
+                return;
+
+            std::fill(instanceStamps.begin(), instanceStamps.end(), 0U);
+            std::fill(meshStamps.begin(), meshStamps.end(), 0U);
+            std::fill(materialStamps.begin(), materialStamps.end(), 0U);
+            std::fill(removedInstanceStamps.begin(), removedInstanceStamps.end(), 0U);
+            generation = 1;
+        }
+    };
+    // Changes waiting to be copied to each frame-in-flight GPU Scene SSBO.
+    std::array<PendingDatabaseUploads, 3> pendingDatabaseUploads;
+    Vec3 sceneCenter;
+    float sceneRadius{1.0F};
+    bool hasShadowCasters{false};
+};
 } // namespace Engine

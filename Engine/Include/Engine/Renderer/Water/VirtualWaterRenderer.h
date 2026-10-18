@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Math/Vec3.h"
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 #include "Engine/Renderer/Culling/HiZPass.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
-#include "Engine/Math/Vec3.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
@@ -13,63 +13,62 @@
 
 #include <array>
 #include <cstdint>
-#include <span>
-#include <vector>
 #include <deque>
 #include <memory>
-#include <vulkan/vulkan.h>
+#include <span>
+#include <vector>
 #include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
-namespace Assets { class AssetManager; }
+namespace Assets {
+class AssetManager;
+}
 
 namespace Water {
 /** GPU-owned virtual ocean renderer. Ocean pages never become generic scene draw records. */
 class VirtualWaterRenderer final {
-public:
+  public:
     VirtualWaterRenderer() = default;
-    ~VirtualWaterRenderer() { destroy(); }
+    ~VirtualWaterRenderer() {
+        destroy();
+    }
     VirtualWaterRenderer(const VirtualWaterRenderer&) = delete;
     VirtualWaterRenderer& operator=(const VirtualWaterRenderer&) = delete;
     static constexpr std::uint32_t FramesInFlight = 2;
 
-    void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator,
-                Assets::AssetManager& assets, VkExtent2D extent, VkFormat depthFormat,
-                VkImageView depthView, VkDescriptorSetLayout sceneLayout,
-                VkImageView hdrTargetView, VkDescriptorImageInfo opaqueColor,
-                VkDescriptorImageInfo opaqueDepth, std::span<const VkDescriptorImageInfo> previousHiZ,
-                std::span<const VkBuffer> instanceBuffers,
-                std::span<const VkBuffer> cullingUniformBuffers,
-                bool enableHiZ = true);
+    void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator, Assets::AssetManager& assets,
+                VkExtent2D extent, VkFormat depthFormat, VkImageView depthView, VkDescriptorSetLayout sceneLayout,
+                VkImageView hdrTargetView, VkDescriptorImageInfo opaqueColor, VkDescriptorImageInfo opaqueDepth,
+                std::span<const VkDescriptorImageInfo> previousHiZ, std::span<const VkBuffer> instanceBuffers,
+                std::span<const VkBuffer> cullingUniformBuffers, bool enableHiZ = true);
     void destroy() noexcept;
 
     /** Rebuilds GPU page/templates from an immutable scene-generation snapshot. */
     void rebuild(const WaterRenderWorld& world);
     /** Refreshes frame-buffer bindings after renderer buffer growth/recreation. */
-    void updateFrameBindings(std::span<const VkBuffer> instanceBuffers,
-                             std::span<const VkBuffer> cullingUniformBuffers,
+    void updateFrameBindings(std::span<const VkBuffer> instanceBuffers, std::span<const VkBuffer> cullingUniformBuffers,
                              std::span<const VkDescriptorImageInfo> previousHiZ);
 
-    void recordCull(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
-                    VkDescriptorSet sceneSet, bool hiZHistoryValid);
-    void recordState(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
-                     VkDescriptorSet sceneSet, float deltaTime);
-    void recordPrepass(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
-                       VkDescriptorSet sceneSet, VkBuffer vertexBuffer, VkBuffer indexBuffer,
-                       const Culling::IndexedIndirectDrawCount& authoredWaterDraw,
-                       VkDeviceSize authoredCommandOffset, VkDeviceSize authoredCountOffset) const;
-    void recordAdaptiveShading(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
-                               VkDescriptorSet sceneSet);
-    void recordComposite(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
-                         VkDescriptorSet sceneSet) const;
+    void recordCull(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkDescriptorSet sceneSet,
+                    bool hiZHistoryValid);
+    void recordState(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkDescriptorSet sceneSet,
+                     float deltaTime);
+    void recordPrepass(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkDescriptorSet sceneSet,
+                       VkBuffer vertexBuffer, VkBuffer indexBuffer,
+                       const Culling::IndexedIndirectDrawCount& authoredWaterDraw, VkDeviceSize authoredCommandOffset,
+                       VkDeviceSize authoredCountOffset) const;
+    void recordAdaptiveShading(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkDescriptorSet sceneSet);
+    void recordComposite(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkDescriptorSet sceneSet) const;
 
     /** Queues a local disturbance for the sparse persistent water-state cache. */
     void queueInteraction(const Vec3& worldPosition, float radius, float strength);
     /** Updates the full-screen underwater post-process state for one frame slot. */
-    void updateUnderwaterState(std::uint32_t frameIndex, Registry& registry,
-                               const Vec3& cameraPosition, float time);
+    void updateUnderwaterState(std::uint32_t frameIndex, Registry& registry, const Vec3& cameraPosition, float time);
     /** Invalidates temporal water/reflection history after a discontinuous camera change. */
-    void invalidateTemporalHistory() noexcept { temporalHistoryValid_ = false; }
+    void invalidateTemporalHistory() noexcept {
+        temporalHistoryValid_ = false;
+    }
     /** Feeds the completed frame cost back into the bounded quality scheduler. */
     void onFrameCompleted(std::uint32_t frameIndex, float measuredWaterGpuMs);
     /** Feeds the previous completed water GPU time into the feedback controller. */
@@ -77,22 +76,51 @@ public:
     /** Releases snapshot resources after a fence-completed frame advances the safety window. */
     void onFrameCompleted() noexcept;
 
-    [[nodiscard]] bool active() const noexcept { return active_; }
-    [[nodiscard]] std::uint32_t pageCount() const noexcept { return pageCount_; }
-    [[nodiscard]] std::uint32_t drawBinCount() const noexcept { return drawBinCount_; }
-    [[nodiscard]] VkImageView surfaceView() const noexcept { return surface_.imageView(); }
-    [[nodiscard]] VkImage surfaceImage() const noexcept { return surface_.image(); }
-    [[nodiscard]] VkSampler surfaceSampler() const noexcept { return surface_.sampler(); }
-    [[nodiscard]] VkImageView metaView() const noexcept { return meta_.imageView(); }
-    [[nodiscard]] VkImage metaImage() const noexcept { return meta_.image(); }
-    [[nodiscard]] VkSampler metaSampler() const noexcept { return meta_.sampler(); }
-    [[nodiscard]] VkImageView velocityView() const noexcept { return velocity_.imageView(); }
-    [[nodiscard]] VkImage velocityImage() const noexcept { return velocity_.image(); }
-    [[nodiscard]] VkSampler velocitySampler() const noexcept { return velocity_.sampler(); }
+    [[nodiscard]] bool active() const noexcept {
+        return active_;
+    }
+    [[nodiscard]] std::uint32_t pageCount() const noexcept {
+        return pageCount_;
+    }
+    [[nodiscard]] std::uint32_t drawBinCount() const noexcept {
+        return drawBinCount_;
+    }
+    [[nodiscard]] VkImageView surfaceView() const noexcept {
+        return surface_.imageView();
+    }
+    [[nodiscard]] VkImage surfaceImage() const noexcept {
+        return surface_.image();
+    }
+    [[nodiscard]] VkSampler surfaceSampler() const noexcept {
+        return surface_.sampler();
+    }
+    [[nodiscard]] VkImageView metaView() const noexcept {
+        return meta_.imageView();
+    }
+    [[nodiscard]] VkImage metaImage() const noexcept {
+        return meta_.image();
+    }
+    [[nodiscard]] VkSampler metaSampler() const noexcept {
+        return meta_.sampler();
+    }
+    [[nodiscard]] VkImageView velocityView() const noexcept {
+        return velocity_.imageView();
+    }
+    [[nodiscard]] VkImage velocityImage() const noexcept {
+        return velocity_.image();
+    }
+    [[nodiscard]] VkSampler velocitySampler() const noexcept {
+        return velocity_.sampler();
+    }
 
-private:
-    struct ShadePush { std::uint32_t tier{}, pad0{}, pad1{}, pad2{}; };
-    struct StatePush { std::uint32_t eventCount{}, pageCount{}, frameIndex{}, pad{}; float deltaTime{}, pad1{}, pad2{}, pad3{}; };
+  private:
+    struct ShadePush {
+        std::uint32_t tier{}, pad0{}, pad1{}, pad2{};
+    };
+    struct StatePush {
+        std::uint32_t eventCount{}, pageCount{}, frameIndex{}, pad{};
+        float deltaTime{}, pad1{}, pad2{}, pad3{};
+    };
 
     VkPhysicalDevice physicalDevice_{VK_NULL_HANDLE};
     VkDevice device_{VK_NULL_HANDLE};

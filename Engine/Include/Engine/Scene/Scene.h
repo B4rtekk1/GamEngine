@@ -1,31 +1,31 @@
 #pragma once
 
-#include "Engine/ECS/GameObject.h"
+#include "Engine/Core/Camera.h"
 #include "Engine/ECS/Actor.h"
-#include "Engine/ECS/Registry.h"
+#include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
-#include "Engine/UI/Canvas.h"
-#include "Engine/UI/Vulkan/UIFontAtlas.h"
-#include "Engine/Scene/Components/IdentityComponents.h"
-#include "Engine/Scene/TransformSystem.h"
-#include "Engine/Scene/Prefab.h"
-#include "Engine/UI/Interface.h"
-#include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/WaterBodyComponent.h"
 #include "Engine/ECS/Components/WaterShapeComponent.h"
-#include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/ECS/GameObject.h"
+#include "Engine/ECS/Registry.h"
+#include "Engine/Physics/GlassDestructionSystem.h"
+#include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
-#include "Engine/Physics/PhysicsSystem.h"
-#include "Engine/Physics/GlassDestructionSystem.h"
-#include "Engine/Core/Camera.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Scene/Prefab.h"
+#include "Engine/Scene/TransformSystem.h"
+#include "Engine/UI/Canvas.h"
+#include "Engine/UI/Interface.h"
+#include "Engine/UI/Vulkan/UIFontAtlas.h"
 
-#include <memory>
 #include <algorithm>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -33,664 +33,704 @@
 #include <vector>
 
 namespace Engine {
-    class SceneSerializer;
+class SceneSerializer;
 }
 
 namespace Engine::Assets {
-    class Content;
+class Content;
 }
 
 namespace Engine {
-    class Renderer;
-    class ScriptSystem;
-    class ScriptModuleManager;
-    class PhysicsSystem;
-    class SceneEditor;
-    class SceneView;
-    class Application;
+class Renderer;
+class ScriptSystem;
+class ScriptModuleManager;
+class PhysicsSystem;
+class SceneEditor;
+class SceneView;
+class Application;
 
-    // Runtime scene data. Content creation belongs to ScenePresets (or to the
-    // application), rather than to this data container.
-    class Scene {
-    public:
-        Scene();
+// Runtime scene data. Content creation belongs to ScenePresets (or to the
+// application), rather than to this data container.
+class Scene {
+  public:
+    Scene();
 
-        /** Asset-root-relative equirectangular HDR/EXR used for global IBL. */
-        [[nodiscard]] const std::filesystem::path& environmentEquirectangular() const noexcept { return environmentEquirectangular_; }
-        void setEnvironmentEquirectangular(std::filesystem::path path) { environmentEquirectangular_ = std::move(path).lexically_normal(); }
+    /** Asset-root-relative equirectangular HDR/EXR used for global IBL. */
+    [[nodiscard]] const std::filesystem::path& environmentEquirectangular() const noexcept {
+        return environmentEquirectangular_;
+    }
+    void setEnvironmentEquirectangular(std::filesystem::path path) {
+        environmentEquirectangular_ = std::move(path).lexically_normal();
+    }
 
-        /**
-         * Advanced component-oriented creation API.
-         *
-         * Prefer createActor() for gameplay code. This overload is retained
-         * for engine and editor code that needs a GameObject's component API.
-         */
-        [[nodiscard]] GameObject &create(std::string name) {
-            if (name.empty()) {
-                throw std::invalid_argument("Scene object name cannot be empty");
-            }
-            const std::string baseName = name;
-            std::size_t suffix = 2;
-            while (find(name) != nullptr) {
-                name = baseName + " " + std::to_string(suffix++);
-            }
-
-            auto object = std::unique_ptr<GameObject>(new GameObject(registry_, name));
-            object->spawn();
-            GameObject &result = *object;
-            registry_.add<NameComponent>(result.entity(), NameComponent{.value = name});
-            registry_.add<UUIDComponent>(result.entity(), UUIDComponent{.value = createUUID()});
-            names_[result.name()] = result.objectId();
-            objects_.push_back(std::move(object));
-            indexObject(result);
-            return result;
+    /**
+     * Advanced component-oriented creation API.
+     *
+     * Prefer createActor() for gameplay code. This overload is retained
+     * for engine and editor code that needs a GameObject's component API.
+     */
+    [[nodiscard]] GameObject& create(std::string name) {
+        if (name.empty()) {
+            throw std::invalid_argument("Scene object name cannot be empty");
+        }
+        const std::string baseName = name;
+        std::size_t suffix = 2;
+        while (find(name) != nullptr) {
+            name = baseName + " " + std::to_string(suffix++);
         }
 
-        /**
-         * Advanced component-oriented creation API.
-         *
-         * New game code should prefer createActor() and the other Actor-returning
-         * factories below.  This remains available for editor and engine code
-         * that needs direct component access.
-         */
-        [[nodiscard]] GameObject &createGameObject(std::string name) {
-            return create(std::move(name));
+        auto object = std::unique_ptr<GameObject>(new GameObject(registry_, name));
+        object->spawn();
+        GameObject& result = *object;
+        registry_.add<NameComponent>(result.entity(), NameComponent{.value = name});
+        registry_.add<UUIDComponent>(result.entity(), UUIDComponent{.value = createUUID()});
+        names_[result.name()] = result.objectId();
+        objects_.push_back(std::move(object));
+        indexObject(result);
+        return result;
+    }
+
+    /**
+     * Advanced component-oriented creation API.
+     *
+     * New game code should prefer createActor() and the other Actor-returning
+     * factories below.  This remains available for editor and engine code
+     * that needs direct component access.
+     */
+    [[nodiscard]] GameObject& createGameObject(std::string name) {
+        return create(std::move(name));
+    }
+
+    /** High-level actor creation without exposing the ECS entity handle. */
+    [[nodiscard]] Actor createActor(std::string name) {
+        auto& object = create(std::move(name));
+        return Actor{*this, object.objectId()};
+    }
+
+    /** Creates a new actor and immediately attaches it below @p parent. */
+    [[nodiscard]] Actor createChild(const Actor& parent, std::string name) {
+        if (parent.scene_ != this || !parent.valid()) {
+            throw std::invalid_argument("Parent actor must belong to this Scene");
         }
+        Actor child = createActor(std::move(name));
+        setParent(child, parent, ParentMode::KeepLocal);
+        return child;
+    }
 
-        /** High-level actor creation without exposing the ECS entity handle. */
-        [[nodiscard]] Actor createActor(std::string name) {
-            auto &object = create(std::move(name));
-            return Actor{*this, object.objectId()};
-        }
-
-        /** Creates a new actor and immediately attaches it below @p parent. */
-        [[nodiscard]] Actor createChild(const Actor &parent, std::string name) {
-            if (parent.scene_ != this || !parent.valid()) {
-                throw std::invalid_argument("Parent actor must belong to this Scene");
-            }
-            Actor child = createActor(std::move(name));
-            setParent(child, parent, ParentMode::KeepLocal);
-            return child;
-        }
-
-        /** Duplicates an actor without exposing its ECS entity identifier. */
-        [[nodiscard]] Actor duplicate(const Actor &actor) {
-            if (actor.scene_ != this || !actor.valid()) {
-                return {};
-            }
-            auto &object = duplicate(actor.object().entity());
-            return Actor{*this, object.objectId()};
-        }
-
-        /** Creates a copy of an existing object with a fresh name and UUID. */
-        [[nodiscard]] GameObject &duplicate(const Entity entity) {
-            GameObject *source = findByEntity(entity);
-            if (source == nullptr) {
-                throw std::out_of_range("Scene entity is not a GameObject");
-            }
-
-            std::string name = source->name();
-            if (registry_.has<NameComponent>(entity)) {
-                name = registry_.get<NameComponent>(entity).value;
-            }
-            const std::string baseName = name;
-            std::size_t suffix = 2;
-            while (find(name) != nullptr) {
-                name = baseName + " " + std::to_string(suffix++);
-            }
-
-            auto object = std::make_unique<GameObject>(source->clone());
-            object->setName(name);
-            const Entity copiedEntity = object->entity();
-            registry_.modify<NameComponent>(copiedEntity, [&](auto &value) { value.value = name; });
-            registry_.modify<UUIDComponent>(copiedEntity, [&](auto &value) { value.value = createUUID(); });
-            names_[name] = object->objectId();
-            objects_.push_back(std::move(object));
-            GameObject& result = *objects_.back();
-            indexObject(result);
-            return result;
-        }
-
-        /** Creates a renderable actor from an already-loaded mesh. */
-        [[nodiscard]] Actor createMesh(std::string name,
-                                       std::shared_ptr<const Mesh> mesh,
-                                       const PBRMaterial &material = {});
-
-        /** Loads a model through Content and creates an actor in one operation. */
-        [[nodiscard]] Actor createModel(std::string name,
-                                        const std::filesystem::path &path,
-                                        const Assets::Content &content);
-
-        /** Loads a model using the Content service attached to this scene. */
-        [[nodiscard]] Actor createModel(std::string name, const std::filesystem::path &path);
-
-        /** Loads a model prefab and instantiates it in one operation. */
-        [[nodiscard]] Actor createPrefab(std::string name,
-                                         std::filesystem::path path,
-                                         const PBRMaterial &material = {});
-
-        [[nodiscard]] Actor createCube(std::string name, const PBRMaterial &material = {});
-
-        [[nodiscard]] Actor createPrefab(std::string name, const Prefab &prefab);
-
-        /** Creates a checkerboard terrain backed by an editable heightmap. */
-        [[nodiscard]] Actor createTerrain(std::string name, TerrainComponent terrain = {});
-
-        /** Creates a water authoring archetype.  Water is an Entity/GameObject,
-         * never a second runtime object model. */
-        [[nodiscard]] Actor createWaterBody(WaterBodyType type, std::string name = "Water");
-        [[nodiscard]] Actor createOcean(std::string name = "Ocean") {
-            return createWaterBody(WaterBodyType::Ocean, std::move(name));
-        }
-        [[nodiscard]] Actor createLake(std::string name = "Lake") {
-            return createWaterBody(WaterBodyType::Lake, std::move(name));
-        }
-        [[nodiscard]] Actor createRiver(std::string name = "River") {
-            return createWaterBody(WaterBodyType::River, std::move(name));
-        }
-
-        [[nodiscard]] Actor findActor(const std::string &name) noexcept {
-            auto *object = find(name);
-            return object == nullptr ? Actor{} : Actor{*this, object->objectId()};
-        }
-
-        /** Finds an actor by its stable runtime object identifier. */
-        [[nodiscard]] Actor findActor(const ObjectId objectId) noexcept {
-            return find(objectId) == nullptr ? Actor{} : Actor{*this, objectId};
-        }
-
-        /** Finds the first actor carrying @p tag, or returns an invalid Actor. */
-        [[nodiscard]] Actor findByTag(const std::string_view tag) noexcept {
-            for (const auto &object : objects_) {
-                const Entity entity = object->entity();
-                if (registry_.has<TagComponent>(entity) &&
-                    registry_.get<TagComponent>(entity).value == tag) {
-                    return Actor{*this, object->objectId()};
-                }
-            }
+    /** Duplicates an actor without exposing its ECS entity identifier. */
+    [[nodiscard]] Actor duplicate(const Actor& actor) {
+        if (actor.scene_ != this || !actor.valid()) {
             return {};
         }
+        auto& object = duplicate(actor.object().entity());
+        return Actor{*this, object.objectId()};
+    }
 
-        /** Returns all actors carrying @p tag in scene creation order. */
-        [[nodiscard]] std::vector<Actor> findAllByTag(const std::string_view tag) noexcept {
-            std::vector<Actor> actors;
-            for (const auto &object : objects_) {
-                const Entity entity = object->entity();
-                if (registry_.has<TagComponent>(entity) &&
-                    registry_.get<TagComponent>(entity).value == tag) {
-                    actors.push_back(Actor{*this, object->objectId()});
-                }
+    /** Creates a copy of an existing object with a fresh name and UUID. */
+    [[nodiscard]] GameObject& duplicate(const Entity entity) {
+        GameObject* source = findByEntity(entity);
+        if (source == nullptr) {
+            throw std::out_of_range("Scene entity is not a GameObject");
+        }
+
+        std::string name = source->name();
+        if (registry_.has<NameComponent>(entity)) {
+            name = registry_.get<NameComponent>(entity).value;
+        }
+        const std::string baseName = name;
+        std::size_t suffix = 2;
+        while (find(name) != nullptr) {
+            name = baseName + " " + std::to_string(suffix++);
+        }
+
+        auto object = std::make_unique<GameObject>(source->clone());
+        object->setName(name);
+        const Entity copiedEntity = object->entity();
+        registry_.modify<NameComponent>(copiedEntity, [&](auto& value) { value.value = name; });
+        registry_.modify<UUIDComponent>(copiedEntity, [&](auto& value) { value.value = createUUID(); });
+        names_[name] = object->objectId();
+        objects_.push_back(std::move(object));
+        GameObject& result = *objects_.back();
+        indexObject(result);
+        return result;
+    }
+
+    /** Creates a renderable actor from an already-loaded mesh. */
+    [[nodiscard]] Actor createMesh(std::string name, std::shared_ptr<const Mesh> mesh,
+                                   const PBRMaterial& material = {});
+
+    /** Loads a model through Content and creates an actor in one operation. */
+    [[nodiscard]] Actor createModel(std::string name, const std::filesystem::path& path,
+                                    const Assets::Content& content);
+
+    /** Loads a model using the Content service attached to this scene. */
+    [[nodiscard]] Actor createModel(std::string name, const std::filesystem::path& path);
+
+    /** Loads a model prefab and instantiates it in one operation. */
+    [[nodiscard]] Actor createPrefab(std::string name, std::filesystem::path path, const PBRMaterial& material = {});
+
+    [[nodiscard]] Actor createCube(std::string name, const PBRMaterial& material = {});
+
+    [[nodiscard]] Actor createPrefab(std::string name, const Prefab& prefab);
+
+    /** Creates a checkerboard terrain backed by an editable heightmap. */
+    [[nodiscard]] Actor createTerrain(std::string name, TerrainComponent terrain = {});
+
+    /** Creates a water authoring archetype.  Water is an Entity/GameObject,
+     * never a second runtime object model. */
+    [[nodiscard]] Actor createWaterBody(WaterBodyType type, std::string name = "Water");
+    [[nodiscard]] Actor createOcean(std::string name = "Ocean") {
+        return createWaterBody(WaterBodyType::Ocean, std::move(name));
+    }
+    [[nodiscard]] Actor createLake(std::string name = "Lake") {
+        return createWaterBody(WaterBodyType::Lake, std::move(name));
+    }
+    [[nodiscard]] Actor createRiver(std::string name = "River") {
+        return createWaterBody(WaterBodyType::River, std::move(name));
+    }
+
+    [[nodiscard]] Actor findActor(const std::string& name) noexcept {
+        auto* object = find(name);
+        return object == nullptr ? Actor{} : Actor{*this, object->objectId()};
+    }
+
+    /** Finds an actor by its stable runtime object identifier. */
+    [[nodiscard]] Actor findActor(const ObjectId objectId) noexcept {
+        return find(objectId) == nullptr ? Actor{} : Actor{*this, objectId};
+    }
+
+    /** Finds the first actor carrying @p tag, or returns an invalid Actor. */
+    [[nodiscard]] Actor findByTag(const std::string_view tag) noexcept {
+        for (const auto& object : objects_) {
+            const Entity entity = object->entity();
+            if (registry_.has<TagComponent>(entity) && registry_.get<TagComponent>(entity).value == tag) {
+                return Actor{*this, object->objectId()};
             }
-            return actors;
         }
+        return {};
+    }
 
-        /** Returns the primary camera actor, or an invalid Actor when none is marked primary. */
-        [[nodiscard]] Actor primaryCamera() noexcept;
-        /** World-space camera shared by shooting and viewport diagnostics. */
-        [[nodiscard]] std::optional<Camera> primaryViewCamera(float aspectOverride = 0.0F);
-
-        /** Returns the enabled directional Main Light actor, or an invalid Actor when none is active. */
-        [[nodiscard]] Actor activeDirectionalLight() noexcept;
-
-        /** Returns this scene's gameplay-facing physics queries. */
-        [[nodiscard]] MeshHandle glassGeometryHandle(const std::shared_ptr<Mesh> &geometry) {
-            for (const auto &entry : glassGeometryHandles_)
-                if (entry.source().get() == geometry.get()) return entry;
-            MeshHandle handle{geometry};
-            if (glassGeometryHandles_.size() < 128) glassGeometryHandles_.push_back(handle);
-            return handle;
-        }
-        void beginGlassSimulationStep() noexcept { glassNewDynamicFragments_ = 0; }
-        [[nodiscard]] bool reserveGlassDynamicFragment() noexcept {
-            if (glassNewDynamicFragments_ >= glassSimulationSettings_.maxNewDynamicFragmentsPerStep) return false;
-            ++glassNewDynamicFragments_;
-            return true;
-        }
-        [[nodiscard]] std::uint32_t glassDynamicFragmentBudget() const noexcept {
-            return std::min(glassSimulationSettings_.maxDynamicFragmentsGlobal, glassDynamicBudget_);
-        }
-        void reportGlassPhysicsCost(double milliseconds) noexcept {
-            glassPhysicsAverageMs_ = glassPhysicsAverageMs_ == 0 ? milliseconds : glassPhysicsAverageMs_*0.9 + milliseconds*0.1;
-            const auto maximum = glassSimulationSettings_.maxDynamicFragmentsGlobal;
-            if (!glassSimulationSettings_.adaptivePhysicsBudget) { glassDynamicBudget_ = maximum; return; }
-            glassDynamicBudget_ = std::min(glassDynamicBudget_, maximum);
-            const auto minimum = std::min(16U, maximum);
-            const auto target = glassSimulationSettings_.targetPhysicsCpuMs;
-            if (glassPhysicsAverageMs_ > target)
-                glassDynamicBudget_ = std::max(minimum, glassDynamicBudget_*4U/5U);
-            else if (glassPhysicsAverageMs_ < target*0.6)
-                glassDynamicBudget_ = std::min(maximum, glassDynamicBudget_+8U);
-        }
-        [[nodiscard]] const std::vector<GlassParticleBurst> &glassParticleBursts() const noexcept { return glassParticleBursts_; }
-        void queueGlassParticleBurst(GlassParticleBurst burst) { if (glassParticleBursts_.size() < 1024) glassParticleBursts_.push_back(burst); }
-        void clearGlassParticleBursts() noexcept { glassParticleBursts_.clear(); }
-        [[nodiscard]] GlassSimulationSettings &glassSimulationSettings() noexcept { return glassSimulationSettings_; }
-        [[nodiscard]] const GlassSimulationSettings &glassSimulationSettings() const noexcept { return glassSimulationSettings_; }
-        [[nodiscard]] Physics &physics() noexcept { return physics_; }
-        [[nodiscard]] const Physics &physics() const noexcept { return physics_; }
-
-        /** Creates a camera actor. */
-        [[nodiscard]] Actor createCamera(std::string name, const CameraComponent &camera = {}) {
-            auto &object = create(std::move(name));
-            object.addCamera(camera);
-            return Actor{*this, object.objectId()};
-        }
-
-        /** Creates a light actor. */
-        [[nodiscard]] Actor createLight(std::string name, const LightComponent &light = {}) {
-            auto &object = create(std::move(name));
-            object.addLight(light);
-            if (light.type == LightType::Directional && light.mainLight) {
-                setActiveDirectionalLight(object.entity());
+    /** Returns all actors carrying @p tag in scene creation order. */
+    [[nodiscard]] std::vector<Actor> findAllByTag(const std::string_view tag) noexcept {
+        std::vector<Actor> actors;
+        for (const auto& object : objects_) {
+            const Entity entity = object->entity();
+            if (registry_.has<TagComponent>(entity) && registry_.get<TagComponent>(entity).value == tag) {
+                actors.push_back(Actor{*this, object->objectId()});
             }
-            return Actor{*this, object.objectId()};
         }
+        return actors;
+    }
 
-        /** Compatibility spelling; use createCamera(). */
-        [[nodiscard]] Actor createCameraActor(std::string name, const CameraComponent &camera = {}) {
-            return createCamera(std::move(name), camera);
+    /** Returns the primary camera actor, or an invalid Actor when none is marked primary. */
+    [[nodiscard]] Actor primaryCamera() noexcept;
+    /** World-space camera shared by shooting and viewport diagnostics. */
+    [[nodiscard]] std::optional<Camera> primaryViewCamera(float aspectOverride = 0.0F);
+
+    /** Returns the enabled directional Main Light actor, or an invalid Actor when none is active. */
+    [[nodiscard]] Actor activeDirectionalLight() noexcept;
+
+    /** Returns this scene's gameplay-facing physics queries. */
+    [[nodiscard]] MeshHandle glassGeometryHandle(const std::shared_ptr<Mesh>& geometry) {
+        for (const auto& entry : glassGeometryHandles_)
+            if (entry.source().get() == geometry.get())
+                return entry;
+        MeshHandle handle{geometry};
+        if (glassGeometryHandles_.size() < 128)
+            glassGeometryHandles_.push_back(handle);
+        return handle;
+    }
+    void beginGlassSimulationStep() noexcept {
+        glassNewDynamicFragments_ = 0;
+    }
+    [[nodiscard]] bool reserveGlassDynamicFragment() noexcept {
+        if (glassNewDynamicFragments_ >= glassSimulationSettings_.maxNewDynamicFragmentsPerStep)
+            return false;
+        ++glassNewDynamicFragments_;
+        return true;
+    }
+    [[nodiscard]] std::uint32_t glassDynamicFragmentBudget() const noexcept {
+        return std::min(glassSimulationSettings_.maxDynamicFragmentsGlobal, glassDynamicBudget_);
+    }
+    void reportGlassPhysicsCost(double milliseconds) noexcept {
+        glassPhysicsAverageMs_ =
+            glassPhysicsAverageMs_ == 0 ? milliseconds : glassPhysicsAverageMs_ * 0.9 + milliseconds * 0.1;
+        const auto maximum = glassSimulationSettings_.maxDynamicFragmentsGlobal;
+        if (!glassSimulationSettings_.adaptivePhysicsBudget) {
+            glassDynamicBudget_ = maximum;
+            return;
         }
+        glassDynamicBudget_ = std::min(glassDynamicBudget_, maximum);
+        const auto minimum = std::min(16U, maximum);
+        const auto target = glassSimulationSettings_.targetPhysicsCpuMs;
+        if (glassPhysicsAverageMs_ > target)
+            glassDynamicBudget_ = std::max(minimum, glassDynamicBudget_ * 4U / 5U);
+        else if (glassPhysicsAverageMs_ < target * 0.6)
+            glassDynamicBudget_ = std::min(maximum, glassDynamicBudget_ + 8U);
+    }
+    [[nodiscard]] const std::vector<GlassParticleBurst>& glassParticleBursts() const noexcept {
+        return glassParticleBursts_;
+    }
+    void queueGlassParticleBurst(GlassParticleBurst burst) {
+        if (glassParticleBursts_.size() < 1024)
+            glassParticleBursts_.push_back(burst);
+    }
+    void clearGlassParticleBursts() noexcept {
+        glassParticleBursts_.clear();
+    }
+    [[nodiscard]] GlassSimulationSettings& glassSimulationSettings() noexcept {
+        return glassSimulationSettings_;
+    }
+    [[nodiscard]] const GlassSimulationSettings& glassSimulationSettings() const noexcept {
+        return glassSimulationSettings_;
+    }
+    [[nodiscard]] Physics& physics() noexcept {
+        return physics_;
+    }
+    [[nodiscard]] const Physics& physics() const noexcept {
+        return physics_;
+    }
 
-        /** Compatibility spelling; use createLight(). */
-        [[nodiscard]] Actor createLightActor(std::string name, const LightComponent &light = {}) {
-            return createLight(std::move(name), light);
+    /** Creates a camera actor. */
+    [[nodiscard]] Actor createCamera(std::string name, const CameraComponent& camera = {}) {
+        auto& object = create(std::move(name));
+        object.addCamera(camera);
+        return Actor{*this, object.objectId()};
+    }
+
+    /** Creates a light actor. */
+    [[nodiscard]] Actor createLight(std::string name, const LightComponent& light = {}) {
+        auto& object = create(std::move(name));
+        object.addLight(light);
+        if (light.type == LightType::Directional && light.mainLight) {
+            setActiveDirectionalLight(object.entity());
         }
+        return Actor{*this, object.objectId()};
+    }
 
-        /** Renames an actor while keeping name lookup consistent. */
-        void rename(const Actor &actor, std::string name) {
-            if (actor.scene_ != this || !actor.valid()) {
+    /** Compatibility spelling; use createCamera(). */
+    [[nodiscard]] Actor createCameraActor(std::string name, const CameraComponent& camera = {}) {
+        return createCamera(std::move(name), camera);
+    }
+
+    /** Compatibility spelling; use createLight(). */
+    [[nodiscard]] Actor createLightActor(std::string name, const LightComponent& light = {}) {
+        return createLight(std::move(name), light);
+    }
+
+    /** Renames an actor while keeping name lookup consistent. */
+    void rename(const Actor& actor, std::string name) {
+        if (actor.scene_ != this || !actor.valid()) {
+            return;
+        }
+        rename(actor.object().entity(), std::move(name));
+    }
+
+    /** Renames an editor entity while keeping object and name lookup state consistent. */
+    void rename(const Entity entity, std::string name) {
+        auto* object = findByEntity(entity);
+        if (object == nullptr) {
+            throw std::out_of_range("Scene entity is not a GameObject");
+        }
+        if (name.empty()) {
+            throw std::invalid_argument("Scene object name cannot be empty");
+        }
+        if (auto* existing = find(name); existing != nullptr && existing != object) {
+            throw std::invalid_argument("Scene object name is already in use: " + name);
+        }
+        names_.erase(object->name());
+        object->setName(std::move(name));
+        registry_.modify<NameComponent>(object->entity(), [&](auto& component) { component.value = object->name(); });
+        names_[object->name()] = object->objectId();
+    }
+
+    /** Destroys an actor through the high-level runtime API. */
+    void destroy(const Actor& actor) {
+        if (actor.scene_ != this || actor.objectId_ == NullObjectId) {
+            return;
+        }
+        if (auto* object = find(actor.objectId_)) {
+            destroy(object->entity());
+        }
+    }
+
+    /** Attaches @p child below @p parent, rejecting self-parenting and cycles. */
+    void setParent(const Actor& child, const Actor& parent, ParentMode mode = ParentMode::KeepWorld);
+
+    /** Removes @p child's parent link. */
+    void clearParent(const Actor& child, ParentMode mode = ParentMode::KeepWorld);
+
+    [[nodiscard]] Actor parentOf(const Actor& child) noexcept;
+
+    [[nodiscard]] std::vector<Actor> childrenOf(const Actor& parent);
+
+    /** Resolves local transforms and returns an actor's cached world matrix. */
+    [[nodiscard]] const Mat4& worldMatrix(const Actor& actor) {
+        if (actor.scene_ != this || !actor.valid()) {
+            throw std::invalid_argument("Actor must be a live actor in this Scene");
+        }
+        return TransformSystem::worldMatrix(registry_, findEntity(actor.objectId_));
+    }
+
+    /** Updates the hierarchy's cached world transforms. */
+    void updateTransforms() {
+        TransformSystem::updateDirty(registry_);
+    }
+
+    /**
+     * Makes @p entity the sole Main Light among directional lights. This
+     * selection is independent of LightComponent::enabled, so secondary
+     * directional lights may remain active for future renderer paths.
+     */
+    void setActiveDirectionalLight(const Entity entity) {
+        if (!registry_.valid(entity) || !registry_.has<LightComponent>(entity) ||
+            registry_.get<LightComponent>(entity).type != LightType::Directional) {
+            throw std::invalid_argument("Active light must be a directional LightComponent");
+        }
+        registry_.view<LightComponent>([&](const Entity candidate, LightComponent& light) {
+            if (light.type != LightType::Directional)
                 return;
+            const bool mainLight = candidate == entity;
+            if (light.mainLight != mainLight) {
+                light.mainLight = mainLight;
+                registry_.markChanged<LightComponent>(candidate);
             }
-            rename(actor.object().entity(), std::move(name));
+        });
+        directionalLight_ = NullObjectId;
+        if (const auto* object = findByEntity(entity))
+            directionalLight_ = object->objectId();
+        directionalLightComponentRevision_ = registry_.componentRevision<LightComponent>();
+        directionalLightStructuralRevision_ = registry_.structuralRevision();
+    }
+
+    /** High-level scene persistence helpers. */
+    void save(const std::filesystem::path& path) const;
+
+    void load(const std::filesystem::path& path);
+
+    /** High-level editor facade; it does not expose the underlying Registry. */
+    [[nodiscard]] SceneEditor editor() noexcept;
+
+    /** Read-only scene facade for const callers. */
+    [[nodiscard]] SceneView view() const noexcept;
+
+    /** Finds a named object, or returns nullptr when it does not exist. */
+    [[nodiscard]] GameObject* find(const std::string& name) noexcept {
+        const auto it = names_.find(name); // NOLINT
+        if (it == names_.end()) {
+            return nullptr;
+        }
+        return find(it->second);
+    }
+
+    /** Finds an object by its stable object identifier. */
+    [[nodiscard]] GameObject* find(const ObjectId objectId) const noexcept {
+        const auto it = objectById_.find(objectId);
+        return it == objectById_.end() ? nullptr : it->second;
+    }
+
+    [[nodiscard]] Entity findEntity(const ObjectId objectId) const noexcept {
+        const auto it = entityByObjectId_.find(objectId);
+        return it == entityByObjectId_.end() ? NullEntity : it->second;
+    }
+
+    /** Finds the high-level object represented by an ECS entity. */
+    [[nodiscard]] GameObject* findByEntity(const Entity entity) noexcept {
+        const auto it = objectByEntity_.find(entity);
+        return it == objectByEntity_.end() ? nullptr : it->second;
+    }
+
+    [[nodiscard]] const GameObject* findByEntity(const Entity entity) const noexcept {
+        const auto it = objectByEntity_.find(entity);
+        return it == objectByEntity_.end() ? nullptr : it->second;
+    }
+
+    /** Returns a high-level object for editor/runtime code. */
+    [[nodiscard]] GameObject& edit(const Entity entity) {
+        auto* object = findByEntity(entity);
+        if (object == nullptr) {
+            throw std::out_of_range("Scene entity is not a GameObject");
+        }
+        return *object;
+    }
+
+    [[nodiscard]] const GameObject& edit(const Entity entity) const {
+        const auto* object = findByEntity(entity);
+        if (object == nullptr) {
+            throw std::out_of_range("Scene entity is not a GameObject");
+        }
+        return *object;
+    }
+
+    [[nodiscard]] bool valid(const Entity entity) const noexcept {
+        return findByEntity(entity) != nullptr;
+    }
+
+    /**
+     * Returns whether the scene has a camera that can drive the game view.
+     *
+     * A primary camera must also have a Transform and supported,
+     * perspective settings.  The renderer can fall back safely when this
+     * is false, while editor UI can expose the scene-authoring problem.
+     */
+    [[nodiscard]] bool hasUsablePrimaryCamera() const {
+        bool found = false;
+        registry_.view<CameraComponent, Transform>([&](const Entity, const CameraComponent& camera, const Transform&) {
+            found = found || (camera.primary && camera.isPerspective() && camera.isValid());
+        });
+        return found;
+    }
+
+    void destroy(const Entity entity) {
+        GameObject* target = findByEntity(entity);
+        if (target == nullptr)
+            return;
+        GlassDestructionSystem::onActorDestroyed(*this, entity);
+
+        // A parent owns the lifetime of its descendants. Work on a copy as
+        // destroy() erases entries from objects_.
+        const ObjectId objectId = target->objectId();
+        for (const Actor& child : childrenOf(Actor{*this, objectId})) {
+            destroy(child);
         }
 
-        /** Renames an editor entity while keeping object and name lookup state consistent. */
-        void rename(const Entity entity, std::string name) {
-            auto *object = findByEntity(entity);
-            if (object == nullptr) {
-                throw std::out_of_range("Scene entity is not a GameObject");
+        // Recursive destruction can reallocate objects_, invalidating it.
+        GameObject* ownerObject = find(objectId);
+        if (ownerObject == nullptr)
+            return;
+        const auto owner =
+            std::ranges::find_if(objects_, [ownerObject](const auto& object) { return object.get() == ownerObject; });
+        if (owner == objects_.end())
+            return;
+
+        names_.erase((*owner)->name()); // NOLINT
+        unindexObject(**owner);
+        // Destroy the ECS entity before removing its owning wrapper. Merely
+        // detaching it would make it disappear from the hierarchy while the
+        // renderer could still find and draw the live registry entity.
+        (*owner)->destroy(); // NOLINT
+        objects_.erase(owner);
+    }
+
+    [[nodiscard]] std::uint64_t renderTopologyRevision() const noexcept {
+        return registry_.renderTopologyRevision();
+    }
+
+    [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
+        return registry_.structuralRevision();
+    }
+
+    /** Monotonic revision advanced by every explicit ECS mutation. */
+    [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
+        return registry_.mutationRevision();
+    }
+
+    template <typename Func> void eachObject(Func&& func) {
+        for (const auto& object : objects_) {
+            func(*object);
+        }
+    }
+
+    template <typename Func> void eachObject(Func&& func) const {
+        for (const auto& object : objects_) {
+            func(*object);
+        }
+    }
+
+    template <typename Func> void eachActor(Func&& func) {
+        for (const auto& object : objects_) {
+            func(Actor{*this, object->objectId()});
+        }
+    }
+
+    /** Number of objects created through the high-level Scene API. */
+    [[nodiscard]] std::size_t objectCount() const noexcept {
+        return objects_.size();
+    }
+
+    [[nodiscard]] UI::Canvas& uiCanvas() noexcept {
+        return canvas_;
+    }
+    [[nodiscard]] const UI::Canvas& uiCanvas() const noexcept {
+        return canvas_;
+    }
+    [[nodiscard]] const UI::UIFontAtlas& uiFontAtlas() const noexcept {
+        return fontAtlas_;
+    }
+    [[nodiscard]] UI::UIFontAtlas& uiFontAtlas() noexcept {
+        return fontAtlas_;
+    }
+    [[nodiscard]] UI::Interface ui() noexcept {
+        return UI::Interface{canvas_, fontAtlas_};
+    }
+
+    // Preset metadata can outlive a registry replacement performed by the
+    // scene serializer. Resolve particle state from the current registry so
+    // loading a non-particle scene cannot address an old entity id.
+    [[nodiscard]] Entity particleEntity() const noexcept {
+        if (particleEntity_ != NullEntity && (registry_.has<ParticleEmitterComponent>(particleEntity_) ||
+                                              registry_.has<SmokeEmitterComponent>(particleEntity_))) {
+            return particleEntity_;
+        }
+        Entity found = NullEntity;
+        registry_.view<SmokeEmitterComponent>([&](const Entity entity, const SmokeEmitterComponent&) {
+            if (found == NullEntity) {
+                found = entity;
             }
-            if (name.empty()) {
-                throw std::invalid_argument("Scene object name cannot be empty");
+        });
+        registry_.view<ParticleEmitterComponent>([&](const Entity entity, const ParticleEmitterComponent&) {
+            if (found == NullEntity) {
+                found = entity;
             }
-            if (auto *existing = find(name); existing != nullptr && existing != object) {
-                throw std::invalid_argument("Scene object name is already in use: " + name);
-            }
-            names_.erase(object->name());
-            object->setName(std::move(name));
-            registry_.modify<NameComponent>(object->entity(), [&](auto &component) {
-                component.value = object->name();
-            });
-            names_[object->name()] = object->objectId();
+        });
+        return found;
+    }
+
+    [[nodiscard]] bool isParticleScene() const noexcept {
+        return particleEntity() != NullEntity;
+    }
+
+    [[nodiscard]] const Particles::ParticleEmitter& particleEmitter() const noexcept {
+        return particleEmitter_;
+    }
+
+  protected:
+    /** Engine-only mesh creation primitive for scene presets. */
+    [[nodiscard]] GameObject& createMeshObject(std::string name, std::shared_ptr<const Mesh> mesh,
+                                               const PBRMaterial& material = {});
+
+    // Scene subclasses are engine-owned content layers. They may assemble
+    // entities directly; application code uses Actor instead.
+    [[nodiscard]] Registry& registry() noexcept {
+        return registry_;
+    }
+    [[nodiscard]] const Registry& registry() const noexcept {
+        return registry_;
+    }
+    void setParticleEntity(const Entity entity) noexcept {
+        particleEntity_ = entity;
+    }
+
+    void setParticleEmitter(const Particles::ParticleEmitter& emitter) noexcept {
+        particleEmitter_ = emitter;
+        particleScene_ = true;
+    }
+
+    void setSmokeEmitter(const Particles::SmokeEmitter& emitter) noexcept {
+        particleEmitter_ = static_cast<Particles::ParticleEmitter>(emitter);
+        particleScene_ = true;
+    }
+
+  private:
+    std::filesystem::path environmentEquirectangular_;
+    friend class ScriptModuleManager;
+    friend class Application;
+    friend class Actor;
+    friend class SceneSerializer;
+    friend class Renderer;
+    friend class ScriptSystem;
+    friend class Physics;
+    friend class PhysicsSystem;
+    friend class GlassDestructionSystem;
+
+    void rebuildObjectHandles();
+    void indexObject(GameObject& object) {
+        objectById_[object.objectId()] = &object;
+        objectByEntity_[object.entity()] = &object;
+        entityByObjectId_[object.objectId()] = object.entity();
+        if (registry_.has<UUIDComponent>(object.entity())) {
+            entityByUuid_[registry_.get<UUIDComponent>(object.entity()).value] = object.entity();
         }
+    }
 
-        /** Destroys an actor through the high-level runtime API. */
-        void destroy(const Actor &actor) {
-            if (actor.scene_ != this || actor.objectId_ == NullObjectId) {
-                return;
-            }
-            if (auto *object = find(actor.objectId_)) {
-                destroy(object->entity());
-            }
+    void unindexObject(const GameObject& object) {
+        objectById_.erase(object.objectId());
+        objectByEntity_.erase(object.entity());
+        entityByObjectId_.erase(object.objectId());
+        if (registry_.has<UUIDComponent>(object.entity())) {
+            entityByUuid_.erase(registry_.get<UUIDComponent>(object.entity()).value);
         }
+    }
 
-        /** Attaches @p child below @p parent, rejecting self-parenting and cycles. */
-        void setParent(const Actor &child, const Actor &parent,
-                       ParentMode mode = ParentMode::KeepWorld);
+    void rebuildHierarchyIndex() const;
 
-        /** Removes @p child's parent link. */
-        void clearParent(const Actor &child, ParentMode mode = ParentMode::KeepWorld);
+    /** Queues actor destruction while ScriptSystem is executing scripts. */
+    [[nodiscard]] bool deferDestroyDuringScriptUpdate(const Actor& actor) {
+        if (!deferringScriptDestruction_)
+            return false;
+        deferredDestroyedActors_.push_back(actor.objectId_);
+        return true;
+    }
 
-        [[nodiscard]] Actor parentOf(const Actor &child) noexcept;
+    void beginScriptUpdateCommands() noexcept {
+        deferringScriptDestruction_ = true;
+    }
 
-        [[nodiscard]] std::vector<Actor> childrenOf(const Actor &parent);
-
-        /** Resolves local transforms and returns an actor's cached world matrix. */
-        [[nodiscard]] const Mat4 &worldMatrix(const Actor &actor) {
-            if (actor.scene_ != this || !actor.valid()) {
-                throw std::invalid_argument("Actor must be a live actor in this Scene");
-            }
-            return TransformSystem::worldMatrix(registry_, findEntity(actor.objectId_));
+    void flushScriptUpdateCommands() {
+        deferringScriptDestruction_ = false;
+        auto destroyedActors = std::move(deferredDestroyedActors_);
+        deferredDestroyedActors_.clear();
+        for (const ObjectId objectId : destroyedActors) {
+            destroy(Actor{*this, objectId});
         }
+    }
 
-        /** Updates the hierarchy's cached world transforms. */
-        void updateTransforms() { TransformSystem::updateDirty(registry_); }
+    void setContent(Assets::Content& content) noexcept {
+        content_ = &content;
+    }
 
-        /**
-         * Makes @p entity the sole Main Light among directional lights. This
-         * selection is independent of LightComponent::enabled, so secondary
-         * directional lights may remain active for future renderer paths.
-         */
-        void setActiveDirectionalLight(const Entity entity) {
-            if (!registry_.valid(entity) || !registry_.has<LightComponent>(entity) ||
-                registry_.get<LightComponent>(entity).type != LightType::Directional) {
-                throw std::invalid_argument("Active light must be a directional LightComponent");
-            }
-            registry_.view<LightComponent>([&](const Entity candidate, LightComponent& light) {
-                if (light.type != LightType::Directional) return;
-                const bool mainLight = candidate == entity;
-                if (light.mainLight != mainLight) {
-                    light.mainLight = mainLight;
-                    registry_.markChanged<LightComponent>(candidate);
-                }
-            });
-            directionalLight_ = NullObjectId;
-            if (const auto *object = findByEntity(entity)) directionalLight_ = object->objectId();
-            directionalLightComponentRevision_ = registry_.componentRevision<LightComponent>();
-            directionalLightStructuralRevision_ = registry_.structuralRevision();
+    void detachObjectHandles() noexcept {
+        physics_.reset();
+        primaryCamera_ = NullObjectId;
+        directionalLight_ = NullObjectId;
+        primaryCameraComponentRevision_ = std::numeric_limits<std::uint64_t>::max();
+        primaryCameraStructuralRevision_ = std::numeric_limits<std::uint64_t>::max();
+        directionalLightComponentRevision_ = std::numeric_limits<std::uint64_t>::max();
+        directionalLightStructuralRevision_ = std::numeric_limits<std::uint64_t>::max();
+        for (const auto& object : objects_) {
+            object->detach();
         }
+        objects_.clear();
+        names_.clear();
+        objectById_.clear();
+        objectByEntity_.clear();
+        entityByObjectId_.clear();
+        entityByUuid_.clear();
+        childrenByParent_.clear();
+    }
 
-        /** High-level scene persistence helpers. */
-        void save(const std::filesystem::path &path) const;
-
-        void load(const std::filesystem::path &path);
-
-        /** High-level editor facade; it does not expose the underlying Registry. */
-        [[nodiscard]] SceneEditor editor() noexcept;
-
-        /** Read-only scene facade for const callers. */
-        [[nodiscard]] SceneView view() const noexcept;
-
-        /** Finds a named object, or returns nullptr when it does not exist. */
-        [[nodiscard]] GameObject *find(const std::string &name) noexcept {
-            const auto it = names_.find(name); //NOLINT
-            if (it == names_.end()) {
-                return nullptr;
-            }
-            return find(it->second);
-        }
-
-        /** Finds an object by its stable object identifier. */
-        [[nodiscard]] GameObject *find(const ObjectId objectId) const noexcept {
-            const auto it = objectById_.find(objectId);
-            return it == objectById_.end() ? nullptr : it->second;
-        }
-
-        [[nodiscard]] Entity findEntity(const ObjectId objectId) const noexcept {
-            const auto it = entityByObjectId_.find(objectId);
-            return it == entityByObjectId_.end() ? NullEntity : it->second;
-        }
-
-        /** Finds the high-level object represented by an ECS entity. */
-        [[nodiscard]] GameObject *findByEntity(const Entity entity) noexcept {
-            const auto it = objectByEntity_.find(entity);
-            return it == objectByEntity_.end() ? nullptr : it->second;
-        }
-
-        [[nodiscard]] const GameObject *findByEntity(const Entity entity) const noexcept {
-            const auto it = objectByEntity_.find(entity);
-            return it == objectByEntity_.end() ? nullptr : it->second;
-        }
-
-        /** Returns a high-level object for editor/runtime code. */
-        [[nodiscard]] GameObject &edit(const Entity entity) {
-            auto *object = findByEntity(entity);
-            if (object == nullptr) {
-                throw std::out_of_range("Scene entity is not a GameObject");
-            }
-            return *object;
-        }
-
-        [[nodiscard]] const GameObject &edit(const Entity entity) const {
-            const auto *object = findByEntity(entity);
-            if (object == nullptr) {
-                throw std::out_of_range("Scene entity is not a GameObject");
-            }
-            return *object;
-        }
-
-        [[nodiscard]] bool valid(const Entity entity) const noexcept {
-            return findByEntity(entity) != nullptr;
-        }
-
-        /**
-         * Returns whether the scene has a camera that can drive the game view.
-         *
-         * A primary camera must also have a Transform and supported,
-         * perspective settings.  The renderer can fall back safely when this
-         * is false, while editor UI can expose the scene-authoring problem.
-         */
-        [[nodiscard]] bool hasUsablePrimaryCamera() const {
-            bool found = false;
-            registry_.view<CameraComponent, Transform>(
-                [&](const Entity, const CameraComponent& camera, const Transform&) {
-                    found = found || (camera.primary && camera.isPerspective() && camera.isValid());
-                });
-            return found;
-        }
-
-        void destroy(const Entity entity) {
-            GameObject* target = findByEntity(entity);
-            if (target == nullptr) return;
-            GlassDestructionSystem::onActorDestroyed(*this, entity);
-
-            // A parent owns the lifetime of its descendants. Work on a copy as
-            // destroy() erases entries from objects_.
-            const ObjectId objectId = target->objectId();
-            for (const Actor &child : childrenOf(Actor{*this, objectId})) {
-                destroy(child);
-            }
-
-            // Recursive destruction can reallocate objects_, invalidating it.
-            GameObject* ownerObject = find(objectId);
-            if (ownerObject == nullptr) return;
-            const auto owner = std::ranges::find_if(objects_, [ownerObject](const auto& object) {
-                return object.get() == ownerObject;
-            });
-            if (owner == objects_.end()) return;
-
-            names_.erase((*owner)->name()); //NOLINT
-            unindexObject(**owner);
-            // Destroy the ECS entity before removing its owning wrapper. Merely
-            // detaching it would make it disappear from the hierarchy while the
-            // renderer could still find and draw the live registry entity.
-            (*owner)->destroy(); //NOLINT
-            objects_.erase(owner);
-        }
-
-        [[nodiscard]] std::uint64_t renderTopologyRevision() const noexcept {
-            return registry_.renderTopologyRevision();
-        }
-
-        [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
-            return registry_.structuralRevision();
-        }
-
-        /** Monotonic revision advanced by every explicit ECS mutation. */
-        [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
-            return registry_.mutationRevision();
-        }
-
-        template<typename Func>
-        void eachObject(Func &&func) {
-            for (const auto &object: objects_) {
-                func(*object);
-            }
-        }
-
-        template<typename Func>
-        void eachObject(Func &&func) const {
-            for (const auto &object: objects_) {
-                func(*object);
-            }
-        }
-
-        template<typename Func>
-        void eachActor(Func &&func) {
-            for (const auto &object: objects_) {
-                func(Actor{*this, object->objectId()});
-            }
-        }
-
-        /** Number of objects created through the high-level Scene API. */
-        [[nodiscard]] std::size_t objectCount() const noexcept { return objects_.size(); }
-
-        [[nodiscard]] UI::Canvas &uiCanvas() noexcept { return canvas_; }
-        [[nodiscard]] const UI::Canvas &uiCanvas() const noexcept { return canvas_; }
-        [[nodiscard]] const UI::UIFontAtlas &uiFontAtlas() const noexcept { return fontAtlas_; }
-        [[nodiscard]] UI::UIFontAtlas &uiFontAtlas() noexcept { return fontAtlas_; }
-        [[nodiscard]] UI::Interface ui() noexcept { return UI::Interface{canvas_, fontAtlas_}; }
-
-        // Preset metadata can outlive a registry replacement performed by the
-        // scene serializer. Resolve particle state from the current registry so
-        // loading a non-particle scene cannot address an old entity id.
-        [[nodiscard]] Entity particleEntity() const noexcept {
-            if (particleEntity_ != NullEntity &&
-                (registry_.has<ParticleEmitterComponent>(particleEntity_) ||
-                 registry_.has<SmokeEmitterComponent>(particleEntity_))) {
-                return particleEntity_;
-            }
-            Entity found = NullEntity;
-            registry_.view<SmokeEmitterComponent>([&](const Entity entity,
-                                                      const SmokeEmitterComponent &) {
-                if (found == NullEntity) {
-                    found = entity;
-                }
-            });
-            registry_.view<ParticleEmitterComponent>([&](const Entity entity,
-                                                         const ParticleEmitterComponent &) {
-                if (found == NullEntity) {
-                    found = entity;
-                }
-            });
-            return found;
-        }
-
-        [[nodiscard]] bool isParticleScene() const noexcept {
-            return particleEntity() != NullEntity;
-        }
-
-        [[nodiscard]] const Particles::ParticleEmitter &particleEmitter() const noexcept {
-            return particleEmitter_;
-        }
-
-    protected:
-        /** Engine-only mesh creation primitive for scene presets. */
-        [[nodiscard]] GameObject &createMeshObject(std::string name,
-                                                    std::shared_ptr<const Mesh> mesh,
-                                                    const PBRMaterial &material = {});
-
-        // Scene subclasses are engine-owned content layers. They may assemble
-        // entities directly; application code uses Actor instead.
-        [[nodiscard]] Registry &registry() noexcept { return registry_; }
-        [[nodiscard]] const Registry &registry() const noexcept { return registry_; }
-        void setParticleEntity(const Entity entity) noexcept { particleEntity_ = entity; }
-
-        void setParticleEmitter(const Particles::ParticleEmitter &emitter) noexcept {
-            particleEmitter_ = emitter;
-            particleScene_ = true;
-        }
-
-        void setSmokeEmitter(const Particles::SmokeEmitter &emitter) noexcept {
-            particleEmitter_ = static_cast<Particles::ParticleEmitter>(emitter);
-            particleScene_ = true;
-        }
-
-    private:
-        std::filesystem::path environmentEquirectangular_;
-        friend class ScriptModuleManager;
-        friend class Application;
-        friend class Actor;
-        friend class SceneSerializer;
-        friend class Renderer;
-        friend class ScriptSystem;
-        friend class Physics;
-        friend class PhysicsSystem;
-        friend class GlassDestructionSystem;
-
-        void rebuildObjectHandles();
-        void indexObject(GameObject& object) {
-            objectById_[object.objectId()] = &object;
-            objectByEntity_[object.entity()] = &object;
-            entityByObjectId_[object.objectId()] = object.entity();
-            if (registry_.has<UUIDComponent>(object.entity())) {
-                entityByUuid_[registry_.get<UUIDComponent>(object.entity()).value] = object.entity();
-            }
-        }
-
-        void unindexObject(const GameObject& object) {
-            objectById_.erase(object.objectId());
-            objectByEntity_.erase(object.entity());
-            entityByObjectId_.erase(object.objectId());
-            if (registry_.has<UUIDComponent>(object.entity())) {
-                entityByUuid_.erase(registry_.get<UUIDComponent>(object.entity()).value);
-            }
-        }
-
-        void rebuildHierarchyIndex() const;
-
-        /** Queues actor destruction while ScriptSystem is executing scripts. */
-        [[nodiscard]] bool deferDestroyDuringScriptUpdate(const Actor &actor) {
-            if (!deferringScriptDestruction_) return false;
-            deferredDestroyedActors_.push_back(actor.objectId_);
-            return true;
-        }
-
-        void beginScriptUpdateCommands() noexcept { deferringScriptDestruction_ = true; }
-
-        void flushScriptUpdateCommands() {
-            deferringScriptDestruction_ = false;
-            auto destroyedActors = std::move(deferredDestroyedActors_);
-            deferredDestroyedActors_.clear();
-            for (const ObjectId objectId : destroyedActors) {
-                destroy(Actor{*this, objectId});
-            }
-        }
-
-        void setContent(Assets::Content &content) noexcept { content_ = &content; }
-
-        void detachObjectHandles() noexcept {
-            physics_.reset();
-            primaryCamera_ = NullObjectId;
-            directionalLight_ = NullObjectId;
-            primaryCameraComponentRevision_ = std::numeric_limits<std::uint64_t>::max();
-            primaryCameraStructuralRevision_ = std::numeric_limits<std::uint64_t>::max();
-            directionalLightComponentRevision_ = std::numeric_limits<std::uint64_t>::max();
-            directionalLightStructuralRevision_ = std::numeric_limits<std::uint64_t>::max();
-            for (const auto &object: objects_) {
-                object->detach();
-            }
-            objects_.clear();
-            names_.clear();
-            objectById_.clear();
-            objectByEntity_.clear();
-            entityByObjectId_.clear();
-            entityByUuid_.clear();
-            childrenByParent_.clear();
-        }
-
-        Registry registry_;
-        std::vector<MeshHandle> glassGeometryHandles_;
-        std::uint32_t glassDynamicBudget_{~std::uint32_t{0}};
-        std::uint32_t glassNewDynamicFragments_{};
-        double glassPhysicsAverageMs_{};
-        std::vector<GlassParticleBurst> glassParticleBursts_;
-        GlassSimulationSettings glassSimulationSettings_;
-        Physics physics_;
-        std::vector<std::unique_ptr<GameObject> > objects_;
-        std::unordered_map<std::string, ObjectId> names_;
-        std::unordered_map<ObjectId, GameObject*> objectById_;
-        std::unordered_map<Entity, GameObject*> objectByEntity_;
-        std::unordered_map<ObjectId, Entity> entityByObjectId_;
-        std::unordered_map<UUID, Entity> entityByUuid_;
-        mutable std::unordered_map<Entity, std::vector<Entity>> childrenByParent_;
-        mutable std::uint64_t hierarchyComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
-        mutable std::uint64_t hierarchyStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
-        UI::Canvas canvas_{UI::Canvas::Width{800}, UI::Canvas::Height{600}};
-        UI::UIFontAtlas fontAtlas_;
-        Particles::ParticleEmitter particleEmitter_{};
-        Entity particleEntity_{NullEntity};
-        Assets::Content *content_{};
-        bool particleScene_ = false;
-        bool deferringScriptDestruction_ = false;
-        std::vector<ObjectId> deferredDestroyedActors_;
-        mutable ObjectId primaryCamera_{NullObjectId};
-        mutable std::uint64_t primaryCameraComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
-        mutable std::uint64_t primaryCameraStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
-        mutable ObjectId directionalLight_{NullObjectId};
-        mutable std::uint64_t directionalLightComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
-        mutable std::uint64_t directionalLightStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
-    };
+    Registry registry_;
+    std::vector<MeshHandle> glassGeometryHandles_;
+    std::uint32_t glassDynamicBudget_{~std::uint32_t{0}};
+    std::uint32_t glassNewDynamicFragments_{};
+    double glassPhysicsAverageMs_{};
+    std::vector<GlassParticleBurst> glassParticleBursts_;
+    GlassSimulationSettings glassSimulationSettings_;
+    Physics physics_;
+    std::vector<std::unique_ptr<GameObject>> objects_;
+    std::unordered_map<std::string, ObjectId> names_;
+    std::unordered_map<ObjectId, GameObject*> objectById_;
+    std::unordered_map<Entity, GameObject*> objectByEntity_;
+    std::unordered_map<ObjectId, Entity> entityByObjectId_;
+    std::unordered_map<UUID, Entity> entityByUuid_;
+    mutable std::unordered_map<Entity, std::vector<Entity>> childrenByParent_;
+    mutable std::uint64_t hierarchyComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
+    mutable std::uint64_t hierarchyStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
+    UI::Canvas canvas_{UI::Canvas::Width{800}, UI::Canvas::Height{600}};
+    UI::UIFontAtlas fontAtlas_;
+    Particles::ParticleEmitter particleEmitter_{};
+    Entity particleEntity_{NullEntity};
+    Assets::Content* content_{};
+    bool particleScene_ = false;
+    bool deferringScriptDestruction_ = false;
+    std::vector<ObjectId> deferredDestroyedActors_;
+    mutable ObjectId primaryCamera_{NullObjectId};
+    mutable std::uint64_t primaryCameraComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
+    mutable std::uint64_t primaryCameraStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
+    mutable ObjectId directionalLight_{NullObjectId};
+    mutable std::uint64_t directionalLightComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
+    mutable std::uint64_t directionalLightStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
+};
 } // namespace Engine
 
 #include "Engine/Scene/SceneView.h"

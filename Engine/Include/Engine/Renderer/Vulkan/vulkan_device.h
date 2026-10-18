@@ -1,152 +1,164 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
-#include <vk_mem_alloc.h>
 #include "Engine/Renderer/Vulkan/MemoryBudgetManager.h"
 
 #include <cstdint>
 #include <optional>
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
-    struct QueueFamilyIndices {
-        std::optional<uint32_t> graphics;
-        std::optional<uint32_t> present;
-        std::optional<uint32_t> compute;
-        std::optional<uint32_t> transfer;
-        uint32_t graphicsIndex{};
-        uint32_t presentIndex{};
-        uint32_t computeIndex{};
-        uint32_t transferIndex{};
-        bool asyncCompute{};
-        bool dedicatedComputeFamily{};
-        bool asyncTransfer{};
-        bool dedicatedTransferFamily{};
+struct QueueFamilyIndices {
+    std::optional<uint32_t> graphics;
+    std::optional<uint32_t> present;
+    std::optional<uint32_t> compute;
+    std::optional<uint32_t> transfer;
+    uint32_t graphicsIndex{};
+    uint32_t presentIndex{};
+    uint32_t computeIndex{};
+    uint32_t transferIndex{};
+    bool asyncCompute{};
+    bool dedicatedComputeFamily{};
+    bool asyncTransfer{};
+    bool dedicatedTransferFamily{};
 
-        [[nodiscard]] bool complete() const noexcept {
-            return graphics.has_value() && present.has_value();
-        }
-    };
+    [[nodiscard]] bool complete() const noexcept {
+        return graphics.has_value() && present.has_value();
+    }
+};
 
-    class VulkanDevice final {
-    public:
-        VulkanDevice() = default;
+class VulkanDevice final {
+  public:
+    VulkanDevice() = default;
 
-        ~VulkanDevice();
+    ~VulkanDevice();
 
-        VulkanDevice(const VulkanDevice &) = delete;
+    VulkanDevice(const VulkanDevice&) = delete;
 
-        VulkanDevice &operator=(const VulkanDevice &) = delete;
+    VulkanDevice& operator=(const VulkanDevice&) = delete;
 
-        VulkanDevice(VulkanDevice &&) = delete;
+    VulkanDevice(VulkanDevice&&) = delete;
 
-        VulkanDevice &operator=(VulkanDevice &&) = delete;
+    VulkanDevice& operator=(VulkanDevice&&) = delete;
 
-        void create(VkInstance instance, VkSurfaceKHR surface);
+    void create(VkInstance instance, VkSurfaceKHR surface);
 
-        void destroy() noexcept;
+    void destroy() noexcept;
 
-        [[nodiscard]] VkPhysicalDevice physical() const noexcept {
-            return physicalDevice_;
-        }
+    [[nodiscard]] VkPhysicalDevice physical() const noexcept {
+        return physicalDevice_;
+    }
 
-        [[nodiscard]] VkDevice logical() const noexcept {
-            return device_;
-        }
+    [[nodiscard]] VkDevice logical() const noexcept {
+        return device_;
+    }
 
-        [[nodiscard]] VkQueue graphicsQueue() const noexcept {
-            return graphicsQueue_;
-        }
+    [[nodiscard]] VkQueue graphicsQueue() const noexcept {
+        return graphicsQueue_;
+    }
 
-        [[nodiscard]] VkQueue presentQueue() const noexcept {
-            return presentQueue_;
-        }
+    [[nodiscard]] VkQueue presentQueue() const noexcept {
+        return presentQueue_;
+    }
 
-        [[nodiscard]] VkQueue computeQueue() const noexcept {
-            return computeQueue_;
-        }
-        [[nodiscard]] VkQueue transferQueue() const noexcept { return transferQueue_; }
+    [[nodiscard]] VkQueue computeQueue() const noexcept {
+        return computeQueue_;
+    }
+    [[nodiscard]] VkQueue transferQueue() const noexcept {
+        return transferQueue_;
+    }
 
-        [[nodiscard]] const QueueFamilyIndices &queueFamilies() const noexcept {
-            return queueFamilies_;
-        }
+    [[nodiscard]] const QueueFamilyIndices& queueFamilies() const noexcept {
+        return queueFamilies_;
+    }
 
-        [[nodiscard]] uint32_t graphicsQueueFamily() const {
-            return queueFamilies_.graphics.value();
-        }
+    [[nodiscard]] uint32_t graphicsQueueFamily() const {
+        return queueFamilies_.graphics.value();
+    }
 
-        [[nodiscard]] uint32_t presentQueueFamily() const {
-            return queueFamilies_.present.value();
-        }
+    [[nodiscard]] uint32_t presentQueueFamily() const {
+        return queueFamilies_.present.value();
+    }
 
-        [[nodiscard]] uint32_t computeQueueFamily() const {
-            return queueFamilies_.compute.value();
-        }
-        [[nodiscard]] uint32_t transferQueueFamily() const { return queueFamilies_.transfer.value(); }
+    [[nodiscard]] uint32_t computeQueueFamily() const {
+        return queueFamilies_.compute.value();
+    }
+    [[nodiscard]] uint32_t transferQueueFamily() const {
+        return queueFamilies_.transfer.value();
+    }
 
-        [[nodiscard]] bool hasAsyncComputeQueue() const noexcept {
-            return queueFamilies_.asyncCompute;
-        }
+    [[nodiscard]] bool hasAsyncComputeQueue() const noexcept {
+        return queueFamilies_.asyncCompute;
+    }
 
-        [[nodiscard]] bool hasDedicatedComputeFamily() const noexcept {
-            return queueFamilies_.dedicatedComputeFamily;
-        }
-        [[nodiscard]] bool hasAsyncTransferQueue() const noexcept { return queueFamilies_.asyncTransfer; }
-        [[nodiscard]] bool hasDedicatedTransferFamily() const noexcept { return queueFamilies_.dedicatedTransferFamily; }
+    [[nodiscard]] bool hasDedicatedComputeFamily() const noexcept {
+        return queueFamilies_.dedicatedComputeFamily;
+    }
+    [[nodiscard]] bool hasAsyncTransferQueue() const noexcept {
+        return queueFamilies_.asyncTransfer;
+    }
+    [[nodiscard]] bool hasDedicatedTransferFamily() const noexcept {
+        return queueFamilies_.dedicatedTransferFamily;
+    }
 
-        [[nodiscard]] VmaAllocator allocator() const noexcept {
-            return allocator_;
-        }
+    [[nodiscard]] VmaAllocator allocator() const noexcept {
+        return allocator_;
+    }
 
-        [[nodiscard]] VkResolveModeFlagBits depthResolveMode() const noexcept {
-            return depthResolveMode_;
-        }
+    [[nodiscard]] VkResolveModeFlagBits depthResolveMode() const noexcept {
+        return depthResolveMode_;
+    }
 
-        [[nodiscard]] bool supportsConservativeDepthResolve() const noexcept {
-            return depthResolveMode_ == VK_RESOLVE_MODE_MAX_BIT;
-        }
+    [[nodiscard]] bool supportsConservativeDepthResolve() const noexcept {
+        return depthResolveMode_ == VK_RESOLVE_MODE_MAX_BIT;
+    }
 
-        /** Whether the selected GPU exposes the optional VK_EXT_mesh_shader path. */
-        [[nodiscard]] bool supportsMeshShaders() const noexcept { return meshShaderSupported_; }
+    /** Whether the selected GPU exposes the optional VK_EXT_mesh_shader path. */
+    [[nodiscard]] bool supportsMeshShaders() const noexcept {
+        return meshShaderSupported_;
+    }
 
-        /** Whether the selected GPU exposes the optional VK_KHR_ray_query path. */
-        [[nodiscard]] bool supportsRayQuery() const noexcept { return rayQuerySupported_; }
+    /** Whether the selected GPU exposes the optional VK_KHR_ray_query path. */
+    [[nodiscard]] bool supportsRayQuery() const noexcept {
+        return rayQuerySupported_;
+    }
 
-        [[nodiscard]] const MemoryBudgetManager& memoryBudgetManager() const noexcept {
-            return memoryBudgetManager_;
-        }
+    [[nodiscard]] const MemoryBudgetManager& memoryBudgetManager() const noexcept {
+        return memoryBudgetManager_;
+    }
 
-    private:
-        VkSurfaceKHR surface_ = VK_NULL_HANDLE;
-        VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
-        VkDevice device_ = VK_NULL_HANDLE;
-        VkQueue graphicsQueue_ = VK_NULL_HANDLE;
-        VkQueue presentQueue_ = VK_NULL_HANDLE;
-        VkQueue computeQueue_ = VK_NULL_HANDLE;
-        VkQueue transferQueue_ = VK_NULL_HANDLE;
-        QueueFamilyIndices queueFamilies_{};
-        VmaAllocator allocator_ = VK_NULL_HANDLE;
-        VkResolveModeFlagBits depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
-        bool memoryBudgetExtensionSupported_ = false;
-        bool meshShaderExtensionSupported_ = false;
-        bool meshShaderSupported_ = false;
-        bool accelerationStructureExtensionSupported_ = false;
-        bool rayQueryExtensionSupported_ = false;
-        bool deferredHostOperationsExtensionSupported_ = false;
-        bool rayQuerySupported_ = false;
-        MemoryBudgetManager memoryBudgetManager_{};
+  private:
+    VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
+    VkDevice device_ = VK_NULL_HANDLE;
+    VkQueue graphicsQueue_ = VK_NULL_HANDLE;
+    VkQueue presentQueue_ = VK_NULL_HANDLE;
+    VkQueue computeQueue_ = VK_NULL_HANDLE;
+    VkQueue transferQueue_ = VK_NULL_HANDLE;
+    QueueFamilyIndices queueFamilies_{};
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
+    VkResolveModeFlagBits depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    bool memoryBudgetExtensionSupported_ = false;
+    bool meshShaderExtensionSupported_ = false;
+    bool meshShaderSupported_ = false;
+    bool accelerationStructureExtensionSupported_ = false;
+    bool rayQueryExtensionSupported_ = false;
+    bool deferredHostOperationsExtensionSupported_ = false;
+    bool rayQuerySupported_ = false;
+    MemoryBudgetManager memoryBudgetManager_{};
 
-        [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;
+    [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;
 
-        [[nodiscard]] static bool supportsRequiredExtensions(VkPhysicalDevice candidate);
+    [[nodiscard]] static bool supportsRequiredExtensions(VkPhysicalDevice candidate);
 
-        [[nodiscard]] bool hasAdequateSwapchain(VkPhysicalDevice candidate) const;
+    [[nodiscard]] bool hasAdequateSwapchain(VkPhysicalDevice candidate) const;
 
-        [[nodiscard]] bool isSuitable(VkPhysicalDevice candidate) const;
+    [[nodiscard]] bool isSuitable(VkPhysicalDevice candidate) const;
 
-        [[nodiscard]] static int scoreDevice(VkPhysicalDevice candidate);
+    [[nodiscard]] static int scoreDevice(VkPhysicalDevice candidate);
 
-        void selectPhysicalDevice(VkInstance candidate);
+    void selectPhysicalDevice(VkInstance candidate);
 
-        void createLogicalDevice();
-    };
+    void createLogicalDevice();
+};
 } // namespace Engine

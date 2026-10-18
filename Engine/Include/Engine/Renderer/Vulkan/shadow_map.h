@@ -1,79 +1,89 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
-    class ShadowMap final {
-    public:
-        // The overlapping 2x/1.5x steps avoid a visible density cliff when a
-        // receiver moves from one virtual clipmap into the next.
-        static constexpr uint32_t ClipLevelCount = 7;
-        static constexpr uint32_t PageResolution = 256;
-        static constexpr uint32_t VirtualPagesPerAxis = 32;
-        static constexpr uint32_t PhysicalPagesPerAxis = 16;
-        /// Maximum number of virtual pages refreshed in a single frame.
-        static constexpr uint32_t VirtualResolution =
-            PageResolution * VirtualPagesPerAxis;
-        static constexpr uint32_t Resolution =
-            PageResolution * PhysicalPagesPerAxis;
-        static constexpr uint32_t VirtualPageCount = ClipLevelCount *
-            VirtualPagesPerAxis * VirtualPagesPerAxis;
-        static constexpr uint32_t PhysicalPageCount =
-            PhysicalPagesPerAxis * PhysicalPagesPerAxis;
-        // The final clipmap fits the scene into eight central pages per axis.
-        // One extra page on each side covers snapping and the filter footprint.
-        static constexpr uint32_t FallbackPagesPerAxis = 10;
-        static constexpr uint32_t FallbackFirstPage =
-            (VirtualPagesPerAxis - FallbackPagesPerAxis) / 2;
-        static constexpr uint32_t FallbackPageCount =
-            FallbackPagesPerAxis * FallbackPagesPerAxis;
-        static constexpr float FallbackExtentScale = 4.0F;
-        // A page miss is rendered as fully lit until the page becomes
-        // available. Allow the allocator to refresh the complete atlas in a
-        // frame so camera cuts and large receiver footprints do not leave
-        // tiled holes in directional shadows.
-        static constexpr uint32_t MaxPageUpdatesPerFrame = PhysicalPageCount;
-        // Each updated page gets an independent caster slice. Bound the VSM
-        // scratch allocation even when a scene contains many render sections.
-        static constexpr uint32_t MaxCasterInstancesPerPage = 2048;
-        static constexpr uint32_t InvalidPage = 0xffffffffu;
+class ShadowMap final {
+  public:
+    // The overlapping 2x/1.5x steps avoid a visible density cliff when a
+    // receiver moves from one virtual clipmap into the next.
+    static constexpr uint32_t ClipLevelCount = 7;
+    static constexpr uint32_t PageResolution = 256;
+    static constexpr uint32_t VirtualPagesPerAxis = 32;
+    static constexpr uint32_t PhysicalPagesPerAxis = 16;
+    /// Maximum number of virtual pages refreshed in a single frame.
+    static constexpr uint32_t VirtualResolution = PageResolution * VirtualPagesPerAxis;
+    static constexpr uint32_t Resolution = PageResolution * PhysicalPagesPerAxis;
+    static constexpr uint32_t VirtualPageCount = ClipLevelCount * VirtualPagesPerAxis * VirtualPagesPerAxis;
+    static constexpr uint32_t PhysicalPageCount = PhysicalPagesPerAxis * PhysicalPagesPerAxis;
+    // The final clipmap fits the scene into eight central pages per axis.
+    // One extra page on each side covers snapping and the filter footprint.
+    static constexpr uint32_t FallbackPagesPerAxis = 10;
+    static constexpr uint32_t FallbackFirstPage = (VirtualPagesPerAxis - FallbackPagesPerAxis) / 2;
+    static constexpr uint32_t FallbackPageCount = FallbackPagesPerAxis * FallbackPagesPerAxis;
+    static constexpr float FallbackExtentScale = 4.0F;
+    // A page miss is rendered as fully lit until the page becomes
+    // available. Allow the allocator to refresh the complete atlas in a
+    // frame so camera cuts and large receiver footprints do not leave
+    // tiled holes in directional shadows.
+    static constexpr uint32_t MaxPageUpdatesPerFrame = PhysicalPageCount;
+    // Each updated page gets an independent caster slice. Bound the VSM
+    // scratch allocation even when a scene contains many render sections.
+    static constexpr uint32_t MaxCasterInstancesPerPage = 2048;
+    static constexpr uint32_t InvalidPage = 0xffffffffu;
 
-        ~ShadowMap();
+    ~ShadowMap();
 
-        ShadowMap() = default;
+    ShadowMap() = default;
 
-        ShadowMap(const ShadowMap &) = delete;
+    ShadowMap(const ShadowMap&) = delete;
 
-        ShadowMap &operator=(const ShadowMap &) = delete;
+    ShadowMap& operator=(const ShadowMap&) = delete;
 
-        void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator);
+    void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator);
 
-        void destroy() noexcept;
+    void destroy() noexcept;
 
-        [[nodiscard]] VkFormat format() const noexcept { return format_; }
-        [[nodiscard]] VkImage image() const noexcept { return image_; }
-        [[nodiscard]] VkImageView imageView() const noexcept { return imageView_; }
-        /// Nearest comparison sampler for individual virtual texels.
-        [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
-        /// Linear comparison sampler, used only for footprints proven to be
-        /// wholly contained in one physical page.
-        [[nodiscard]] VkSampler linearSampler() const noexcept { return linearSampler_; }
-        /// Nearest non-comparison sampler used by PCSS blocker search.
-        [[nodiscard]] VkSampler depthSampler() const noexcept { return depthSampler_; }
-        [[nodiscard]] bool initialized() const noexcept { return initialized_; }
-        void markInitialized() noexcept { initialized_ = true; }
+    [[nodiscard]] VkFormat format() const noexcept {
+        return format_;
+    }
+    [[nodiscard]] VkImage image() const noexcept {
+        return image_;
+    }
+    [[nodiscard]] VkImageView imageView() const noexcept {
+        return imageView_;
+    }
+    /// Nearest comparison sampler for individual virtual texels.
+    [[nodiscard]] VkSampler sampler() const noexcept {
+        return sampler_;
+    }
+    /// Linear comparison sampler, used only for footprints proven to be
+    /// wholly contained in one physical page.
+    [[nodiscard]] VkSampler linearSampler() const noexcept {
+        return linearSampler_;
+    }
+    /// Nearest non-comparison sampler used by PCSS blocker search.
+    [[nodiscard]] VkSampler depthSampler() const noexcept {
+        return depthSampler_;
+    }
+    [[nodiscard]] bool initialized() const noexcept {
+        return initialized_;
+    }
+    void markInitialized() noexcept {
+        initialized_ = true;
+    }
 
-    private:
-        VkDevice device_ = VK_NULL_HANDLE;
-        VkImage image_ = VK_NULL_HANDLE;
-        VmaAllocation allocation_ = VK_NULL_HANDLE;
-        VmaAllocator allocator_ = VK_NULL_HANDLE;
-        VkImageView imageView_ = VK_NULL_HANDLE;
-        VkSampler sampler_ = VK_NULL_HANDLE;
-        VkSampler linearSampler_ = VK_NULL_HANDLE;
-        VkSampler depthSampler_ = VK_NULL_HANDLE;
-        VkFormat format_ = VK_FORMAT_UNDEFINED;
-        bool initialized_{false};
-    };
+  private:
+    VkDevice device_ = VK_NULL_HANDLE;
+    VkImage image_ = VK_NULL_HANDLE;
+    VmaAllocation allocation_ = VK_NULL_HANDLE;
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
+    VkImageView imageView_ = VK_NULL_HANDLE;
+    VkSampler sampler_ = VK_NULL_HANDLE;
+    VkSampler linearSampler_ = VK_NULL_HANDLE;
+    VkSampler depthSampler_ = VK_NULL_HANDLE;
+    VkFormat format_ = VK_FORMAT_UNDEFINED;
+    bool initialized_{false};
+};
 } // namespace Engine

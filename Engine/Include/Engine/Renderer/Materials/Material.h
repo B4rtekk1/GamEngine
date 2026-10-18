@@ -9,74 +9,74 @@
 #include <filesystem>
 
 namespace Engine {
-    /**
-     * Surface shader families supported by the built-in material contract.
-     *
-     * This is a stable authoring boundary. The renderer resolves it through
-     * its ForwardPass pipeline registry; it is never a shader-file path.
-     */
-    enum class MaterialShader : std::uint8_t {
-        StandardPBR,
-        Unlit,
-        Hologram,
-        Water,
-    };
+/**
+ * Surface shader families supported by the built-in material contract.
+ *
+ * This is a stable authoring boundary. The renderer resolves it through
+ * its ForwardPass pipeline registry; it is never a shader-file path.
+ */
+enum class MaterialShader : std::uint8_t {
+    StandardPBR,
+    Unlit,
+    Hologram,
+    Water,
+};
 
-    /** Authored shader source, independent of whether a graph asset is assigned or cooks successfully. */
-    enum class MaterialShaderSource : std::uint8_t {
-        BuiltIn,
-        ShaderGraph,
-    };
+/** Authored shader source, independent of whether a graph asset is assigned or cooks successfully. */
+enum class MaterialShaderSource : std::uint8_t {
+    BuiltIn,
+    ShaderGraph,
+};
 
-    inline constexpr std::size_t MaterialShaderCount = 9;
-    /** GPU-culling bins: eight built-ins plus room for cooked Shader Graphs. */
-    inline constexpr std::size_t MaterialProgramSlotCount = 32;
-    inline constexpr std::size_t PbrNormalProgramSlot = 4;
-    inline constexpr std::size_t PbrExtendedProgramSlot = 5;
-    inline constexpr std::size_t PbrFoliageProgramSlot = 6;
-    inline constexpr std::size_t PbrTerrainProgramSlot = 7;
-    inline constexpr std::size_t GlassThinProgramSlot = 8;
+inline constexpr std::size_t MaterialShaderCount = 9;
+/** GPU-culling bins: eight built-ins plus room for cooked Shader Graphs. */
+inline constexpr std::size_t MaterialProgramSlotCount = 32;
+inline constexpr std::size_t PbrNormalProgramSlot = 4;
+inline constexpr std::size_t PbrExtendedProgramSlot = 5;
+inline constexpr std::size_t PbrFoliageProgramSlot = 6;
+inline constexpr std::size_t PbrTerrainProgramSlot = 7;
+inline constexpr std::size_t GlassThinProgramSlot = 8;
 
-    [[nodiscard]] constexpr bool usesGlassThin(const PBRMaterial& material) noexcept {
-        return material.transmission > 0.0F && material.metallic < 1.0F;
+[[nodiscard]] constexpr bool usesGlassThin(const PBRMaterial& material) noexcept {
+    return material.transmission > 0.0F && material.metallic < 1.0F;
+}
+
+[[nodiscard]] constexpr std::size_t materialShaderIndex(const MaterialShader shader) noexcept {
+    return static_cast<std::size_t>(shader);
+}
+
+/** Pipeline-relevant state authored with a surface material. */
+struct MaterialRenderState final {
+    bool doubleSided{false};
+    bool depthWrite{true};
+    bool transparent{false};
+};
+
+/**
+ * Author-facing surface material.
+ *
+ * PBRMaterial remains the parameter block consumed by the built-in PBR
+ * shader.  It deliberately does not own shader or Vulkan pipeline state.
+ */
+struct Material final {
+    MaterialShaderSource shaderSource{MaterialShaderSource::BuiltIn};
+    MaterialShader shader{MaterialShader::StandardPBR};
+    /** Relative path of the source .shadergraph asset. This is authoring data. */
+    std::filesystem::path shaderGraphAsset{};
+    /** Non-zero only for a cooked Shader Graph program. Built-ins retain shader. */
+    ShaderProgramId shaderProgram{};
+    /** SPIR-V emitted by ShaderGraphSlangCompiler for shaderProgram. */
+    std::filesystem::path shaderProgramSpirv{};
+    PBRMaterial pbr{};
+    /// Used only by MaterialShader::Water; PBR data remains available for
+    /// mesh import and non-water material families.
+    WaterMaterial water{};
+    MaterialRenderState renderState{};
+
+    /** Keeps legacy PBR flags and explicit render state coherent. */
+    void synchronizeRenderStateFromPbr() noexcept {
+        renderState.doubleSided = pbr.doubleSided;
+        renderState.transparent = pbr.alphaMode == AlphaMode::Blend;
     }
-
-    [[nodiscard]] constexpr std::size_t materialShaderIndex(const MaterialShader shader) noexcept {
-        return static_cast<std::size_t>(shader);
-    }
-
-    /** Pipeline-relevant state authored with a surface material. */
-    struct MaterialRenderState final {
-        bool doubleSided{false};
-        bool depthWrite{true};
-        bool transparent{false};
-    };
-
-    /**
-     * Author-facing surface material.
-     *
-     * PBRMaterial remains the parameter block consumed by the built-in PBR
-     * shader.  It deliberately does not own shader or Vulkan pipeline state.
-     */
-    struct Material final {
-        MaterialShaderSource shaderSource{MaterialShaderSource::BuiltIn};
-        MaterialShader shader{MaterialShader::StandardPBR};
-        /** Relative path of the source .shadergraph asset. This is authoring data. */
-        std::filesystem::path shaderGraphAsset{};
-        /** Non-zero only for a cooked Shader Graph program. Built-ins retain shader. */
-        ShaderProgramId shaderProgram{};
-        /** SPIR-V emitted by ShaderGraphSlangCompiler for shaderProgram. */
-        std::filesystem::path shaderProgramSpirv{};
-        PBRMaterial pbr{};
-        /// Used only by MaterialShader::Water; PBR data remains available for
-        /// mesh import and non-water material families.
-        WaterMaterial water{};
-        MaterialRenderState renderState{};
-
-        /** Keeps legacy PBR flags and explicit render state coherent. */
-        void synchronizeRenderStateFromPbr() noexcept {
-            renderState.doubleSided = pbr.doubleSided;
-            renderState.transparent = pbr.alphaMode == AlphaMode::Blend;
-        }
-    };
+};
 } // namespace Engine

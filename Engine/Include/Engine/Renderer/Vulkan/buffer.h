@@ -5,13 +5,12 @@
  * @brief Declares the Vulkan buffer wrapper used by the renderer.
  */
 
-#include <vulkan/vulkan.h>
-#include <vk_mem_alloc.h>
-
-#include <memory>
 #include <cstdint>
+#include <memory>
 #include <utility>
 #include <vector>
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
 
@@ -23,7 +22,7 @@ namespace Engine {
  * non-copyable and releases its resources in its destructor.
  */
 class Buffer final {
-public:
+  public:
     struct MemoryInfo final {
         std::uint32_t heapIndex{};
         VkMemoryPropertyFlags properties{};
@@ -36,10 +35,10 @@ public:
     ~Buffer();
 
     /// Copy construction is disabled because the object owns Vulkan handles.
-    Buffer(const Buffer &) = delete;
+    Buffer(const Buffer&) = delete;
 
     /// Copy assignment is disabled because the object owns Vulkan handles.
-    Buffer &operator=(const Buffer &) = delete;
+    Buffer& operator=(const Buffer&) = delete;
 
     Buffer(Buffer&& other) noexcept;
     Buffer& operator=(Buffer&& other) noexcept;
@@ -55,27 +54,16 @@ public:
      * @param queue Queue used to submit the upload operation.
      * @param allocator VMA allocator used for the allocation.
      */
-    void createDeviceLocal(
-        VkPhysicalDevice physicalDevice,
-        VkDevice device,
-        const void *data,
-        VkDeviceSize size,
-        VkBufferUsageFlags usage,
-        VkCommandPool commandPool,
-        VkQueue queue,
-        VmaAllocator allocator);
+    void createDeviceLocal(VkPhysicalDevice physicalDevice, VkDevice device, const void* data, VkDeviceSize size,
+                           VkBufferUsageFlags usage, VkCommandPool commandPool, VkQueue queue, VmaAllocator allocator);
 
     /// Creates an uninitialized device-local buffer for a sequence of uploads.
-    void createDeviceLocalEmpty(
-        VkDevice device,
-        VkDeviceSize size,
-        VkBufferUsageFlags usage,
-        VmaAllocator allocator,
-        bool enableDeviceAddress = false);
+    void createDeviceLocalEmpty(VkDevice device, VkDeviceSize size, VkBufferUsageFlags usage, VmaAllocator allocator,
+                                bool enableDeviceAddress = false);
 
     /// Records a copy from the active UploadContext staging ring.
-    void copyFromUploadRing(VkBuffer source, VkDeviceSize sourceOffset,
-                            VkDeviceSize size, VkDeviceSize destinationOffset = 0) const;
+    void copyFromUploadRing(VkBuffer source, VkDeviceSize sourceOffset, VkDeviceSize size,
+                            VkDeviceSize destinationOffset = 0) const;
 
     /**
      * @brief Creates a host-visible buffer suitable for CPU updates.
@@ -85,13 +73,8 @@ public:
      * @param usage Vulkan buffer usage flags.
      * @param allocator VMA allocator used for the allocation.
      */
-    void createHostVisible(
-        VkPhysicalDevice physicalDevice,
-        VkDevice device,
-        VkDeviceSize size,
-        VkBufferUsageFlags usage,
-        VmaAllocator allocator,
-        bool enableDeviceAddress = false);
+    void createHostVisible(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceSize size,
+                           VkBufferUsageFlags usage, VmaAllocator allocator, bool enableDeviceAddress = false);
 
     /**
      * @brief Copies data into the mapped host-visible allocation.
@@ -109,8 +92,8 @@ public:
     void read(void* destination, VkDeviceSize size, VkDeviceSize offset = 0) const;
 
     /** Uploads a subrange through the central persistent upload ring. */
-    void uploadDeviceLocal(const void* data, VkDeviceSize size, VkDeviceSize offset,
-                           VkCommandPool commandPool, VkQueue queue) const;
+    void uploadDeviceLocal(const void* data, VkDeviceSize size, VkDeviceSize offset, VkCommandPool commandPool,
+                           VkQueue queue) const;
 
     /// Releases the buffer, allocation and associated resources if present.
     void destroy() noexcept;
@@ -119,20 +102,28 @@ public:
      * @brief Returns the Vulkan buffer handle.
      * @return The owned handle, or VK_NULL_HANDLE when no buffer was created.
      */
-    [[nodiscard]] VkBuffer handle() const noexcept { return buffer_; }
+    [[nodiscard]] VkBuffer handle() const noexcept {
+        return buffer_;
+    }
     /// Returns the stable GPU virtual address of this buffer, if requested at
     /// creation time.  The address becomes invalid when the buffer is
     /// destroyed or re-created.
     [[nodiscard]] VkDeviceAddress deviceAddress() const noexcept;
-    [[nodiscard]] bool hasDeviceAddress() const noexcept { return deviceAddressEnabled_; }
+    [[nodiscard]] bool hasDeviceAddress() const noexcept {
+        return deviceAddressEnabled_;
+    }
     /// Allocated byte capacity. Geometry heaps use this to grow only when a
     /// new sub-allocation no longer fits; ordinary scene deltas never resize.
-    [[nodiscard]] VkDeviceSize size() const noexcept { return size_; }
-    [[nodiscard]] std::uint64_t readyTimeline() const noexcept { return readyTimeline_; }
+    [[nodiscard]] VkDeviceSize size() const noexcept {
+        return size_;
+    }
+    [[nodiscard]] std::uint64_t readyTimeline() const noexcept {
+        return readyTimeline_;
+    }
     /// Returns the memory type actually selected by VMA for this allocation.
     [[nodiscard]] MemoryInfo memoryInfo(VkPhysicalDevice physicalDevice) const noexcept;
 
-private:
+  private:
     struct CreateParameters {
         VkDevice device;
         VkDeviceSize size;
@@ -157,7 +148,7 @@ private:
      * @param parameters Buffer creation parameters, including the logical
      * device, size, usage flags, memory properties and VMA allocator.
      */
-    void create(const CreateParameters &parameters);
+    void create(const CreateParameters& parameters);
 
     /**
      * @brief Finds a compatible physical-device memory type.
@@ -166,10 +157,8 @@ private:
      * @param properties Required memory property flags.
      * @return Index of a compatible memory type.
      */
-    [[nodiscard]] static uint32_t findMemoryType(
-        VkPhysicalDevice physicalDevice,
-        uint32_t typeFilter,
-        VkMemoryPropertyFlags properties);
+    [[nodiscard]] static uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter,
+                                                 VkMemoryPropertyFlags properties);
 };
 
 } // namespace Engine

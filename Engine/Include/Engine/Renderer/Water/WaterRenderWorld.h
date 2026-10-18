@@ -20,7 +20,9 @@ struct WaterBodyId final {
     std::uint32_t generation{};
 
     [[nodiscard]] constexpr bool operator==(const WaterBodyId&) const noexcept = default;
-    [[nodiscard]] constexpr bool valid() const noexcept { return index != 0U || generation != 0U; }
+    [[nodiscard]] constexpr bool valid() const noexcept {
+        return index != 0U || generation != 0U;
+    }
 };
 
 /**
@@ -41,15 +43,20 @@ struct WaterRenderBody final {
 };
 
 class WaterRenderWorld final {
-public:
-    [[nodiscard]] static WaterRenderWorld capture(const Registry& registry,
-                                                   const SceneGpuResources& sceneGpu);
+  public:
+    [[nodiscard]] static WaterRenderWorld capture(const Registry& registry, const SceneGpuResources& sceneGpu);
 
-    [[nodiscard]] const std::vector<WaterRenderBody>& bodies() const noexcept { return bodies_; }
-    [[nodiscard]] bool empty() const noexcept { return bodies_.empty(); }
-    [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
+    [[nodiscard]] const std::vector<WaterRenderBody>& bodies() const noexcept {
+        return bodies_;
+    }
+    [[nodiscard]] bool empty() const noexcept {
+        return bodies_.empty();
+    }
+    [[nodiscard]] std::uint64_t generation() const noexcept {
+        return generation_;
+    }
 
-private:
+  private:
     std::uint64_t generation_{};
     std::vector<WaterRenderBody> bodies_;
 };

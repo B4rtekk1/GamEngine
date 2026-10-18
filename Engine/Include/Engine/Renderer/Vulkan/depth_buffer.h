@@ -5,11 +5,10 @@
  * @brief Declares the Vulkan depth-stencil buffer wrapper.
  */
 
-#include <vulkan/vulkan.h>
-#include <vk_mem_alloc.h>
-
 #include <cstdint>
 #include <span>
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
 
@@ -20,7 +19,7 @@ namespace Engine {
  * to the requested multisampling configuration.
  */
 class DepthBuffer final {
-public:
+  public:
     /// Creates an empty depth-buffer wrapper.
     DepthBuffer() = default;
 
@@ -50,10 +49,10 @@ public:
      * @brief Creates or recreates the depth resources for a render target.
      * @param extent Width and height of the depth image.
      * @param samples Multisample count required by the render target.
-     * @param requiredFormat Optional Vulkan format to use for the depth image. If VK_FORMAT_UNDEFINED, a supported format is selected automatically.
+     * @param requiredFormat Optional Vulkan format to use for the depth image. If VK_FORMAT_UNDEFINED, a supported
+     * format is selected automatically.
      */
-    void create(VkExtent2D extent, VkSampleCountFlagBits samples,
-                VkFormat requiredFormat = VK_FORMAT_UNDEFINED,
+    void create(VkExtent2D extent, VkSampleCountFlagBits samples, VkFormat requiredFormat = VK_FORMAT_UNDEFINED,
                 std::span<const std::uint32_t> sharingFamilies = {});
 
     /// Releases the depth image, view, sampler and allocated memory.
@@ -87,9 +86,11 @@ public:
      * @brief Returns the depth sampler handle.
      * @return The owned sampler handle, or VK_NULL_HANDLE if not created.
      */
-    [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
+    [[nodiscard]] VkSampler sampler() const noexcept {
+        return sampler_;
+    }
 
-private:
+  private:
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
 
@@ -110,8 +111,7 @@ private:
      * @param samples Multisample count required by the depth image.
      * @return A supported Vulkan depth format.
      */
-    [[nodiscard]] VkFormat findSupportedFormat(
-        VkSampleCountFlagBits samples) const;
+    [[nodiscard]] VkFormat findSupportedFormat(VkSampleCountFlagBits samples) const;
     /**
      * @brief Checks whether a format contains a stencil component.
      * @param format Vulkan format to inspect.

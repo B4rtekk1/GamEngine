@@ -8,14 +8,24 @@ namespace Engine {
 
 /** Narrow editor-facing scene access. Keeps Registry out of editor code. */
 class SceneEditor final {
-public:
+  public:
     explicit SceneEditor(Scene& scene) noexcept : scene_(&scene) {}
 
-    [[nodiscard]] std::size_t size() const noexcept { return scene_->objectCount(); }
-    [[nodiscard]] bool valid(Entity entity) const { return scene_->valid(entity); }
-    void destroy(Entity entity) { scene_->destroy(entity); }
-    [[nodiscard]] Entity duplicate(Entity entity) { return scene_->duplicate(entity).entity(); }
-    void rename(Entity entity, std::string name) { scene_->rename(entity, std::move(name)); }
+    [[nodiscard]] std::size_t size() const noexcept {
+        return scene_->objectCount();
+    }
+    [[nodiscard]] bool valid(Entity entity) const {
+        return scene_->valid(entity);
+    }
+    void destroy(Entity entity) {
+        scene_->destroy(entity);
+    }
+    [[nodiscard]] Entity duplicate(Entity entity) {
+        return scene_->duplicate(entity).entity();
+    }
+    void rename(Entity entity, std::string name) {
+        scene_->rename(entity, std::move(name));
+    }
     [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
         return scene_->structuralRevision();
     }
@@ -26,12 +36,14 @@ public:
         return scene_->mutationRevision();
     }
 
-    template<typename T> [[nodiscard]] bool has(Entity entity) const { return scene_->edit(entity).has<T>(); }
+    template <typename T> [[nodiscard]] bool has(Entity entity) const {
+        return scene_->edit(entity).has<T>();
+    }
     /** Returns a component for inspection only; mutations must use patch(). */
-    template<typename T> [[nodiscard]] const T& read(Entity entity) const {
+    template <typename T> [[nodiscard]] const T& read(Entity entity) const {
         return scene_->edit(entity).get<T>();
     }
-    template<typename T, typename... Args> const T& add(Entity entity, Args&&... args) {
+    template <typename T, typename... Args> const T& add(Entity entity, Args&&... args) {
         if constexpr (std::is_same_v<T, LightComponent>) {
             const T& light = scene_->edit(entity).addLight(std::forward<Args>(args)...);
             if (light.type == LightType::Directional && light.mainLight) {
@@ -45,9 +57,11 @@ public:
         }
         return scene_->edit(entity).add<T>(std::forward<Args>(args)...);
     }
-    template<typename T> void remove(Entity entity) { scene_->edit(entity).remove<T>(); }
+    template <typename T> void remove(Entity entity) {
+        scene_->edit(entity).remove<T>();
+    }
     /** Mutates a component and advances its Registry revision exactly once. */
-    template<typename T, typename Func> void patch(Entity entity, Func&& func) {
+    template <typename T, typename Func> void patch(Entity entity, Func&& func) {
         scene_->edit(entity).modify<T>(std::forward<Func>(func));
         if constexpr (std::is_same_v<T, LightComponent>) {
             const LightComponent& light = scene_->edit(entity).get<LightComponent>();
@@ -56,8 +70,10 @@ public:
             }
         }
     }
-    void setActiveDirectionalLight(Entity entity) { scene_->setActiveDirectionalLight(entity); }
-    template<typename... Components, typename Func> void view(Func&& func) {
+    void setActiveDirectionalLight(Entity entity) {
+        scene_->setActiveDirectionalLight(entity);
+    }
+    template <typename... Components, typename Func> void view(Func&& func) {
         scene_->eachObject([&](const GameObject& object) {
             if constexpr (sizeof...(Components) == 0) {
                 func(object.entity());
@@ -67,12 +83,14 @@ public:
         });
     }
 
-private:
+  private:
     Scene* scene_;
 };
 
 } // namespace Engine
 
 namespace Engine {
-inline SceneEditor Scene::editor() noexcept { return SceneEditor{*this}; }
+inline SceneEditor Scene::editor() noexcept {
+    return SceneEditor{*this};
+}
 } // namespace Engine

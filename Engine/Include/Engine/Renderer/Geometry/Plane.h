@@ -3,18 +3,19 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 namespace Engine {
-    //NOLINTBEGIN
+// NOLINTBEGIN
 
 class Plane final {
-public:
+  public:
     [[nodiscard]] static Mesh createMesh() {
         Mesh mesh{
-            .vertices = {
-                {{-0.5F, 0.0F, -0.5F}, {0.70F, 0.70F, 0.70F}, {0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}},
-                {{ 0.5F, 0.0F, -0.5F}, {0.70F, 0.70F, 0.70F}, {1.0F, 0.0F}, {0.0F, 1.0F, 0.0F}},
-                {{ 0.5F, 0.0F,  0.5F}, {0.70F, 0.70F, 0.70F}, {1.0F, 1.0F}, {0.0F, 1.0F, 0.0F}},
-                {{-0.5F, 0.0F,  0.5F}, {0.70F, 0.70F, 0.70F}, {0.0F, 1.0F}, {0.0F, 1.0F, 0.0F}},
-            },
+            .vertices =
+                {
+                    {{-0.5F, 0.0F, -0.5F}, {0.70F, 0.70F, 0.70F}, {0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}},
+                    {{0.5F, 0.0F, -0.5F}, {0.70F, 0.70F, 0.70F}, {1.0F, 0.0F}, {0.0F, 1.0F, 0.0F}},
+                    {{0.5F, 0.0F, 0.5F}, {0.70F, 0.70F, 0.70F}, {1.0F, 1.0F}, {0.0F, 1.0F, 0.0F}},
+                    {{-0.5F, 0.0F, 0.5F}, {0.70F, 0.70F, 0.70F}, {0.0F, 1.0F}, {0.0F, 1.0F, 0.0F}},
+                },
             .indices = {0, 2, 1, 2, 0, 3},
         };
         mesh.recalculateLocalBounds();
@@ -23,4 +24,4 @@ public:
 };
 
 } // namespace Engine
-//NOLINTEND
+// NOLINTEND

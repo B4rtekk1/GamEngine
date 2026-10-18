@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Engine/Math/Math.h"
 #include "Engine/ECS/Entity.h"
+#include "Engine/Math/Math.h"
 
 #include <cstdint>
 #include <unordered_map>
@@ -30,7 +30,7 @@ static_assert(sizeof(GpuReflectionProbe) == 48);
  * intentionally separate from selection: until a probe is baked its texture
  * slot resolves to the renderer's prefiltered-environment fallback. */
 class ReflectionProbeManager final {
-public:
+  public:
     static constexpr std::uint32_t MaxProbes = 256;
     // Kept equal to MaxProbes so an entry's textureIndex can be used directly
     // with the fixed-size descriptor array.  Slot zero is always a valid
@@ -44,9 +44,11 @@ public:
     /** Publishes the descriptor-array slot after the six faces were rendered. */
     void markBaked(Entity entity);
     void uploadProbeTable(std::uint32_t frameIndex) noexcept;
-    [[nodiscard]] const std::vector<GpuReflectionProbe>& probes() const noexcept { return probes_; }
+    [[nodiscard]] const std::vector<GpuReflectionProbe>& probes() const noexcept {
+        return probes_;
+    }
 
-private:
+  private:
     std::vector<GpuReflectionProbe> probes_;
     std::unordered_map<Entity, std::uint32_t> slots_;
     std::unordered_set<Entity> baked_;

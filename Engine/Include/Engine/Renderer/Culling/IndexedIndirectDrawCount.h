@@ -1,8 +1,7 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
-
 #include <cstdint>
+#include <vulkan/vulkan.h>
 
 /**
  * @file IndexedIndirectDrawCount.h
@@ -18,7 +17,7 @@ namespace Engine::Culling {
  * the draw configuration required by vkCmdDrawIndexedIndirectCount.
  */
 class IndexedIndirectDrawCount final {
-public:
+  public:
     /**
      * @brief Configures the indirect draw operation.
      * @param commandBuffer Buffer containing VkDrawIndexedIndirectCommand values.
@@ -28,13 +27,9 @@ public:
      * @param countOffset Byte offset of the draw count in @p countBuffer.
      * @param stride Byte distance between consecutive indirect commands.
      */
-    void create(
-        VkBuffer commandBuffer,
-        VkBuffer countBuffer,
-        std::uint32_t maxDrawCount,
-        VkDeviceSize commandOffset = 0,
-        VkDeviceSize countOffset = 0,
-        std::uint32_t stride = sizeof(VkDrawIndexedIndirectCommand));
+    void create(VkBuffer commandBuffer, VkBuffer countBuffer, std::uint32_t maxDrawCount,
+                VkDeviceSize commandOffset = 0, VkDeviceSize countOffset = 0,
+                std::uint32_t stride = sizeof(VkDrawIndexedIndirectCommand));
 
     /** @brief Resets the stored draw configuration to an invalid state. */
     void destroy() noexcept;
@@ -43,14 +38,12 @@ public:
      * @brief Records the counted indexed indirect draw command.
      * @param commandBuffer Command buffer into which the draw is recorded.
      */
-    void record(VkCommandBuffer commandBuffer,
-                VkDeviceSize commandOffset = 0,
-                VkDeviceSize countOffset = 0) const;
+    void record(VkCommandBuffer commandBuffer, VkDeviceSize commandOffset = 0, VkDeviceSize countOffset = 0) const;
 
     /** @brief Returns whether the operation has valid command and count buffers. */
     [[nodiscard]] bool valid() const noexcept;
 
-private:
+  private:
     VkBuffer commandBuffer_{VK_NULL_HANDLE};
     VkBuffer countBuffer_{VK_NULL_HANDLE};
     VkDeviceSize commandOffset_{0};

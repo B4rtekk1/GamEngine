@@ -1,45 +1,43 @@
 #pragma once
 
-#include "Skyboxpipeline.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
-
-#include <vulkan/vulkan.h>
+#include "Skyboxpipeline.h"
 
 #include <vector>
+#include <vulkan/vulkan.h>
 
 namespace Engine {
-    namespace Assets {
-        class AssetManager;
-    }
+namespace Assets {
+class AssetManager;
+}
 
-    class Skybox final {
-    public:
-        ~Skybox();
+class Skybox final {
+  public:
+    ~Skybox();
 
-        Skybox() = default;
+    Skybox() = default;
 
-        Skybox(const Skybox &) = delete;
+    Skybox(const Skybox&) = delete;
 
-        Skybox &operator=(const Skybox &) = delete;
+    Skybox& operator=(const Skybox&) = delete;
 
-        void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
-                    VkQueue queue, VkFormat colorFormat, VkFormat depthFormat,
-                    VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
-                    const std::vector<VkBuffer> &uniformBuffers, VkDeviceSize uniformBufferRange,
-                    Assets::AssetManager &assets, VmaAllocator allocator,
-                    VkFormat velocityFormat = VK_FORMAT_UNDEFINED);
+    void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples,
+                VkDescriptorSetLayout descriptorSetLayout, const std::vector<VkBuffer>& uniformBuffers,
+                VkDeviceSize uniformBufferRange, Assets::AssetManager& assets, VmaAllocator allocator,
+                VkFormat velocityFormat = VK_FORMAT_UNDEFINED);
 
-        void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
-        void setEnvironment(const VkDescriptorImageInfo& environment) const;
+    void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
+    void setEnvironment(const VkDescriptorImageInfo& environment) const;
 
-        void destroy() noexcept;
+    void destroy() noexcept;
 
-    private:
-        Buffer vertexBuffer_;
-        SkyboxPipeline pipeline_;
-        VkDevice device_ = VK_NULL_HANDLE;
-        VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
-        VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
-        std::vector<VkDescriptorSet> descriptorSets_;
-    };
+  private:
+    Buffer vertexBuffer_;
+    SkyboxPipeline pipeline_;
+    VkDevice device_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> descriptorSets_;
+};
 } // namespace Engine

@@ -16,17 +16,17 @@ struct ReflectionProbeCaptureFace final {
 };
 
 class ReflectionProbeCapture final {
-public:
+  public:
     static constexpr std::uint32_t FaceCount = 6;
     static constexpr std::uint32_t DefaultResolution = 256;
 
     [[nodiscard]] static constexpr std::array<ReflectionProbeCaptureFace, FaceCount> faces() noexcept {
-        return {{{ {1.0F, 0.0F, 0.0F}, {0.0F, -1.0F, 0.0F} },
-                 { {-1.0F, 0.0F, 0.0F}, {0.0F, -1.0F, 0.0F} },
-                 { {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F} },
-                 { {0.0F, -1.0F, 0.0F}, {0.0F, 0.0F, -1.0F} },
-                 { {0.0F, 0.0F, 1.0F}, {0.0F, -1.0F, 0.0F} },
-                 { {0.0F, 0.0F, -1.0F}, {0.0F, -1.0F, 0.0F} }}};
+        return {{{{1.0F, 0.0F, 0.0F}, {0.0F, -1.0F, 0.0F}},
+                 {{-1.0F, 0.0F, 0.0F}, {0.0F, -1.0F, 0.0F}},
+                 {{0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}},
+                 {{0.0F, -1.0F, 0.0F}, {0.0F, 0.0F, -1.0F}},
+                 {{0.0F, 0.0F, 1.0F}, {0.0F, -1.0F, 0.0F}},
+                 {{0.0F, 0.0F, -1.0F}, {0.0F, -1.0F, 0.0F}}}};
     }
 
     [[nodiscard]] static Mat4 viewMatrix(const Vec3& position, std::uint32_t face);

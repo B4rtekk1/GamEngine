@@ -2,85 +2,94 @@
 
 #include "Engine/Math/Color.h"
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 
 namespace Engine {
-    enum class AlphaMode : std::uint8_t { Opaque, Mask, Blend };
-    // Normal maps use OpenGL (+Y) by default; the shader flips Y for DirectX.
-    enum class NormalConvention : std::uint8_t { OpenGL, DirectX };
-    enum class MaterialShadingModel : std::uint8_t { Standard, Foliage };
-    // glTF defines COLOR_0 as an albedo multiplier. FBX vertex colors may
-    // carry unrelated data, so importers select the intended usage explicitly.
-    enum class VertexColorUsage : std::uint8_t { Albedo, FoliageData, TerrainWeights, None };
-    enum class MaterialTextureSlot : std::uint8_t {
-        BaseColor, MetallicRoughness, Normal, AmbientOcclusion, Opacity,
-        Translucency, Displacement, Emissive, Specular, SpecularColor, Count
-    };
+enum class AlphaMode : std::uint8_t { Opaque, Mask, Blend };
+// Normal maps use OpenGL (+Y) by default; the shader flips Y for DirectX.
+enum class NormalConvention : std::uint8_t { OpenGL, DirectX };
+enum class MaterialShadingModel : std::uint8_t { Standard, Foliage };
+// glTF defines COLOR_0 as an albedo multiplier. FBX vertex colors may
+// carry unrelated data, so importers select the intended usage explicitly.
+enum class VertexColorUsage : std::uint8_t { Albedo, FoliageData, TerrainWeights, None };
+enum class MaterialTextureSlot : std::uint8_t {
+    BaseColor,
+    MetallicRoughness,
+    Normal,
+    AmbientOcclusion,
+    Opacity,
+    Translucency,
+    Displacement,
+    Emissive,
+    Specular,
+    SpecularColor,
+    Count
+};
 
-    struct TextureCoordinateTransform final {
-        std::uint8_t texCoord{0};
-        float offsetX{0.0F};
-        float offsetY{0.0F};
-        float scaleX{1.0F};
-        float scaleY{1.0F};
-        float rotation{0.0F};
-    };
+struct TextureCoordinateTransform final {
+    std::uint8_t texCoord{0};
+    float offsetX{0.0F};
+    float offsetY{0.0F};
+    float scaleX{1.0F};
+    float scaleY{1.0F};
+    float rotation{0.0F};
+};
 
-    // Values follow the metallic/roughness workflow used by glTF.
-    struct PBRMaterial {
-        Math::Color baseColor = Math::Color::white();
-        float metallic{0.0F};
-        float roughness{0.55F}; //NOLINT
-        float aoStrength{1.0F};
-        std::int32_t baseColorTexture{-1};
-        std::int32_t metallicRoughnessTexture{-1};
-        std::int32_t normalTexture{-1};
-        std::int32_t aoTexture{-1};
-        std::int32_t opacityTexture{-1};
-        std::int32_t translucencyTexture{-1};
-        std::int32_t displacementTexture{-1};
-        // Emission is radiance in linear HDR space.  Intensity deliberately
-        // has no upper clamp: values above one feed the FP16 HDR target.
-        Math::Color emissiveColor = Math::Color::black();
-        float emissiveIntensity{0.0F};
-        std::int32_t emissiveTexture{-1};
-        std::int32_t specularTexture{-1};
-        std::int32_t specularColorTexture{-1};
-        // glTF normalTexture.scale; zero explicitly disables normal-map detail.
-        float normalScale{1.0F};
-        AlphaMode alphaMode{AlphaMode::Opaque};
-        // glTF `doubleSided`: foliage and thin cards must remain visible from
-        // either side. The fragment shader flips their shading normal per face.
-        bool doubleSided{false};
-        float alphaCutoff{0.5F}; //NOLINT
-        float displacementScale{0.0F};
-        float displacementOffset{0.0F};
-        float translucency{0.0F};
-        // KHR_materials_specular defaults. `specular` scales the dielectric
-        // F0 and is deliberately separate from legacy named Quixel maps.
-        float specular{1.0F};
-        Math::Color specularColor = Math::Color::white();
-        bool hasSpecularExtension{false};
-        float ior{1.5F};
-        NormalConvention normalConvention{NormalConvention::OpenGL};
-        MaterialShadingModel shadingModel{MaterialShadingModel::Standard};
-        VertexColorUsage vertexColorUsage{VertexColorUsage::Albedo};
-        std::array<TextureCoordinateTransform, static_cast<std::size_t>(MaterialTextureSlot::Count)> textureTransforms{};
-        // Terrain uses four albedo layers blended by the vertex splat weights.
-        std::array<std::int32_t, 4> terrainLayerTextures{-1, -1, -1, -1};
-        bool terrainLayered{false};
-        // GlassThin: thickness is the normal distance between parallel faces,
-        // in world metres. Zero attenuation distance means no volume absorption.
-        float transmission{0.0F};
-        float thickness{0.0F};
-        Math::Color attenuationColor = Math::Color::white();
-        float attenuationDistance{0.0F};
-        float dirtIntensity{0.0F};
-        std::int32_t transmissionTexture{-1};
-        std::int32_t thicknessTexture{-1};
-        std::int32_t dirtTexture{-1};
-        // transmission (R), thickness (G), dirt (R); independently transformed UVs.
-        std::array<TextureCoordinateTransform, 3> glassTextureTransforms{};
-    };
+// Values follow the metallic/roughness workflow used by glTF.
+struct PBRMaterial {
+    Math::Color baseColor = Math::Color::white();
+    float metallic{0.0F};
+    float roughness{0.55F}; // NOLINT
+    float aoStrength{1.0F};
+    std::int32_t baseColorTexture{-1};
+    std::int32_t metallicRoughnessTexture{-1};
+    std::int32_t normalTexture{-1};
+    std::int32_t aoTexture{-1};
+    std::int32_t opacityTexture{-1};
+    std::int32_t translucencyTexture{-1};
+    std::int32_t displacementTexture{-1};
+    // Emission is radiance in linear HDR space.  Intensity deliberately
+    // has no upper clamp: values above one feed the FP16 HDR target.
+    Math::Color emissiveColor = Math::Color::black();
+    float emissiveIntensity{0.0F};
+    std::int32_t emissiveTexture{-1};
+    std::int32_t specularTexture{-1};
+    std::int32_t specularColorTexture{-1};
+    // glTF normalTexture.scale; zero explicitly disables normal-map detail.
+    float normalScale{1.0F};
+    AlphaMode alphaMode{AlphaMode::Opaque};
+    // glTF `doubleSided`: foliage and thin cards must remain visible from
+    // either side. The fragment shader flips their shading normal per face.
+    bool doubleSided{false};
+    float alphaCutoff{0.5F}; // NOLINT
+    float displacementScale{0.0F};
+    float displacementOffset{0.0F};
+    float translucency{0.0F};
+    // KHR_materials_specular defaults. `specular` scales the dielectric
+    // F0 and is deliberately separate from legacy named Quixel maps.
+    float specular{1.0F};
+    Math::Color specularColor = Math::Color::white();
+    bool hasSpecularExtension{false};
+    float ior{1.5F};
+    NormalConvention normalConvention{NormalConvention::OpenGL};
+    MaterialShadingModel shadingModel{MaterialShadingModel::Standard};
+    VertexColorUsage vertexColorUsage{VertexColorUsage::Albedo};
+    std::array<TextureCoordinateTransform, static_cast<std::size_t>(MaterialTextureSlot::Count)> textureTransforms{};
+    // Terrain uses four albedo layers blended by the vertex splat weights.
+    std::array<std::int32_t, 4> terrainLayerTextures{-1, -1, -1, -1};
+    bool terrainLayered{false};
+    // GlassThin: thickness is the normal distance between parallel faces,
+    // in world metres. Zero attenuation distance means no volume absorption.
+    float transmission{0.0F};
+    float thickness{0.0F};
+    Math::Color attenuationColor = Math::Color::white();
+    float attenuationDistance{0.0F};
+    float dirtIntensity{0.0F};
+    std::int32_t transmissionTexture{-1};
+    std::int32_t thicknessTexture{-1};
+    std::int32_t dirtTexture{-1};
+    // transmission (R), thickness (G), dirt (R); independently transformed UVs.
+    std::array<TextureCoordinateTransform, 3> glassTextureTransforms{};
+};
 } // namespace Engine

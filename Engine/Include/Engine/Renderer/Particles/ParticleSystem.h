@@ -1,162 +1,171 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
-#include <vk_mem_alloc.h>
+#include "Engine/ECS/Components/GlassDestructionComponent.h"
+#include "Engine/Math/Mat4.h"
+#include "Engine/Math/Vec4.h"
+#include "Engine/Renderer/Particles/ParticleTypes.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-
-#include "Engine/Renderer/Particles/ParticleTypes.h"
-#include "Engine/ECS/Components/GlassDestructionComponent.h"
-#include "Engine/Math/Vec4.h"
-#include "Engine/Math/Mat4.h"
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
 
 namespace Engine::Particles {
-    struct Particle {
-        Vec4 positionLife;
-        Vec4 velocitySize;
-        Color color;
-        // initial size, final size, total lifetime, authored opacity
-        Vec4 spawnData;
-    };
+struct Particle {
+    Vec4 positionLife;
+    Vec4 velocitySize;
+    Color color;
+    // initial size, final size, total lifetime, authored opacity
+    Vec4 spawnData;
+};
 
-    struct ParticleFrameData {
-        Mat4 viewProjection;
-        Mat4 previousViewProjection;
-        Vec3 cameraRight{1.0F, 0.0F, 0.0F};
-        float _pad0 = 0.0F;
-        Vec3 cameraUp{0.0F, 1.0F, 0.0F};
-        float _pad1 = 0.0F;
-        Vec3 previousCameraRight{1.0F, 0.0F, 0.0F};
-        float _pad2 = 0.0F;
-        Vec3 previousCameraUp{0.0F, 1.0F, 0.0F};
-        float _pad3 = 0.0F;
-        float deltaTime = 0.0F;
-        float _pad4[3]{};
-    };
+struct ParticleFrameData {
+    Mat4 viewProjection;
+    Mat4 previousViewProjection;
+    Vec3 cameraRight{1.0F, 0.0F, 0.0F};
+    float _pad0 = 0.0F;
+    Vec3 cameraUp{0.0F, 1.0F, 0.0F};
+    float _pad1 = 0.0F;
+    Vec3 previousCameraRight{1.0F, 0.0F, 0.0F};
+    float _pad2 = 0.0F;
+    Vec3 previousCameraUp{0.0F, 1.0F, 0.0F};
+    float _pad3 = 0.0F;
+    float deltaTime = 0.0F;
+    float _pad4[3]{};
+};
 
-    /** World-space axis-aligned obstacle used by the smoke simulation. */
-    struct ParticleCollider {
-        Vec4 center;
-        Vec4 halfExtents;
-    };
+/** World-space axis-aligned obstacle used by the smoke simulation. */
+struct ParticleCollider {
+    Vec4 center;
+    Vec4 halfExtents;
+};
 
-    /** Parameters consumed by particle_simulation::main. Keep this layout in sync
-     * with the push-constant block in that shader. */
-    struct alignas(16) ParticleSimulationData {
-        float deltaTime = 0.0F;
-        uint32_t spawnStart = 0;
-        uint32_t spawnCount = 0;
-        uint32_t maxParticles = 0;
-        uint32_t spawnSeed = 0;
-        uint32_t colliderCount = 0;
-        float padding[2]{};
-        float emitterPositionMinLife[4]{};
-        float minVelocityMinSize[4]{};
-        float maxVelocity[4]{};
-        float color[4]{};
-        float maxLifeMaxSize[4]{};
-        float smokeDynamics[4]{}; // buoyancy, drag, turbulence, collision radius
-    };
+/** Parameters consumed by particle_simulation::main. Keep this layout in sync
+ * with the push-constant block in that shader. */
+struct alignas(16) ParticleSimulationData {
+    float deltaTime = 0.0F;
+    uint32_t spawnStart = 0;
+    uint32_t spawnCount = 0;
+    uint32_t maxParticles = 0;
+    uint32_t spawnSeed = 0;
+    uint32_t colliderCount = 0;
+    float padding[2]{};
+    float emitterPositionMinLife[4]{};
+    float minVelocityMinSize[4]{};
+    float maxVelocity[4]{};
+    float color[4]{};
+    float maxLifeMaxSize[4]{};
+    float smokeDynamics[4]{}; // buoyancy, drag, turbulence, collision radius
+};
 
-    static_assert(sizeof(ParticleSimulationData) == 128);
-    static_assert(offsetof(ParticleSimulationData, emitterPositionMinLife) == 32);
+static_assert(sizeof(ParticleSimulationData) == 128);
+static_assert(offsetof(ParticleSimulationData, emitterPositionMinLife) == 32);
 
-    class ParticleSystem {
-    public:
-        static constexpr uint32_t FramesInFlight = 2;
+class ParticleSystem {
+  public:
+    static constexpr uint32_t FramesInFlight = 2;
 
-        ParticleSystem(VkDevice device, VmaAllocator allocator, VkQueue computeQueue, VkCommandPool commandPool,
-                       uint32_t maxParticles);
+    ParticleSystem(VkDevice device, VmaAllocator allocator, VkQueue computeQueue, VkCommandPool commandPool,
+                   uint32_t maxParticles);
 
-        ~ParticleSystem();
+    ~ParticleSystem();
 
-        void update(float deltaTime);
-        void enqueueGlassBurst(const GlassParticleBurst &burst) { if (pendingGlassBursts_.size() < 1024) pendingGlassBursts_.push_back(burst); }
+    void update(float deltaTime);
+    void enqueueGlassBurst(const GlassParticleBurst& burst) {
+        if (pendingGlassBursts_.size() < 1024)
+            pendingGlassBursts_.push_back(burst);
+    }
 
-        void setEmitter(const ParticleEmitter &emitter) { emitter_ = emitter; }
+    void setEmitter(const ParticleEmitter& emitter) {
+        emitter_ = emitter;
+    }
 
-        void setEmitter(const SmokeEmitter &emitter) {
-            emitter_ = static_cast<ParticleEmitter>(emitter);
-            smoke_ = emitter;
-        }
+    void setEmitter(const SmokeEmitter& emitter) {
+        emitter_ = static_cast<ParticleEmitter>(emitter);
+        smoke_ = emitter;
+    }
 
-        void setColliders(const std::vector<ParticleCollider> &colliders) { colliders_ = colliders; }
+    void setColliders(const std::vector<ParticleCollider>& colliders) {
+        colliders_ = colliders;
+    }
 
-        /** Records the GPU simulation and makes its writes visible to rendering. */
-        void recordCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline,
-                           VkPipelineLayout pipelineLayout, uint32_t frameIndex) const;
+    /** Records the GPU simulation and makes its writes visible to rendering. */
+    void recordCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline, VkPipelineLayout pipelineLayout,
+                       uint32_t frameIndex) const;
 
-        void recordRender(VkCommandBuffer commandBuffer,
-                          const ParticleFrameData &frameData,
-                          VkPipeline pipeline, VkPipelineLayout pipelineLayout,
-                          uint32_t frameIndex, bool sceneView = false) const;
+    void recordRender(VkCommandBuffer commandBuffer, const ParticleFrameData& frameData, VkPipeline pipeline,
+                      VkPipelineLayout pipelineLayout, uint32_t frameIndex, bool sceneView = false) const;
 
-        [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const noexcept {
-            return descriptorSetLayout_;
-        }
-        /// Upload dependency consumed by the first particle simulation pass.
-        [[nodiscard]] VkBuffer particleBuffer() const noexcept { return particleBuffer_; }
-        [[nodiscard]] VkDeviceSize particleBufferSize() const noexcept {
-            return sizeof(Particle) * static_cast<VkDeviceSize>(maxParticles_);
-        }
-        [[nodiscard]] std::uint64_t readyTimeline() const noexcept { return readyTimeline_; }
+    [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const noexcept {
+        return descriptorSetLayout_;
+    }
+    /// Upload dependency consumed by the first particle simulation pass.
+    [[nodiscard]] VkBuffer particleBuffer() const noexcept {
+        return particleBuffer_;
+    }
+    [[nodiscard]] VkDeviceSize particleBufferSize() const noexcept {
+        return sizeof(Particle) * static_cast<VkDeviceSize>(maxParticles_);
+    }
+    [[nodiscard]] std::uint64_t readyTimeline() const noexcept {
+        return readyTimeline_;
+    }
 
-    private:
-        void createBuffers();
+  private:
+    void createBuffers();
 
-        void createDescriptorResources();
+    void createDescriptorResources();
 
-        void createQuadBuffer();
+    void createQuadBuffer();
 
-        void uploadInitialParticles();
+    void uploadInitialParticles();
 
-        void uploadColliders();
+    void uploadColliders();
 
-        void destroy();
+    void destroy();
 
-        VkDevice device_{};
-        VmaAllocator allocator_{};
-        VkQueue computeQueue_{};
-        VkCommandPool commandPool_{};
-        static constexpr uint32_t RenderTargets = 2;
-        VkBuffer particleBuffer_{};
-        VmaAllocation particleMemory_{};
-        std::uint64_t readyTimeline_{};
-        std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> frameBuffers_{};
-        std::array<VkBuffer, FramesInFlight> activeIndexBuffers_{};
-        std::array<VmaAllocation, FramesInFlight> activeIndexMemories_{};
-        std::array<VkBuffer, FramesInFlight> drawBuffers_{};
-        std::array<VmaAllocation, FramesInFlight> drawMemories_{};
-        VkBuffer quadBuffer_{};
-        VmaAllocation quadMemory_{};
-        VkDescriptorSetLayout descriptorSetLayout_{};
-        VkDescriptorPool descriptorPool_{};
-        std::array<std::array<VkDescriptorSet, FramesInFlight>, RenderTargets> descriptorSets_{};
-        uint32_t maxParticles_ = 0;
-        ParticleEmitter emitter_{};
-        SmokeEmitter smoke_;
-        ParticleSimulationData simulation_{};
-        std::vector<GlassParticleBurst> pendingGlassBursts_;
-        std::vector<ParticleSimulationData> glassBurstSimulations_;
-        std::array<std::array<void *, FramesInFlight>, RenderTargets> frameMapped_{};
-        std::array<VkBuffer, FramesInFlight> smallArenaBuffers_{};
-        std::array<VmaAllocation, FramesInFlight> smallArenaAllocations_{};
-        std::array<void*, FramesInFlight> smallArenaMapped_{};
-        std::array<std::array<VkDeviceSize, FramesInFlight>, RenderTargets> frameOffsets_{};
-        std::array<VkDeviceSize, FramesInFlight> drawOffsets_{};
-        void *quadMapped_ = nullptr;
-        uint32_t nextSpawnIndex_ = 0;
-        uint32_t spawnSeed_ = 0;
-        static constexpr uint32_t MaxColliders = 64;
-        VkBuffer colliderBuffer_{};
-        VmaAllocation colliderMemory_{};
-        void *colliderMapped_ = nullptr;
-        std::vector<ParticleCollider> colliders_;
-        std::vector<ParticleCollider> activeColliders_;
-        std::vector<ParticleCollider> uploadedColliders_;
-    };
-    // NOLINTEND(readability-magic-numbers)
+    VkDevice device_{};
+    VmaAllocator allocator_{};
+    VkQueue computeQueue_{};
+    VkCommandPool commandPool_{};
+    static constexpr uint32_t RenderTargets = 2;
+    VkBuffer particleBuffer_{};
+    VmaAllocation particleMemory_{};
+    std::uint64_t readyTimeline_{};
+    std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> frameBuffers_{};
+    std::array<VkBuffer, FramesInFlight> activeIndexBuffers_{};
+    std::array<VmaAllocation, FramesInFlight> activeIndexMemories_{};
+    std::array<VkBuffer, FramesInFlight> drawBuffers_{};
+    std::array<VmaAllocation, FramesInFlight> drawMemories_{};
+    VkBuffer quadBuffer_{};
+    VmaAllocation quadMemory_{};
+    VkDescriptorSetLayout descriptorSetLayout_{};
+    VkDescriptorPool descriptorPool_{};
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, RenderTargets> descriptorSets_{};
+    uint32_t maxParticles_ = 0;
+    ParticleEmitter emitter_{};
+    SmokeEmitter smoke_;
+    ParticleSimulationData simulation_{};
+    std::vector<GlassParticleBurst> pendingGlassBursts_;
+    std::vector<ParticleSimulationData> glassBurstSimulations_;
+    std::array<std::array<void*, FramesInFlight>, RenderTargets> frameMapped_{};
+    std::array<VkBuffer, FramesInFlight> smallArenaBuffers_{};
+    std::array<VmaAllocation, FramesInFlight> smallArenaAllocations_{};
+    std::array<void*, FramesInFlight> smallArenaMapped_{};
+    std::array<std::array<VkDeviceSize, FramesInFlight>, RenderTargets> frameOffsets_{};
+    std::array<VkDeviceSize, FramesInFlight> drawOffsets_{};
+    void* quadMapped_ = nullptr;
+    uint32_t nextSpawnIndex_ = 0;
+    uint32_t spawnSeed_ = 0;
+    static constexpr uint32_t MaxColliders = 64;
+    VkBuffer colliderBuffer_{};
+    VmaAllocation colliderMemory_{};
+    void* colliderMapped_ = nullptr;
+    std::vector<ParticleCollider> colliders_;
+    std::vector<ParticleCollider> activeColliders_;
+    std::vector<ParticleCollider> uploadedColliders_;
+};
+// NOLINTEND(readability-magic-numbers)
 
-}
+} // namespace Engine::Particles

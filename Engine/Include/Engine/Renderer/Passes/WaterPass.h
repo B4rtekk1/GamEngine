@@ -2,12 +2,13 @@
 
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 
+#include <array>
 #include <vulkan/vulkan.h>
 
-#include <array>
-
 namespace Engine {
-namespace Culling { class IndexedIndirectDrawCount; }
+namespace Culling {
+class IndexedIndirectDrawCount;
+}
 
 /**
  * Dedicated compositing pass for water surfaces.
@@ -17,26 +18,24 @@ namespace Culling { class IndexedIndirectDrawCount; }
  * prevents water from becoming an opaque depth-prepass material.
  */
 class WaterPass final {
-public:
-    void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat,
-                VkSampleCountFlagBits samples, VkFormat depthResolveFormat,
-                VkResolveModeFlagBits depthResolveMode, VkDescriptorSetLayout sceneLayout,
-                Assets::AssetManager& assets, bool velocity,
-                const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth);
+  public:
+    void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples,
+                VkFormat depthResolveFormat, VkResolveModeFlagBits depthResolveMode, VkDescriptorSetLayout sceneLayout,
+                Assets::AssetManager& assets, bool velocity, const VkDescriptorImageInfo& opaqueColor,
+                const VkDescriptorImageInfo& opaqueDepth);
     void destroy() noexcept;
-    void begin(VkCommandBuffer commandBuffer, VkImageView colorView, VkImageView depthView,
-               VkImageView velocityView, VkImageView colorResolveView, VkImageView depthResolveView, VkExtent2D extent,
-               VkDescriptorSet sceneDescriptorSet, std::uint32_t frameIndex,
-               VkBuffer vertexBuffer, VkBuffer indexBuffer) const;
+    void begin(VkCommandBuffer commandBuffer, VkImageView colorView, VkImageView depthView, VkImageView velocityView,
+               VkImageView colorResolveView, VkImageView depthResolveView, VkExtent2D extent,
+               VkDescriptorSet sceneDescriptorSet, std::uint32_t frameIndex, VkBuffer vertexBuffer,
+               VkBuffer indexBuffer) const;
     void draw(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
-              const Culling::IndexedIndirectDrawCount& indirectDraw,
-              VkDeviceSize commandOffset, VkDeviceSize countOffset) const;
+              const Culling::IndexedIndirectDrawCount& indirectDraw, VkDeviceSize commandOffset,
+              VkDeviceSize countOffset) const;
     static void end(VkCommandBuffer commandBuffer);
 
-private:
+  private:
     static constexpr std::uint32_t FramesInFlight = 2;
-    void createSceneDescriptors(const VkDescriptorImageInfo& opaqueColor,
-                                const VkDescriptorImageInfo& opaqueDepth);
+    void createSceneDescriptors(const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth);
     GraphicsPipeline pipeline_;
     VkDevice device_{VK_NULL_HANDLE};
     VkDescriptorSetLayout sceneTextureLayout_{VK_NULL_HANDLE};

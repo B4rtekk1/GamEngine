@@ -15,7 +15,7 @@ namespace Engine {
  * mip-zero texels are made available to the baker.  The GPU baker must retain
  * the same mip-to-roughness contract. */
 class EnvironmentBaker final {
-public:
+  public:
     using RadianceSampler = std::function<Vec3(const Vec3& direction)>;
     // Samples the filtered source environment at an explicit, fractional mip.
     // The prefilter uses this to match a GGX sample's solid-angle footprint.
@@ -23,32 +23,31 @@ public:
 
     /** Maps a cubemap mip to the PBR roughness it represents. */
     [[nodiscard]] static constexpr float roughnessForMip(const std::uint32_t mip,
-                                                          const std::uint32_t mipLevels) noexcept {
+                                                         const std::uint32_t mipLevels) noexcept {
         return mipLevels > 1 ? static_cast<float>(mip) / static_cast<float>(mipLevels - 1) : 0.0F;
     }
 
-    [[nodiscard]] static std::vector<float> bakeCubemap(
-        std::uint32_t faceSize, std::uint32_t mipLevels,
-        const std::function<Vec3(const Vec3&, std::uint32_t, std::uint32_t)>& evaluator);
+    [[nodiscard]] static std::vector<float>
+    bakeCubemap(std::uint32_t faceSize, std::uint32_t mipLevels,
+                const std::function<Vec3(const Vec3&, std::uint32_t, std::uint32_t)>& evaluator);
 
     /** GGX-convolves source into a complete mip chain. Mip zero has roughness
      * 0 and the final mip has roughness 1. */
-    [[nodiscard]] static std::vector<float> bakePrefilteredCubemap(
-        std::uint32_t faceSize, std::uint32_t mipLevels, std::uint32_t sourceFaceSize,
-        std::uint32_t sourceMipLevels, const MipRadianceSampler& source);
+    [[nodiscard]] static std::vector<float> bakePrefilteredCubemap(std::uint32_t faceSize, std::uint32_t mipLevels,
+                                                                   std::uint32_t sourceFaceSize,
+                                                                   std::uint32_t sourceMipLevels,
+                                                                   const MipRadianceSampler& source);
 
     [[nodiscard]] static Vec3 diffuseIrradiance(const Vec3& normal, const RadianceSampler& source);
 
     /** Builds the split-sum GGX BRDF integration table as RG16F texels.
      * This is intentionally a cooker-only operation; applications load the
      * resulting immutable asset rather than integrating it at startup. */
-    [[nodiscard]] static std::vector<std::uint16_t> generateBrdfLut(
-        std::uint32_t size, std::uint32_t samples);
+    [[nodiscard]] static std::vector<std::uint16_t> generateBrdfLut(std::uint32_t size, std::uint32_t samples);
 
-private:
-    [[nodiscard]] static Vec3 prefilter(const Vec3& reflection, float roughness,
-                                        std::uint32_t sourceFaceSize, std::uint32_t sourceMipLevels,
-                                        const MipRadianceSampler& source);
+  private:
+    [[nodiscard]] static Vec3 prefilter(const Vec3& reflection, float roughness, std::uint32_t sourceFaceSize,
+                                        std::uint32_t sourceMipLevels, const MipRadianceSampler& source);
 };
 
 } // namespace Engine

@@ -5,31 +5,51 @@
 #include <optional>
 
 namespace Engine {
-//NOLINTBEGIN
+// NOLINTBEGIN
 class Registry;
 
 /** Owns gameplay and editor Scene View camera state and input handling. */
 class CameraController final {
-public:
-    void setEditorInputEnabled(bool enabled) noexcept { editorInputEnabled_ = enabled; }
-    [[nodiscard]] bool editorInputEnabled() const noexcept { return editorInputEnabled_; }
-    void setGameInputEnabled(bool enabled) noexcept { gameInputEnabled_ = enabled; }
-    [[nodiscard]] bool gameInputEnabled() const noexcept { return gameInputEnabled_; }
+  public:
+    void setEditorInputEnabled(bool enabled) noexcept {
+        editorInputEnabled_ = enabled;
+    }
+    [[nodiscard]] bool editorInputEnabled() const noexcept {
+        return editorInputEnabled_;
+    }
+    void setGameInputEnabled(bool enabled) noexcept {
+        gameInputEnabled_ = enabled;
+    }
+    [[nodiscard]] bool gameInputEnabled() const noexcept {
+        return gameInputEnabled_;
+    }
     void update(Registry& registry);
     void updateEditor();
 
-    [[nodiscard]] const std::optional<Camera>& camera() const noexcept { return camera_; }
-    [[nodiscard]] std::optional<Camera>& camera() noexcept { return camera_; }
-    [[nodiscard]] Vec3 editorPosition() const noexcept { return editorPosition_; }
-    [[nodiscard]] float editorYaw() const noexcept { return editorYaw_; }
-    [[nodiscard]] float editorPitch() const noexcept { return editorPitch_; }
-    void setEditorPosition(const Vec3& position) noexcept { editorPosition_ = position; }
+    [[nodiscard]] const std::optional<Camera>& camera() const noexcept {
+        return camera_;
+    }
+    [[nodiscard]] std::optional<Camera>& camera() noexcept {
+        return camera_;
+    }
+    [[nodiscard]] Vec3 editorPosition() const noexcept {
+        return editorPosition_;
+    }
+    [[nodiscard]] float editorYaw() const noexcept {
+        return editorYaw_;
+    }
+    [[nodiscard]] float editorPitch() const noexcept {
+        return editorPitch_;
+    }
+    void setEditorPosition(const Vec3& position) noexcept {
+        editorPosition_ = position;
+    }
     void setEditorRotation(const float yaw, const float pitch) noexcept {
         editorYaw_ = yaw;
         editorPitch_ = pitch;
     }
 
-private:
+  private:
     std::optional<Camera> camera_;
     bool editorInputEnabled_{false};
     bool gameInputEnabled_{false};
@@ -39,4 +59,4 @@ private:
 };
 
 } // namespace Engine
-//NOLINTEND
+// NOLINTEND
