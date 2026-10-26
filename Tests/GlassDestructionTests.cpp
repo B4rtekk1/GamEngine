@@ -1048,7 +1048,7 @@ TEST(GlassDestruction, NewImpactPreservesLiveShardBindingsAndConservesArea) {
     }
 }
 
-TEST(GlassDestruction, WeakShotsRevealPrimarySpiderwebAndIndependentSecondaryCracks) {
+TEST(GlassDestruction, WeakShotsRevealImpactCenteredFractureGraphs) {
     Engine::Scene scene;
     const auto pane = Engine::GlassDestructionSystem::createPane(scene, "Surface cracks");
     const auto entity = scene.findEntity(pane.id());
@@ -1061,18 +1061,20 @@ TEST(GlassDestruction, WeakShotsRevealPrimarySpiderwebAndIndependentSecondaryCra
     for (const auto& crack : glass.cracks) {
         const auto segments = Engine::GlassDestructionSystem::crackSegments(glass, crack);
         ASSERT_FALSE(segments.empty());
-        unsigned origins = 0;
+        unsigned origins = 0, graphSegments = 0;
         float reach = 0;
         for (const auto& segment : segments) {
             origins += glm::distance(segment.start, crack.position) < 0.00001F ||
                        glm::distance(segment.end, crack.position) < 0.00001F;
             reach = std::max(reach, glm::distance(segment.end, crack.position));
-            if (crack.position != glass.cracks.front().position)
-                for (const auto& bond : glass.bonds)
-                    EXPECT_FALSE(segment.start == bond.edgeStart && segment.end == bond.edgeEnd);
+            graphSegments += std::ranges::any_of(glass.bonds, [&](const auto& bond) {
+                return (segment.start == bond.edgeStart && segment.end == bond.edgeEnd) ||
+                       (segment.start == bond.edgeEnd && segment.end == bond.edgeStart);
+            });
         }
         EXPECT_GE(origins, 7U);
         EXPECT_GT(reach, crack.radius * 0.2F);
+        EXPECT_GT(graphSegments, 0U);
     }
     EXPECT_FALSE(glass.fractured);
 }

@@ -30,7 +30,9 @@ struct GlassParticleBurst final {
 struct GlassSimulationSettings final {
     std::uint32_t maxDynamicFragmentsGlobal{256};
     std::uint32_t maxNewDynamicFragmentsPerStep{32}; // Burst cap; excess uses GPU debris.
-    float minDynamicFragmentArea{0.0004F};
+    // Keep tiny chips in the batched GPU burst path instead of creating
+    // individual ECS actors and PhysX shapes for them.
+    float minDynamicFragmentArea{0.0012F};
     float kineticEnergyFraction{0.08F};
     float maxLinearSpeed{15.0F};
     bool adaptivePhysicsBudget{true};
@@ -93,6 +95,10 @@ struct GlassDestructionComponent final {
     bool hadPhysicalSupport{};
     std::vector<GlassFragment> fragments;
     std::vector<GlassBond> bonds;
+    // Runtime bond-index adjacency used by support traversal. It is rebuilt
+    // only when fracture topology changes, not for each simulation update.
+    std::vector<std::vector<std::uint32_t>> bondAdjacency;
+    bool bondAdjacencyValid{};
     mutable std::shared_ptr<Mesh> fractureRenderGeometry;
     mutable std::shared_ptr<Mesh> intactRenderGeometry;
     std::shared_ptr<const GlassDestructionComponent> fractureTemplate; // Immutable geometry pool owner.

@@ -1083,10 +1083,10 @@ class Renderer::Backend {
         }
     }
 
-#include "renderer_backend_cleanup.inl"
-#include "renderer_backend_frame.inl"
-#include "renderer_backend_resources.inl"
 #include "renderer_backend_state.inl"
+#include "renderer_backend_resources.inl"
+#include "renderer_backend_frame.inl"
+#include "renderer_backend_cleanup.inl"
 };
 
 #include "renderer_api.inl"

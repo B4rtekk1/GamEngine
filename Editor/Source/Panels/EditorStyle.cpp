@@ -151,9 +151,9 @@ void EditorStyle::apply() {
     colors[ImGuiCol_SliderGrabActive] = kActiveSliderGrab;
     colors[ImGuiCol_Tab] = kTab;
     colors[ImGuiCol_TabHovered] = kHoveredTab;
-    colors[ImGuiCol_TabActive] = kActiveTab;
-    colors[ImGuiCol_TabUnfocused] = kUnfocusedTab;
-    colors[ImGuiCol_TabUnfocusedActive] = kUnfocusedTabActive;
+    colors[ImGuiCol_TabSelected] = kActiveTab;
+    colors[ImGuiCol_TabDimmed] = kUnfocusedTab;
+    colors[ImGuiCol_TabDimmedSelected] = kUnfocusedTabActive;
     colors[ImGuiCol_DockingPreview] = kDockingPreview;
     colors[ImGuiCol_DockingEmptyBg] = kMenuBarBackground;
     colors[ImGuiCol_ResizeGrip] = kResizeGrip;

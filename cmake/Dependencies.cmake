@@ -16,8 +16,8 @@ set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/thirdparty" CACHE PATH
 
 FetchContent_Declare(cgltf
     GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
-    GIT_TAG v1.9
-    GIT_SHALLOW TRUE
+    GIT_TAG 85cd62382dfea638278962690cf515023f33ed00
+    GIT_SHALLOW FALSE
     SOURCE_SUBDIR cmake-not-used)
 FetchContent_Declare(meshoptimizer
     GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
@@ -27,12 +27,12 @@ FetchContent_Declare(meshoptimizer
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
     SOURCE_SUBDIR cmake-not-used)
 FetchContent_Declare(ufbx
     GIT_REPOSITORY https://github.com/ufbx/ufbx.git
-    GIT_TAG v0.9.0
-    GIT_SHALLOW TRUE
+    GIT_TAG 5955c5c0b042ac2dc6f32955ab206aaec0620cfc
+    GIT_SHALLOW FALSE
     SOURCE_SUBDIR cmake-not-used)
 FetchContent_Declare(VulkanMemoryAllocator
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
@@ -45,7 +45,7 @@ set(GAMEENGINE_CGLTF_INCLUDE_DIR "${cgltf_SOURCE_DIR}")
 set(GAMEENGINE_MESHOPTIMIZER_INCLUDE_DIR "${meshoptimizer_SOURCE_DIR}")
 set(GAMEENGINE_STB_INCLUDE_DIR "${stb_SOURCE_DIR}")
 set(GAMEENGINE_UFBX_INCLUDE_DIR "${ufbx_SOURCE_DIR}")
-set(GAMEENGINE_VMA_INCLUDE_DIR "${vulkanmemoryallocator_SOURCE_DIR}")
+set(GAMEENGINE_VMA_INCLUDE_DIR "${vulkanmemoryallocator_SOURCE_DIR}/include")
 
 set(PX_GENERATE_GPU_PROJECTS OFF CACHE BOOL "Build PhysX GPU projects" FORCE)
 set(PX_GENERATE_STATIC_LIBRARIES ON CACHE BOOL "Build PhysX static libraries" FORCE)
@@ -109,7 +109,7 @@ set(GAMEENGINE_COMPRESSONATOR_REVISION "f4b53d79ec5abbb50924f58aebb7bf2793200b94
 FetchContent_Declare(CompressonatorCore
     GIT_REPOSITORY https://github.com/GPUOpen-Tools/compressonator.git
     GIT_TAG ${GAMEENGINE_COMPRESSONATOR_REVISION}
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
     SOURCE_SUBDIR cmp_core)
 FetchContent_MakeAvailable(CompressonatorCore)
 if(UNIX AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

@@ -278,6 +278,42 @@ class Scene {
     void clearGlassParticleBursts() noexcept {
         glassParticleBursts_.clear();
     }
+    [[nodiscard]] Actor acquireGlassDebrisActor(std::string name) {
+        while (!glassDebrisPool_.empty()) {
+            const Entity entity = glassDebrisPool_.back();
+            glassDebrisPool_.pop_back();
+            if (!valid(entity))
+                continue;
+            if (const auto* existing = find(name); existing != nullptr && existing->entity() != entity)
+                name += " " + std::to_string(entity);
+            rename(entity, std::move(name));
+            return Actor{*this, findByEntity(entity)->objectId()};
+        }
+        return createActor(std::move(name));
+    }
+    void recycleGlassDebrisActor(Entity entity) {
+        if (!valid(entity))
+            return;
+        GlassDestructionSystem::onActorDestroyed(*this, entity);
+        if (registry_.has<ColliderComponent>(entity))
+            registry_.remove<ColliderComponent>(entity);
+        if (registry_.has<RigidbodyComponent>(entity))
+            registry_.remove<RigidbodyComponent>(entity);
+        if (registry_.has<RigidbodyState>(entity))
+            registry_.remove<RigidbodyState>(entity);
+        if (registry_.has<MeshRendererComponent>(entity))
+            registry_.remove<MeshRendererComponent>(entity);
+        if (registry_.has<GlassFragmentBindingComponent>(entity))
+            registry_.remove<GlassFragmentBindingComponent>(entity);
+        if (registry_.has<GlassDebrisComponent>(entity))
+            registry_.remove<GlassDebrisComponent>(entity);
+        if (glassDebrisPool_.size() < 256) {
+            rename(entity, "__glass_debris_pool_" + std::to_string(entity));
+            glassDebrisPool_.push_back(entity);
+        } else {
+            destroy(entity);
+        }
+    }
     [[nodiscard]] GlassSimulationSettings& glassSimulationSettings() noexcept {
         return glassSimulationSettings_;
     }
@@ -705,6 +741,7 @@ class Scene {
     std::uint32_t glassNewDynamicFragments_{};
     double glassPhysicsAverageMs_{};
     std::vector<GlassParticleBurst> glassParticleBursts_;
+    std::vector<Entity> glassDebrisPool_;
     GlassSimulationSettings glassSimulationSettings_;
     Physics physics_;
     std::vector<std::unique_ptr<GameObject>> objects_;

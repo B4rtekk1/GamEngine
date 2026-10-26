@@ -301,7 +301,13 @@ void GlassPass::recordCracks(VkCommandBuffer commandBuffer, const Scene& scene, 
         glm::uvec4 tile, region;
     };
     static_assert(sizeof(Stamp) == 64);
+
+    // Collect all stamps first, then dispatch in a single batch.
+    // The shader uses max() which is commutative, so no per-segment barrier is needed.
+    std::vector<Stamp> stamps;
+    stamps.reserve(256);
     unsigned budget = 256;
+
     scene.view().view<GlassDestructionComponent, UUIDComponent>([&](Entity, const auto& glass, const auto& uuid) {
         const unsigned slot = glass.crackAtlasIndex;
         if (slot >= atlasLayers_)
@@ -383,15 +389,7 @@ void GlassPass::recordCracks(VkCommandBuffer commandBuffer, const Scene& scene, 
                 const auto end = glm::uvec2{glm::ceil(high * float(AtlasResolution))};
                 stamp.region = {start, end - start};
             }
-            vkCmdPushConstants(commandBuffer, crackPipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(stamp),
-                               &stamp);
-            if (stamp.region.z && stamp.region.w)
-                vkCmdDispatch(commandBuffer, (stamp.region.z + 7) / 8, (stamp.region.w + 7) / 8, 1);
-            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            vkCmdPipelineBarrier2(commandBuffer, &dependency);
+            stamps.push_back(stamp);
             if (!reset && hasCrack) {
                 ++state.segmentOffset;
                 if (state.segmentOffset >= segments.size()) {
@@ -404,6 +402,16 @@ void GlassPass::recordCracks(VkCommandBuffer commandBuffer, const Scene& scene, 
             reset = false;
         } while (state.submitted < glass.cracks.size());
     });
+
+    // Batch dispatch all stamps in a single pass — no per-segment barriers needed
+    // because the shader uses max() which is commutative and associative.
+    for (const auto& stamp : stamps) {
+        vkCmdPushConstants(commandBuffer, crackPipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(stamp),
+                           &stamp);
+        if (stamp.region.z && stamp.region.w)
+            vkCmdDispatch(commandBuffer, (stamp.region.z + 7) / 8, (stamp.region.w + 7) / 8, 1);
+    }
+
     vmaFlushAllocation(allocator_, crackMetadataMemory_[frame], 0, VK_WHOLE_SIZE);
     barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
