@@ -14,6 +14,18 @@ namespace Engine {
 namespace {
 constexpr std::string_view DeclarationMarker = "// GENERATED_SHADER_GRAPH_DECLARATIONS";
 
+/**
+ * Slang debug information is only consumed by graphics debuggers stepping
+ * through generated shader code. It inflates the emitted SPIR-V and slows the
+ * compiler down, so optimized builds omit it. The flag is part of the cache
+ * key below, so switching configurations can never reuse a mismatched module.
+ */
+#if defined(NDEBUG)
+constexpr const char* ShaderGraphDebugInfoFlag = "-g0";
+#else
+constexpr const char* ShaderGraphDebugInfoFlag = "-g2";
+#endif
+
 [[nodiscard]] std::string readText(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file)
@@ -180,8 +192,8 @@ struct MaterialSurface
         appendCacheInput(cacheInput, "shader-graph-cache-schema", "1");
         appendCacheInput(cacheInput, "generated-surface", result.slang);
         appendCacheInput(cacheInput, "compile-flags",
-                         "-target=spirv;-profile=glsl_460;-emit-spirv-directly;-g2;"
-                         "-matrix-layout-row-major;FORWARD_OUTPUT_VELOCITY=0,1");
+                         std::string{"-target=spirv;-profile=glsl_460;-emit-spirv-directly;"} +
+                             ShaderGraphDebugInfoFlag + ";-matrix-layout-row-major;FORWARD_OUTPUT_VELOCITY=0,1");
         // Hash the compiler binary rather than querying --version: this avoids
         // an extra process on a warm start and invalidates the cache for every
         // compiler-version change.
@@ -215,7 +227,7 @@ struct MaterialSurface
                                    "-profile",
                                    "glsl_460",
                                    "-emit-spirv-directly",
-                                   "-g2",
+                                   ShaderGraphDebugInfoFlag,
                                    "-matrix-layout-row-major",
                                    "-I",
                                    includeDirectoryString.c_str(),
@@ -266,7 +278,7 @@ struct MaterialSurface
                                              "-profile",
                                              "glsl_460",
                                              "-emit-spirv-directly",
-                                             "-g2",
+                                             ShaderGraphDebugInfoFlag,
                                              "-matrix-layout-row-major",
                                              "-I",
                                              includeDirectoryString.c_str(),

@@ -2,7 +2,7 @@ add_library(Engine SHARED
     Source/Renderer/Vulkan/PipelineCache.cpp
     Source/Application.cpp Source/Project.cpp Source/Assets/StbImage.cpp Source/Assets/AssetManager.cpp Source/Assets/Gtex.cpp Source/Assets/Gmesh.cpp Source/Assets/CookCache.cpp Source/Assets/TextureCooker.cpp Source/Assets/GlbLoader.cpp Source/Assets/FbxLoader.cpp Source/Assets/DdsImage.cpp Source/Assets/Content.cpp
     ${GAMEENGINE_UFBX_INCLUDE_DIR}/ufbx.c
-    Source/Core/Camera.cpp Source/Core/Diagnostics.cpp Source/Core/Profiler.cpp Source/Core/TaskScheduler.cpp Source/Core/Time.cpp Source/ECS/Registry.cpp Source/Input/Input.cpp Source/Input/InputMap.cpp
+    Source/Core/Camera.cpp Source/Core/Diagnostics.cpp Source/Core/Profiler.cpp Source/Core/TaskScheduler.cpp Source/Core/Time.cpp Source/ECS/ComponentId.cpp Source/ECS/Registry.cpp Source/Input/Input.cpp Source/Input/InputMap.cpp
     Source/Scene/SceneSerializer.cpp Source/Scene/SceneRegistrySerializer.cpp Source/Scene/Scene.cpp Source/Scene/Actor.cpp Source/Scene/TransformSystem.cpp Source/Scene/Prefab.cpp Source/Scene/ScenePresets.cpp
     Source/Physics/GlassDestructionSystem.cpp Source/Physics/PhysXPhysicsSystem.cpp Source/Scripting/ScriptSystem.cpp Source/Scripting/Script.cpp Source/Scripting/ScriptRegistry.cpp Source/Scripting/DynamicLibrary.cpp Source/Scripting/ScriptModuleManager.cpp
     Source/UI/Canvas.cpp Source/UI/CanvasRenderer.cpp Source/UI/UIBatch.cpp Source/UI/Vulkan/UIFontAtlas.cpp Source/UI/Vulkan/UIFontAtlasRuntime.cpp Source/UI/RectTransform.cpp Source/UI/Vulkan/UIPipeline.cpp
@@ -39,7 +39,7 @@ if(GAMEENGINE_BC7E_ENABLED)
     include(FetchContent)
     FetchContent_Declare(Bc7eSource
         GIT_REPOSITORY https://github.com/richgel999/bc7enc_rdo.git
-        GIT_TAG master
+        GIT_TAG b9438627eef73a1157e84201b6fa6eb2ffd6d9f0
         GIT_SHALLOW TRUE
         SOURCE_SUBDIR cmake-not-used)
     FetchContent_MakeAvailable(Bc7eSource)
@@ -95,6 +95,8 @@ target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB
     GAMEENGINE_SLANGC_PATH="${GAMEENGINE_SLANGC}")
 target_include_directories(Engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Include> ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR} PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/Source" "${GAMEENGINE_CGLTF_INCLUDE_DIR}" "${GAMEENGINE_MESHOPTIMIZER_INCLUDE_DIR}" "${GAMEENGINE_STB_INCLUDE_DIR}" "${GAMEENGINE_UFBX_INCLUDE_DIR}")
 gameengine_enable_warnings(Engine)
+gameengine_enable_pch(Engine)
+gameengine_enable_optimization_flags(Engine)
 target_link_libraries(Engine PRIVATE ${CMAKE_DL_LIBS})
 gameengine_enable_sanitizers(Engine)
 if(WIN32)

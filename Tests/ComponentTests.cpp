@@ -278,8 +278,15 @@ TEST(TerrainComponent, BuildsCheckerboardGridAndSculptsHeightmap) {
     const Engine::Mesh flatMesh = terrain.createMesh();
     EXPECT_EQ(flatMesh.vertices.size(), 25u);
     EXPECT_EQ(flatMesh.indices.size(), 96u);
-    EXPECT_LT(flatMesh.vertices[0].color.x(), 0.0F);
-    EXPECT_FLOAT_EQ(flatMesh.vertices[0].color.y(), 4.0F);
+    // Vertex colour is the per-sample paint colour, so a fresh terrain is
+    // unpainted. Painting must reach the rebuilt vertices unchanged.
+    EXPECT_FLOAT_EQ(flatMesh.vertices[0].color.x(), 0.0F);
+    EXPECT_FLOAT_EQ(flatMesh.vertices[0].color.y(), 0.0F);
+    EXPECT_TRUE(terrain.paint(-2.0F, -2.0F, 1.0F, Engine::Vec3{0.25F, 0.5F, 0.75F}, 1.0F));
+    const Engine::Mesh paintedMesh = terrain.createMesh();
+    EXPECT_FLOAT_EQ(paintedMesh.vertices[0].color.x(), 0.25F);
+    EXPECT_FLOAT_EQ(paintedMesh.vertices[0].color.y(), 0.5F);
+    EXPECT_FLOAT_EQ(paintedMesh.vertices[0].color.z(), 0.75F);
     const auto& first = flatMesh.vertices[flatMesh.indices[0]];
     const auto& second = flatMesh.vertices[flatMesh.indices[1]];
     const auto& third = flatMesh.vertices[flatMesh.indices[2]];
@@ -379,7 +386,13 @@ TEST(MaterialTypes, ExposeGpuFriendlyDefaultsAndLayerConfiguration) {
     EXPECT_EQ(offsetof(Engine::GPUMaterialData, displacementParams), 96u);
     EXPECT_EQ(offsetof(Engine::GPUMaterialData, extensionTextureIndices), 112u);
     EXPECT_EQ(offsetof(Engine::GPUMaterialData, waterWaveCount), 816u);
-    EXPECT_EQ(sizeof(Engine::GPUMaterialData), 832u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassParams), 832u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassAttenuation), 848u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassTextureIndices), 864u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassTextureCoordinateSets), 880u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassTextureTransforms), 896u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassTextureRows1), 944u);
+    EXPECT_EQ(sizeof(Engine::GPUMaterialData), 992u);
     const Engine::GPUMaterialData gpuMaterial;
     EXPECT_EQ(gpuMaterial.textureIndices[0], -1);
     EXPECT_EQ(gpuMaterial.textureIndices[3], -1);

@@ -12,7 +12,6 @@
 namespace Engine {
 namespace {
 struct HierarchyCache {
-    std::uint64_t structuralRevision{};
     std::uint64_t uuidRevision{};
     std::uint64_t parentRevision{};
     std::uint64_t transformRevision{};
@@ -26,7 +25,27 @@ struct HierarchyCache {
 };
 
 // Runtime-only adjacency avoids rebuilding UUID lookup and hierarchy on every tick.
-std::unordered_map<const Registry*, HierarchyCache> caches;
+//
+// The cache is thread-local because scenes are loaded/serialized on worker
+// threads while the main thread keeps rendering another registry. A shared
+// map here was an unsynchronized data race (and the registry address could be
+// recycled by a different scene). Registries are non-copyable; their stable
+// instanceId is the key.
+thread_local std::unordered_map<std::uint64_t, HierarchyCache> caches;
+
+HierarchyCache& hierarchyCacheFor(const Registry& registry) {
+    // Bound stale entries left behind by scenes that were destroyed on this
+    // thread. Rebuilding one cache is cheap compared to leaking them forever.
+    constexpr std::size_t MaxCachedRegistries = 8;
+    const auto found = caches.find(registry.instanceId());
+    if (found != caches.end()) {
+        return found->second;
+    }
+    if (caches.size() >= MaxCachedRegistries) {
+        caches.clear();
+    }
+    return caches[registry.instanceId()];
+}
 
 void rebuildHierarchy(Registry& registry, HierarchyCache& cache) {
     std::unordered_map<UUID, Entity> byUuid;
@@ -41,7 +60,6 @@ void rebuildHierarchy(Registry& registry, HierarchyCache& cache) {
             cache.children[link.runtimeParent].push_back(entity);
         }
     });
-    cache.structuralRevision = registry.structuralRevision();
     cache.uuidRevision = registry.componentRevision<UUIDComponent>();
     cache.parentRevision = registry.componentRevision<ParentComponent>();
 }
@@ -98,13 +116,17 @@ TransformComponent TransformComponent::worldTransform() const noexcept {
 }
 
 void TransformSystem::invalidate(const Registry& registry) noexcept {
-    caches.erase(&registry);
+    caches.erase(registry.instanceId());
 }
 
 void TransformSystem::updateDirty(Registry& registry) {
-    HierarchyCache& cache = caches[&registry];
-    const bool hierarchyChanged = !cache.initialized || cache.structuralRevision != registry.structuralRevision() ||
-                                  cache.uuidRevision != registry.componentRevision<UUIDComponent>() ||
+    HierarchyCache& cache = hierarchyCacheFor(registry);
+    // structuralRevision changes on every add/remove (including unrelated
+    // components). Rebuilding for those was O(N) per inspector edit. The
+    // adjacency only depends on UUIDs and parent links: destroying an entity
+    // removes both components and bumps their revisions, so real hierarchy
+    // edits are still observed here.
+    const bool hierarchyChanged = !cache.initialized || cache.uuidRevision != registry.componentRevision<UUIDComponent>() ||
                                   cache.parentRevision != registry.componentRevision<ParentComponent>();
 
     const std::uint64_t observedTransformRevision = cache.transformRevision;
@@ -130,7 +152,7 @@ void TransformSystem::updateDirty(Registry& registry) {
         rebuildHierarchy(registry, cache);
         registry.view<Transform>([&](const Entity entity, Transform&) { markDirty(entity); });
     } else {
-        registry.forEachComponentChangedSince<Transform>(observedTransformRevision, markDirty);
+        registry.forEachComponentChangedSinceUnique<Transform>(observedTransformRevision, markDirty);
     }
     cache.initialized = true;
     if (!hasDirty) {
@@ -196,8 +218,8 @@ void TransformSystem::updateDirty(Registry& registry) {
     if (hierarchyChanged) {
         registry.view<Transform>([&](const Entity entity, Transform&) { resolve(resolve, entity); });
     } else {
-        registry.forEachComponentChangedSince<Transform>(observedTransformRevision,
-                                                         [&](const Entity entity) { resolve(resolve, entity); });
+        registry.forEachComponentChangedSinceUnique<Transform>(
+            observedTransformRevision, [&](const Entity entity) { resolve(resolve, entity); });
     }
     // Cache writes do not publish local Transform edits. Remember the
     // consumed revision and retain the world-change list for renderers.
@@ -205,7 +227,7 @@ void TransformSystem::updateDirty(Registry& registry) {
 }
 
 std::span<const Entity> TransformSystem::changedWorldTransforms(const Registry& registry) {
-    const auto cache = caches.find(&registry);
+    const auto cache = caches.find(registry.instanceId());
     if (cache == caches.end()) {
         return {};
     }

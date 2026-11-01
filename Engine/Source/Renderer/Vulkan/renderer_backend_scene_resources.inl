@@ -1,7 +1,90 @@
-// A renderer topology rebuild is allowed to need decoded data, but it
-// must not make that decoded data resident between rebuilds. Imported
-// meshes are decoded again from their asset path into this short-lived
-// upload payload; procedural/edited meshes explicitly pin their data.
+// A renderer topology rebuild needs decoded geometry, and editors rebuild
+// it for unrelated scene edits. Keep a small LRU of decoded payloads so a
+// repeated rebuild does not re-read and re-parse every .gmesh file. The
+// cache is bounded well below the size of a typical scene texture set.
+[[nodiscard]] static std::uint64_t decodedMeshSourceMemory(const Mesh& mesh) noexcept {
+    std::uint64_t bytes = sizeof(Mesh) + mesh.vertices.capacity() * sizeof(Vertex) +
+                          mesh.indices.capacity() * sizeof(std::uint32_t) +
+                          mesh.drawRanges.capacity() * sizeof(Mesh::DrawRange) +
+                          mesh.renderSections.capacity() * sizeof(Mesh::RenderSection) +
+                          mesh.meshlets.capacity() * sizeof(Meshlet) +
+                          mesh.meshletVertices.capacity() * sizeof(std::uint32_t) +
+                          mesh.meshletTriangles.capacity() * sizeof(std::uint32_t) +
+                          mesh.meshletClusters.capacity() * sizeof(MeshletClusterNode) +
+                          mesh.materials.capacity() * sizeof(PBRMaterial) + mesh.images.capacity() * sizeof(Mesh::Image);
+    for (const Mesh::Image& image : mesh.images) {
+        bytes += image.rgbaPixels.capacity() * sizeof(std::uint8_t);
+    }
+    return bytes;
+}
+
+[[nodiscard]] std::shared_ptr<const MeshSourceData> cachedDecodedMeshSource(const MeshGpuResource& resource) {
+    const auto found = decodedMeshSources.find(resource.textureIdentity);
+    if (found == decodedMeshSources.end()) {
+        return {};
+    }
+    const auto discard = [&]() -> std::shared_ptr<const MeshSourceData> {
+        decodedMeshSourceBytes -= found->second.bytes;
+        decodedMeshSources.erase(found);
+        return {};
+    };
+    // A re-imported asset keeps its path but not the GPU resource identity.
+    // The cheap metadata comparison also invalidates an entry if the same
+    // resource was edited in place while the cache still held old geometry.
+    const MeshSourceData& source = *found->second.source;
+    if (source.vertexCount() != resource.metadata.vertexCount ||
+        source.indexCount() != resource.metadata.indexCount) {
+        return discard();
+    }
+    // A texture that has since been retired must be re-uploaded. Geometry
+    // decoded from .gmesh carries no pixels, only the texture header, so a
+    // payload without one cannot serve that upload and must be reloaded.
+    for (std::size_t index = 0; index < resource.metadata.imagePaths.size(); ++index) {
+        const TextureId id{resource.textureIdentity, static_cast<std::uint32_t>(index)};
+        if (textureGpuResources.contains(id)) {
+            continue;
+        }
+        if (index >= source.images.size()) {
+            return discard();
+        }
+        const Mesh::Image& image = source.images[index];
+        if (!image.gtex && !image.cooked && image.rgbaPixels.empty()) {
+            return discard();
+        }
+    }
+    found->second.lastUse = ++decodedMeshSourceClock;
+    return found->second.source;
+}
+
+void evictDecodedMeshSources() {
+    // The cache holds one entry per live GPU mesh, so a linear scan for the
+    // least recently used entry is cheaper than maintaining an index.
+    while (decodedMeshSourceBytes > DecodedMeshSourceBudget && !decodedMeshSources.empty()) {
+        auto oldest = decodedMeshSources.begin();
+        for (auto it = std::next(oldest); it != decodedMeshSources.end(); ++it) {
+            if (it->second.lastUse < oldest->second.lastUse) {
+                oldest = it;
+            }
+        }
+        decodedMeshSourceBytes -= oldest->second.bytes;
+        decodedMeshSources.erase(oldest);
+    }
+}
+
+void retainDecodedMeshSource(const std::uint64_t identity, std::shared_ptr<const MeshSourceData> source) {
+    if (!source) {
+        return;
+    }
+    const std::uint64_t bytes = decodedMeshSourceMemory(*source);
+    DecodedMeshSource& entry = decodedMeshSources[identity];
+    decodedMeshSourceBytes -= entry.bytes;
+    entry.source = std::move(source);
+    entry.bytes = bytes;
+    entry.lastUse = ++decodedMeshSourceClock;
+    decodedMeshSourceBytes += bytes;
+    evictDecodedMeshSources();
+}
+
 void restoreMeshSourceDataForUpload() {
     registry.view<MeshRenderer>([&](const Entity, MeshRenderer& renderer) {
         if (!renderer.mesh || renderer.mesh.hasSourceData())
@@ -9,6 +92,12 @@ void restoreMeshSourceDataForUpload() {
         const auto resource = renderer.mesh.resource();
         if (!resource || resource->sourcePath.empty()) {
             throw std::runtime_error("Mesh GPU resource has no source data or reloadable asset path");
+        }
+        if (auto cached = cachedDecodedMeshSource(*resource)) {
+            // A cached payload already carries the material table, render
+            // sections and cooked texture headers from its previous upload.
+            resource->sourceData = std::move(cached);
+            return;
         }
         auto decoded = Assets::load_gmesh_geometry(resource->sourcePath);
         if (!decoded || decoded->empty()) {
@@ -33,18 +122,24 @@ void restoreMeshSourceDataForUpload() {
                 image.height = image.gtex->height;
             }
         }
-        resource->sourceData = decoded;
+        resource->sourceData = std::move(decoded);
     });
 }
 
 void releaseUploadedMeshSourceData() {
     registry.view<MeshRenderer>([&](const Entity, MeshRenderer& renderer) {
-        if (renderer.mesh.uploaded())
-            renderer.mesh.releaseSourceReference();
+        if (!renderer.mesh.uploaded())
+            return;
+        const auto& resource = renderer.mesh.resource();
+        if (resource && !resource->retainSourceData && !resource->sourcePath.empty() && resource->sourceData) {
+            // Retain the upload payload in the bounded LRU. The GPU resource
+            // still drops its own reference below, so a large scene cannot
+            // keep every decoded mesh resident at once.
+            retainDecodedMeshSource(resource->textureIdentity, resource->sourceData);
+        }
+        renderer.mesh.releaseSourceReference();
     });
-    // Cache entries are deliberately weak from the renderer's point
-    // of view. This is what returns decoded vertex/index/RGBA memory
-    // to the allocator after the upload has completed.
+    // Drop cached asset records that no longer have external owners.
     assetManager.unload_unused();
 }
 
@@ -194,6 +289,17 @@ void createMaterialTextures() {
         else
             it = meshTextureIds.erase(it);
     }
+    // Decoded payloads for meshes that left the scene are no longer useful;
+    // the byte budget alone would keep them until unrelated rebuilds filled
+    // it up.
+    for (auto it = decodedMeshSources.begin(); it != decodedMeshSources.end();) {
+        if (activeOwners.contains(it->first)) {
+            ++it;
+            continue;
+        }
+        decodedMeshSourceBytes -= it->second.bytes;
+        it = decodedMeshSources.erase(it);
+    }
     [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
     const auto& stats = uploadContext.statistics();
     Diagnostics::instance().report(
@@ -204,7 +310,6 @@ void createMaterialTextures() {
             ", forcedSubmits=" + std::to_string(stats.forcedSubmits) +
             ", ringWraps=" + std::to_string(stats.ringWraps) + ", waits=" + std::to_string(stats.waits),
         {.subsystem = "Renderer"});
-    Diagnostics::instance().flush();
 }
 
 [[nodiscard]] static float displacementExpansion(const PBRMaterial& material) {
@@ -2374,9 +2479,9 @@ void updateRenderableBuffers() {
         for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
             addChangedEntity(entity, transformChange);
         }
-        registry.forEachComponentChangedSince<MeshRenderer>(
+        registry.forEachComponentChangedSinceUnique<MeshRenderer>(
             lastMeshRendererRevision, [&](const Entity entity) { addChangedEntity(entity, rendererChange); });
-        registry.forEachComponentChangedSince<GlassDestructionComponent>(
+        registry.forEachComponentChangedSinceUnique<GlassDestructionComponent>(
             lastGlassDestructionRevision, [&](const Entity entity) { addChangedEntity(entity, glassChange); });
     }
 

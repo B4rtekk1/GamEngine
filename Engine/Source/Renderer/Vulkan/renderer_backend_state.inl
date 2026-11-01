@@ -93,6 +93,9 @@ bool rtTlasInputDirty{true};
 // slot which happened to rebuild the shared CPU instance list.
 std::array<bool, MAX_FRAMES_IN_FLIGHT> rtTlasUpdatePending{};
 std::vector<AccelerationStructureManager::InstanceBuildInput> rtTlasInstances;
+// Reused BLAS build list; the ray-traced contact shadow path rebuilds it only
+// when geometry changes, but the old code reallocated the vector every time.
+std::vector<AccelerationStructureManager::MeshBuildInput> rtMeshBuildInputs;
 GpuTimestampProfiler gpuTimestampProfiler;
 // Retained across frames: reset() clears declarations, while the graph
 // keeps its compiled topology cache.
@@ -170,6 +173,19 @@ struct TextureGpuResource final {
 std::unordered_map<TextureId, TextureGpuResource, TextureIdHash> textureGpuResources;
 std::unordered_map<std::uint64_t, std::vector<TextureId>> meshTextureIds;
 std::unordered_map<const Mesh*, std::vector<std::uint32_t>> meshTextureSlots;
+// Decoded geometry reused by consecutive topology rebuilds. Keyed by the
+// process-unique GPU resource identity so a re-imported asset cannot pick
+// up stale geometry, and bounded so a long editing session cannot keep
+// every source mesh resident.
+struct DecodedMeshSource final {
+    std::shared_ptr<const MeshSourceData> source;
+    std::uint64_t bytes{};
+    std::uint64_t lastUse{};
+};
+std::unordered_map<std::uint64_t, DecodedMeshSource> decodedMeshSources;
+std::uint64_t decodedMeshSourceBytes{};
+std::uint64_t decodedMeshSourceClock{};
+static constexpr std::uint64_t DecodedMeshSourceBudget = 256ULL * 1024ULL * 1024ULL;
 std::uint32_t nextMaterialTextureSlot{1};
 std::vector<std::uint32_t> freeMaterialTextureSlots;
 DepthBuffer depthBuffer;
@@ -469,6 +485,13 @@ std::array<bool, MAX_FRAMES_IN_FLIGHT> sceneVsmFeedbackPending{};
 VsmFeedbackCache sceneVsmFeedbackCache;
 VsmFeedbackKey sceneVsmFeedbackKey;
 std::vector<std::uint32_t> sceneVsmReceiverRequests;
+// Reused per frame instead of allocating a fresh page-request list while
+// recording the scene view.
+std::vector<std::uint32_t> vsmRequestScratch;
+// Legacy frame uploads are declared and consumed inside a single
+// recordCommandBuffer call, so their handle lists can live across frames.
+std::vector<RenderGraph::BufferHandle> frameUploadBufferScratch;
+std::vector<RenderGraph::TextureHandle> frameUploadTextureScratch;
 std::array<Mat4, ShadowMap::ClipLevelCount> sceneVsmReceiverMatrices{};
 bool sceneVsmReceiverFeedbackValid{};
 std::array<VsmFeedbackCache, MAX_FRAMES_IN_FLIGHT> vsmFeedbackCaches;
@@ -831,3 +854,12 @@ struct GlassAtlasOwner {
 };
 std::array<GlassAtlasOwner, 512> glassAtlasOwners{};
 unsigned glassAtlasPaneCount{};
+// synchronizeGlassAtlasSlots() runs from both renderFrame() and
+// updateRenderableBuffers(). The slot layout only depends on these
+// revisions, so the second call per frame becomes a handful of counter
+// reads instead of rescanning every pane and rebuilding the slot map.
+const Registry* glassAtlasSyncedRegistry = nullptr;
+std::uint64_t glassAtlasStructureRevision = std::numeric_limits<std::uint64_t>::max();
+std::uint64_t glassAtlasComponentRevision = std::numeric_limits<std::uint64_t>::max();
+std::uint64_t glassAtlasMeshRevision = std::numeric_limits<std::uint64_t>::max();
+std::uint64_t glassAtlasUuidRevision = std::numeric_limits<std::uint64_t>::max();

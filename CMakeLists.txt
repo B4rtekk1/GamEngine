@@ -23,6 +23,7 @@ option(GE_DISTRIBUTION_BUILD "Build a portable editor without source-tree fallba
 if(GE_BUILD_BENCHMARKS)
     add_executable(BenchmarkSceneUpdates
         Tools/BenchmarkSceneUpdates/main.cpp
+        Engine/Source/ECS/ComponentId.cpp
         Engine/Source/Scene/TransformSystem.cpp)
     target_include_directories(BenchmarkSceneUpdates PRIVATE Engine/Include ${GLM_INCLUDE_DIR})
     gameengine_enable_warnings(BenchmarkSceneUpdates)

@@ -255,6 +255,9 @@ void drawFrameGraph(const std::uint32_t count, std::uint64_t& selected, bool& fo
 } // namespace
 
 void drawProfilerPanel(const Engine::Renderer& renderer, bool& isOpen) {
+    // Per-frame event recording costs a clock read per scope and keeps a large
+    // history alive; only this panel consumes it, so follow panel visibility.
+    Engine::Profiler::setEnabled(isOpen);
     if (!isOpen)
         return;
     if (!ImGui::Begin("Profiler", &isOpen)) {

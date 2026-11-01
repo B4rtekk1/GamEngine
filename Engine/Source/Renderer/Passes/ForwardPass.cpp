@@ -141,21 +141,6 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     });
     grassPipeline_.create(device, grassOptions);
 
-    GraphicsPipelineOptions outlineOptions = options;
-    outlineOptions.shader =
-        hasVelocityAttachment_ ? "shaders/selection_outline.spv" : "shaders/selection_outline_no_velocity.spv";
-    outlineOptions.cullMode = VK_CULL_MODE_FRONT_BIT;
-    outlineOptions.depthWriteEnable = VK_FALSE;
-    outlineOptions.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-    outlineOptions.vertexAttributes.erase(std::remove_if(outlineOptions.vertexAttributes.begin(),
-                                                         outlineOptions.vertexAttributes.end(),
-                                                         [](const VkVertexInputAttributeDescription& attribute) {
-                                                             // The outline reads position, both UV sets,
-                                                             // normal, material index, and tangent.
-                                                             return attribute.location == 1;
-                                                         }),
-                                          outlineOptions.vertexAttributes.end());
-    outlinePipeline_.create(device, outlineOptions);
 }
 
 void ForwardPass::destroy() noexcept {
@@ -164,7 +149,6 @@ void ForwardPass::destroy() noexcept {
     hasViewNormalAttachment_ = false;
     preserveDepth_ = false;
     shaderGraphPipelines_.destroy();
-    outlinePipeline_.destroy();
     foliagePipeline_.destroy();
     grassPipeline_.destroy();
     for (auto& pipeline : materialPipelines_)
@@ -336,15 +320,4 @@ void ForwardPass::end(VkCommandBuffer commandBuffer) {
     vkCmdEndRendering(commandBuffer);
 }
 
-void ForwardPass::drawOutline(VkCommandBuffer commandBuffer, const VkDescriptorSet sceneDescriptorSet,
-                              const Culling::IndexedIndirectDrawCount& indirectDraw) const {
-    if (!indirectDraw.valid())
-        return;
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, outlinePipeline_.handle());
-    // Sky and particle draws bind their own descriptor sets. Bind the scene
-    // set again because the outline pipeline uses the forward-pass layout.
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, outlinePipeline_.layout(), 0, 1,
-                            &sceneDescriptorSet, 0, nullptr);
-    indirectDraw.record(commandBuffer);
-}
 } // namespace Engine

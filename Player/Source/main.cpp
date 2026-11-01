@@ -66,7 +66,9 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Could not load game script module");
         }
         const Engine::RenderConfig renderConfig{
-            .features = Engine::RenderFeatures{.shadows = true},
+            // Hi-Z culling rides on the shadow hierarchy that High VSM builds
+            // anyway; keep the explicit flag so a game can opt out per title.
+            .features = Engine::RenderFeatures{.shadows = true, .occlusionCulling = true},
             .antialiasing = Engine::AntialiasingLevel::TAA,
             .shadowQuality = Engine::ShadowQuality::High,
             .gtaoQuality = Engine::GtaoQuality::High,

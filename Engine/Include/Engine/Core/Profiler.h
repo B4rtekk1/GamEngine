@@ -54,6 +54,21 @@ class Profiler final {
 
     [[nodiscard]] static std::string_view name(ProfileNameId id) noexcept;
 
+    /**
+     * @brief Enables or disables per-frame event recording.
+     *
+     * Recording costs a clock read plus a vector push for every
+     * GE_PROFILE_SCOPE and reserves roughly twenty megabytes of history, so a
+     * shipping frame should not pay for data nobody displays. Disabling stops
+     * all CPU zones and lets the GPU timestamp pool skip its query writes;
+     * frame numbers keep advancing so late GPU results still attach to the
+     * right frame once recording is turned back on.
+     */
+    static void setEnabled(bool enabled) noexcept;
+
+    /** @brief Whether per-frame event recording is currently active. */
+    [[nodiscard]] static bool enabled() noexcept;
+
     static void beginFrame();
 
     static void endFrame();

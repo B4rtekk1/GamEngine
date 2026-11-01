@@ -1,9 +1,17 @@
 #include "Engine/Renderer/Vulkan/GpuTimestampProfiler.h"
 
+#include "Engine/Core/Profiler.h"
+
 #include <array>
 #include <stdexcept>
 
 namespace Engine {
+namespace {
+/** Timestamps are free to skip: the query pool is only read by the profile panel. */
+[[nodiscard]] bool timestampRecordingActive(const VkQueryPool pool) noexcept {
+    return pool != VK_NULL_HANDLE && Profiler::enabled();
+}
+} // namespace
 void GpuTimestampProfiler::create(const VkPhysicalDevice physicalDevice, const VkDevice device) {
     destroy();
     VkPhysicalDeviceProperties properties{};
@@ -48,7 +56,7 @@ void GpuTimestampProfiler::destroy() noexcept {
 }
 
 void GpuTimestampProfiler::beginFrame(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
-    if (queryPool_ == VK_NULL_HANDLE) {
+    if (!timestampRecordingActive(queryPool_)) {
         return;
     }
     vkCmdResetQueryPool(commandBuffer, queryPool_, query(frameIndex, 0), QueriesPerFrame);
@@ -59,7 +67,11 @@ void GpuTimestampProfiler::beginFrame(const VkCommandBuffer commandBuffer, const
 }
 
 void GpuTimestampProfiler::endFrame(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
-    if (queryPool_ == VK_NULL_HANDLE) {
+    if (!timestampRecordingActive(queryPool_)) {
+        // Drop any zones opened while recording was still active so the stack
+        // cannot leak into a later frame.
+        zoneStack_[frameIndex].clear();
+        suppressedZoneDepth_[frameIndex] = 0;
         return;
     }
     while (!zoneStack_[frameIndex].empty()) {
@@ -69,6 +81,10 @@ void GpuTimestampProfiler::endFrame(const VkCommandBuffer commandBuffer, const s
 }
 
 void GpuTimestampProfiler::markSubmitted(const std::uint32_t frameIndex, const std::uint64_t frameNumber) noexcept {
+    if (!timestampRecordingActive(queryPool_)) {
+        submitted_[frameIndex] = false;
+        return;
+    }
     submitted_[frameIndex] = true;
     frameNumbers_[frameIndex] = frameNumber;
 }
@@ -79,7 +95,7 @@ bool GpuTimestampProfiler::hasCompletedFrame() const noexcept {
 
 void GpuTimestampProfiler::beginZone(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex,
                                      const ProfileNameId name) const {
-    if (queryPool_ == VK_NULL_HANDLE) {
+    if (!timestampRecordingActive(queryPool_)) {
         return;
     }
     if (suppressedZoneDepth_[frameIndex] != 0 || events_[frameIndex].size() == MaxZonesPerFrame) {
@@ -94,7 +110,7 @@ void GpuTimestampProfiler::beginZone(const VkCommandBuffer commandBuffer, const 
 }
 
 void GpuTimestampProfiler::endZone(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
-    if (queryPool_ == VK_NULL_HANDLE) {
+    if (!timestampRecordingActive(queryPool_)) {
         return;
     }
     if (suppressedZoneDepth_[frameIndex] != 0) {
@@ -111,7 +127,7 @@ void GpuTimestampProfiler::endZone(const VkCommandBuffer commandBuffer, const st
 }
 
 std::optional<GpuProfileFrame> GpuTimestampProfiler::completedFrame(const std::uint32_t frameIndex) const {
-    if (queryPool_ == VK_NULL_HANDLE || !submitted_[frameIndex]) {
+    if (!timestampRecordingActive(queryPool_) || !submitted_[frameIndex]) {
         return std::nullopt;
     }
     const std::uint32_t queryCount = 2 + (static_cast<std::uint32_t>(events_[frameIndex].size()) * 2);

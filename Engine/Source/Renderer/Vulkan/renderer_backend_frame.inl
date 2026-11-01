@@ -482,7 +482,8 @@ void updateSceneViewportUniformBuffer(const uint32_t frame) {
             sceneVsmReceiverFeedbackValid = true;
             sceneVsmFeedbackPending[currentFrame] = false;
         }
-        std::vector<std::uint32_t> requests;
+        std::vector<std::uint32_t>& requests = vsmRequestScratch;
+        requests.clear();
         bool feedbackValid = sceneVsmReceiverFeedbackValid;
         std::array<std::int32_t, ShadowMap::ClipLevelCount> shiftX{}, shiftY{};
         for (std::uint32_t level = 0; feedbackValid && level < ShadowMap::ClipLevelCount; ++level)
@@ -704,7 +705,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                               renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncTransferQueue()
                                   ? vulkanDevice.transferQueueFamily()
                                   : vulkanDevice.graphicsQueueFamily());
-    std::vector<RenderGraph::BufferHandle> frameUploadBuffers;
+    std::vector<RenderGraph::BufferHandle>& frameUploadBuffers = frameUploadBufferScratch;
+    frameUploadBuffers.clear();
     const auto importFrameUploadBuffer = [&](const char* name, const Buffer& buffer) {
         if (buffer.handle() == VK_NULL_HANDLE || buffer.size() == 0)
             return;
@@ -739,7 +741,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             frameGraph.markUploaded(particleBuffer, particleSystem->readyTimeline());
         frameUploadBuffers.push_back(particleBuffer);
     }
-    std::vector<RenderGraph::TextureHandle> frameUploadTextures;
+    std::vector<RenderGraph::TextureHandle>& frameUploadTextures = frameUploadTextureScratch;
+    frameUploadTextures.clear();
     const auto importFrameUploadTexture = [&](const char* name, const Texture2D& texture) {
         if (!texture.valid())
             return;
@@ -1604,11 +1607,19 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             dispatchClusteredLights(clusteredLightingSets[currentFrame], swapchain.extent());
         if (renderSceneViewport)
             dispatchClusteredLights(sceneClusteredLightingSets[currentFrame], sceneViewportTarget.extent());
-        std::bitset<MaterialProgramSlotCount> activeShaderSlots;
+        // hasMaterialPipeline() probes the shader-graph pipeline registry, and
+        // a large scene holds tens of thousands of objects spread over a
+        // handful of shader slots. Collect the slots that are actually
+        // present first, then resolve each of them at most once.
+        std::bitset<MaterialProgramSlotCount> presentShaderSlots;
         for (const Culling::GPUObjectData& object : gpuObjects) {
-            if (object.shader < MaterialProgramSlotCount && forwardPass.hasMaterialPipeline(object.shader)) {
-                activeShaderSlots.set(object.shader);
-            }
+            if (object.shader < MaterialProgramSlotCount)
+                presentShaderSlots.set(object.shader);
+        }
+        std::bitset<MaterialProgramSlotCount> activeShaderSlots;
+        for (std::size_t slot = 0; slot < MaterialProgramSlotCount; ++slot) {
+            if (presentShaderSlots.test(slot) && forwardPass.hasMaterialPipeline(static_cast<std::uint32_t>(slot)))
+                activeShaderSlots.set(slot);
         }
         // Step 1 of the frame migration: culling now has an explicit
         // graph node and declared indirect outputs.  It still executes in
@@ -1880,6 +1891,12 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     builder.read(graphIndices, RenderGraph::BufferUsage::IndexRead);
                     builder.read(graphFoliageIndirect, RenderGraph::BufferUsage::IndirectRead);
                     builder.read(graphFoliageDrawCount, RenderGraph::BufferUsage::IndirectRead);
+                    // This prepass is the only writer of TAA velocity. The
+                    // resolve lives in the presentation graph, so velocity has
+                    // no reader inside this graph and pass culling would drop
+                    // the prepass whenever GTAO and visibility are disabled.
+                    if (antialiasingLevel == AntialiasingLevel::TAA)
+                        builder.setSideEffect();
                     builder.setFinalTextureState(graphDepth, {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                                                        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                                                        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
@@ -2077,7 +2094,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 {});
             viewportFrameGraph.compile();
             profileRenderGraph(viewportFrameGraph, true);
-            const auto graphCommands =
+            auto graphCommands =
                 prepareGraphCommandBuffers(viewportFrameGraph, currentFrame, renderGraphCommandBuffers);
             RenderGraph::SubmissionContext context{};
             context.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Graphics)] = vulkanDevice.graphicsQueue();
@@ -2089,7 +2106,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncTransferQueue()
                     ? vulkanDevice.transferQueue()
                     : vulkanDevice.graphicsQueue();
-            context.commandBuffers = graphCommands;
+            context.commandBuffers = std::move(graphCommands);
             context.queueTimelines[0] = renderGraphTimeline;
             context.queueTimelines[1] = renderGraphComputeTimeline;
             context.queueTimelines[2] = renderGraphTransferTimeline;
@@ -2105,7 +2122,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             const bool rtSceneRequested = rtContactRequested;
             if (rtSceneRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() &&
                 indexBuffer.hasDeviceAddress()) {
-                std::vector<AccelerationStructureManager::MeshBuildInput> meshes;
+                std::vector<AccelerationStructureManager::MeshBuildInput>& meshes = rtMeshBuildInputs;
+                meshes.clear();
                 meshes.reserve(instanceBatches.size());
                 std::unordered_set<AccelerationStructureManager::BlasKey, AccelerationStructureManager::BlasKeyHash>
                     builtSections;
@@ -2259,7 +2277,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProjectionProfileName);
             lightingForwardPass.begin(
                 commandBuffer, msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(), depthBuffer.imageView(),
-                antialiasingLevel == AntialiasingLevel::TAA ? velocityBuffer.imageView() : VK_NULL_HANDLE,
+                // Velocity is already final from the depth prepass; passing
+                // the view here would clear and rewrite it a second time.
+                VK_NULL_HANDLE,
                 VK_NULL_HANDLE, msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
                 msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), instanceBuffers[currentFrame].handle(),
@@ -2325,12 +2345,6 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                  particlePipeline.layout(), currentFrame, false);
                 }
             }
-            // This pipeline was created against LightingForwardPass's render
-            // pass. It must be recorded while that pass is active, not in
-            // WaterPass, whose external dependency also reads the color
-            // attachment and is therefore render-pass incompatible.
-            lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                                            indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             // Dynamic rendering has no render-pass finalLayout.  The post graph
@@ -2642,8 +2656,6 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 particleSystem->recordRender(commandBuffer, particleFrame, sceneParticlePipeline.handle(),
                                              sceneParticlePipeline.layout(), currentFrame, true);
             }
-            sceneForwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
-                                         sceneIndirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
             VkImageMemoryBarrier2 colorToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             colorToSampled.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;

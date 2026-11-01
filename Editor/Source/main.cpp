@@ -511,9 +511,13 @@ int main(int argc, char** argv) {
         Engine::PhysicsSystem physicsSystem{};
         // The editor is the visual authoring path, so shadows must be active
         // by default. Antialiasing defaults to TAA and is overridden by the
-        // startup scene when that scene stores a different mode.
+        // startup scene when that scene stores a different mode. Occlusion
+        // culling is on: the editor renders large terrain/grass scenes where
+        // the Hi-Z test removes the majority of off-screen casters, and the
+        // hierarchy is built for VSM regardless.
         EditorUiBackend editorUiBackend;
-        Engine::Renderer renderer{Engine::RenderConfig{.features = Engine::RenderFeatures{.shadows = true}}};
+        Engine::Renderer renderer{Engine::RenderConfig{
+            .features = Engine::RenderFeatures{.shadows = true, .occlusionCulling = true}}};
         renderer.setEditorUiBackend(&editorUiBackend);
         renderer.setProjectRoot(project.rootPath());
         renderer.initializeCore(scene, window);

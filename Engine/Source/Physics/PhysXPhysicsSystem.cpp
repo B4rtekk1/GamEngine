@@ -71,8 +71,8 @@ void trampleTerrainGrass(Registry& registry, const float deltaTime) {
                 std::abs(transform.scale.y()),
                 std::abs(transform.scale.z()),
             });
-            const Vec3 velocity =
-                registry.has<RigidbodyState>(entity) ? registry.get<RigidbodyState>(entity).linearVelocity : Vec3{};
+            const RigidbodyState* state = registry.tryGet<RigidbodyState>(entity);
+            const Vec3 velocity = state != nullptr ? state->linearVelocity : Vec3{};
             // Treat every collider as a conservative horizontal
             // interaction volume.  This keeps the inexpensive spatial
             // hash path while allowing the common player capsule,
@@ -234,20 +234,20 @@ void trampleTerrainGrass(Registry& registry, const float deltaTime) {
         if (coverage <= 0.0F || !registry.has<RigidbodyComponent>(spheres[i].entity)) {
             continue;
         }
-        if (!registry.has<RigidbodyState>(spheres[i].entity)) {
+        const RigidbodyState* state = registry.tryGet<RigidbodyState>(spheres[i].entity);
+        if (state == nullptr) {
             continue;
         }
-        auto& state = registry.get<RigidbodyState>(spheres[i].entity);
         const float damping = std::exp(-grassDragPerSecond * coverage * deltaTime);
         if (!registry.has<PhysicsCommandBuffer>(spheres[i].entity)) {
             registry.add<PhysicsCommandBuffer>(spheres[i].entity);
         }
         registry.modify<PhysicsCommandBuffer>(spheres[i].entity, [&](auto& commands) {
-            Vec3 velocity = state.linearVelocity;
+            Vec3 velocity = state->linearVelocity;
             velocity.setX(velocity.x() * damping);
             velocity.setZ(velocity.z() * damping);
             commands.linearVelocity = velocity;
-            commands.angularVelocity = state.angularVelocity * damping;
+            commands.angularVelocity = state->angularVelocity * damping;
         });
     }
 }
@@ -449,6 +449,9 @@ struct PhysicsSystem::BroadPhaseCache final {
     std::uint64_t structuralRevision{};
     std::uint64_t colliderRevision{};
     std::uint64_t rigidbodyRevision{};
+    std::uint64_t observedTransformRevision{};
+    std::uint64_t observedCommandRevision{};
+    bool forcePosePush{};
     std::unordered_map<Entity, ActorRecord> actors;
     std::vector<Entity> scaleChanged;
     std::unordered_map<CookedMeshKey, physx::PxConvexMesh*, CookedMeshKeyHash> convexMeshes;
@@ -786,13 +789,13 @@ struct PhysicsSystem::BroadPhaseCache final {
     }
 
     static void restoreRigidBodyState(Registry& owner, const Entity entity, physx::PxRigidDynamic& rigid) {
-        if (!owner.has<RigidbodyState>(entity)) {
+        const RigidbodyState* state = owner.tryGet<RigidbodyState>(entity);
+        if (state == nullptr) {
             return;
         }
 
-        const auto& state = owner.get<RigidbodyState>(entity);
-        rigid.setLinearVelocity(toPhysX(state.linearVelocity), false);
-        rigid.setAngularVelocity(toPhysX(state.angularVelocity * DegreesToRadians), false);
+        rigid.setLinearVelocity(toPhysX(state->linearVelocity), false);
+        rigid.setAngularVelocity(toPhysX(state->angularVelocity * DegreesToRadians), false);
     }
 
     bool attachGlass(physx::PxRigidActor& actor, const GlassDestructionComponent& glass,
@@ -944,6 +947,11 @@ struct PhysicsSystem::BroadPhaseCache final {
         structuralRevision = owner.structuralRevision();
         colliderRevision = owner.componentRevision<ColliderComponent>();
         rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
+        // Fresh actors were created from the current world pose; nothing is
+        // pending in the change trackers.
+        observedTransformRevision = owner.componentRevision<Transform>();
+        observedCommandRevision = owner.componentRevision<PhysicsCommandBuffer>();
+        forcePosePush = false;
     }
 
     void removeActor(const Entity entity) noexcept {
@@ -1035,6 +1043,10 @@ struct PhysicsSystem::BroadPhaseCache final {
             Transform world = TransformSystem::worldTransform(owner, entity);
             actors.emplace(entity, createActor(entity, owner, world));
         });
+        // Surviving records had their pose revision reset above so that a
+        // Transform removed and re-added between calls is re-pushed even when
+        // its fresh world revision happens to match the old value.
+        forcePosePush = true;
     }
 
     void pruneCookedMeshes() {
@@ -1110,61 +1122,102 @@ struct PhysicsSystem::BroadPhaseCache final {
     void pushEcsState(Registry& owner) {
         GE_PROFILE_SCOPE("PhysicsStatePushCPU");
         using namespace physx;
-        for (auto& [entity, record] : actors) {
-            // Transform owns Static and Kinematic poses. Dynamic poses are
-            // owned by PhysX and cross this boundary only through teleport.
-            if (record.bodyType != RigidbodyType::Dynamic) {
-                const Transform& local = owner.get<Transform>(entity);
-                if (record.poseWorldRevision != local.worldRevision()) {
-                    const Transform transform = local.worldTransform();
-                    if (!samePose(transform, record.lastTransform)) {
-                        if (record.bodyType == RigidbodyType::Static) {
-                            record.actor->setGlobalPose(toPhysX(transform), true);
-                        } else {
-                            static_cast<PxRigidDynamic*>(record.actor)->setKinematicTarget(toPhysX(transform));
-                        }
-                        record.lastTransform = transform;
-                    }
-                    record.poseWorldRevision = local.worldRevision();
-                }
-                continue;
+        // Static and kinematic poses are owned by Transform. A parent change
+        // also moves its children without bumping their local revision, so
+        // the transform system's last resolved list covers both. Stale list
+        // entries are rejected by the per-actor pose revision below.
+        const auto pushPose = [&](const Entity entity) {
+            const auto recordIt = actors.find(entity);
+            if (recordIt == actors.end() || recordIt->second.bodyType == RigidbodyType::Dynamic) {
+                return;
             }
-            auto& rigid = *static_cast<PxRigidDynamic*>(record.actor);
-            PhysicsCommandBuffer* commands =
-                owner.has<PhysicsCommandBuffer>(entity) ? &owner.get<PhysicsCommandBuffer>(entity) : nullptr;
-            if (commands != nullptr &&
-                (commands->teleportPosition.has_value() || commands->teleportRotation.has_value())) {
-                PxTransform pose = rigid.getGlobalPose();
-                if (commands->teleportPosition) {
-                    pose.p = toPhysX(*commands->teleportPosition);
-                }
-                if (commands->teleportRotation) {
-                    pose.q = toPhysX(transformRotation(Transform{.rotation = *commands->teleportRotation}));
-                }
-                rigid.setGlobalPose(pose, true);
+            const Transform* local = owner.tryGet<Transform>(entity);
+            if (local == nullptr) {
+                return;
             }
-            if (commands != nullptr) {
-                if (commands->linearVelocity) {
-                    rigid.setLinearVelocity(toPhysX(*commands->linearVelocity));
-                }
-                if (commands->angularVelocity) {
-                    rigid.setAngularVelocity(toPhysX(*commands->angularVelocity * DegreesToRadians));
-                }
-                if (nonZero(commands->force)) {
-                    rigid.addForce(toPhysX(commands->force), PxForceMode::eFORCE);
-                }
-                if (nonZero(commands->torque)) {
-                    rigid.addTorque(toPhysX(commands->torque), PxForceMode::eFORCE);
-                }
-                if (nonZero(commands->impulse)) {
-                    rigid.addForce(toPhysX(commands->impulse), PxForceMode::eIMPULSE);
-                }
-                if (nonZero(commands->angularImpulse)) {
-                    rigid.addTorque(toPhysX(commands->angularImpulse), PxForceMode::eIMPULSE);
-                }
-                commands->clear();
+            ActorRecord& record = recordIt->second;
+            if (record.poseWorldRevision == local->worldRevision()) {
+                return;
             }
+            const Transform transform = local->worldTransform();
+            if (!samePose(transform, record.lastTransform)) {
+                if (record.bodyType == RigidbodyType::Static) {
+                    record.actor->setGlobalPose(toPhysX(transform), true);
+                } else {
+                    static_cast<PxRigidDynamic*>(record.actor)->setKinematicTarget(toPhysX(transform));
+                }
+                record.lastTransform = transform;
+            }
+            record.poseWorldRevision = local->worldRevision();
+        };
+        if (forcePosePush) {
+            for (const auto& [entity, record] : actors) {
+                (void)record;
+                pushPose(entity);
+            }
+            forcePosePush = false;
         }
+        for (const Entity entity : TransformSystem::changedWorldTransforms(owner)) {
+            pushPose(entity);
+        }
+        if (observedTransformRevision != owner.componentRevision<Transform>()) {
+            // The change log also covers local edits that were resolved by an
+            // earlier updateDirty() and are no longer in the retained list.
+            owner.forEachComponentChangedSinceUnique<Transform>(observedTransformRevision, pushPose);
+            observedTransformRevision = owner.componentRevision<Transform>();
+        }
+
+        // Commands are consumed here and then cleared in place, so they are
+        // applied exactly when their component revision moves. Dynamic poses
+        // themselves are owned by PhysX and never need a per-frame push.
+        if (observedCommandRevision == owner.componentRevision<PhysicsCommandBuffer>()) {
+            return;
+        }
+        owner.forEachComponentChangedSinceUnique<PhysicsCommandBuffer>(
+            observedCommandRevision, [&](const Entity entity) { applyDynamicCommands(owner, entity); });
+        observedCommandRevision = owner.componentRevision<PhysicsCommandBuffer>();
+    }
+
+    void applyDynamicCommands(Registry& owner, const Entity entity) {
+        using namespace physx;
+        const auto recordIt = actors.find(entity);
+        if (recordIt == actors.end() || recordIt->second.bodyType != RigidbodyType::Dynamic) {
+            return;
+        }
+        PhysicsCommandBuffer* commands = owner.tryGet<PhysicsCommandBuffer>(entity);
+        if (commands == nullptr) {
+            return;
+        }
+        auto& rigid = *static_cast<PxRigidDynamic*>(recordIt->second.actor);
+        if (commands->teleportPosition.has_value() || commands->teleportRotation.has_value()) {
+            PxTransform pose = rigid.getGlobalPose();
+            if (commands->teleportPosition) {
+                pose.p = toPhysX(*commands->teleportPosition);
+            }
+            if (commands->teleportRotation) {
+                pose.q = toPhysX(transformRotation(Transform{.rotation = *commands->teleportRotation}));
+            }
+            rigid.setGlobalPose(pose, true);
+        }
+        if (commands->linearVelocity) {
+            rigid.setLinearVelocity(toPhysX(*commands->linearVelocity));
+        }
+        if (commands->angularVelocity) {
+            rigid.setAngularVelocity(toPhysX(*commands->angularVelocity * DegreesToRadians));
+        }
+        if (nonZero(commands->force)) {
+            rigid.addForce(toPhysX(commands->force), PxForceMode::eFORCE);
+        }
+        if (nonZero(commands->torque)) {
+            rigid.addTorque(toPhysX(commands->torque), PxForceMode::eFORCE);
+        }
+        if (nonZero(commands->impulse)) {
+            rigid.addForce(toPhysX(commands->impulse), PxForceMode::eIMPULSE);
+        }
+        if (nonZero(commands->angularImpulse)) {
+            rigid.addTorque(toPhysX(commands->angularImpulse), PxForceMode::eIMPULSE);
+        }
+        commands->clear();
     }
 
     void pullPhysXState(Registry& owner) {
@@ -1188,13 +1241,13 @@ struct PhysicsSystem::BroadPhaseCache final {
             Transform& transform = owner.get<Transform>(*entity);
             transform.position = fromPhysX(pose.p);
             transform.rotation = eulerDegrees(fromPhysX(pose.q).normalized());
-            if (!owner.has<RigidbodyState>(*entity))
-                owner.add<RigidbodyState>(*entity);
-            auto& state = owner.get<RigidbodyState>(*entity);
-            state.linearVelocity = fromPhysX(rigid.getLinearVelocity());
-            state.angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
+            RigidbodyState* state = owner.tryGet<RigidbodyState>(*entity);
+            if (state == nullptr)
+                state = &owner.add<RigidbodyState>(*entity);
+            state->linearVelocity = fromPhysX(rigid.getLinearVelocity());
+            state->angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
             if (body.fixedRotation)
-                state.angularVelocity = {};
+                state->angularVelocity = {};
             record.lastTransform = transform;
             owner.markChanged<Transform>(*entity);
         }

@@ -45,7 +45,7 @@ void ScriptRegistry::registerClass(ScriptClassDescriptor descriptor) {
 }
 
 RuntimeScriptInstance ScriptRegistry::create(const std::string_view name) const {
-    const auto found = classes_.find(std::string{name});
+    const auto found = classes_.find(name);
     if (found == classes_.end()) {
         return {};
     }
@@ -58,7 +58,7 @@ RuntimeScriptInstance ScriptRegistry::create(const std::string_view name) const 
 }
 
 std::optional<std::string> ScriptRegistry::sourceFile(const std::string_view name) const {
-    const auto found = classes_.find(std::string{name});
+    const auto found = classes_.find(name);
     if (found == classes_.end() || found->second.sourceFile.empty()) {
         return std::nullopt;
     }
@@ -66,7 +66,7 @@ std::optional<std::string> ScriptRegistry::sourceFile(const std::string_view nam
 }
 
 const ScriptClassDescriptor* ScriptRegistry::descriptor(const std::string_view name) const {
-    const auto found = classes_.find(std::string{name});
+    const auto found = classes_.find(name);
     return found == classes_.end() ? nullptr : &found->second;
 }
 

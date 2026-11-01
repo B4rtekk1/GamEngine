@@ -53,6 +53,25 @@ namespace Engine {
 namespace {
 constexpr std::size_t MaxMeshes = 1'000'000;
 constexpr std::size_t MaxVertices = 50'000'000;
+
+// 64-bit FNV-1a. Snapshot hashing only needs a stable, cheap content
+// fingerprint; operator== still compares the bytes for exactness.
+constexpr std::uint64_t SnapshotHashOffset = 1469598103934665603ULL;
+constexpr std::uint64_t SnapshotHashPrime = 1099511628211ULL;
+
+void hashSnapshotPayload(std::uint64_t& hash, const std::string& value) noexcept {
+    for (const char character : value) {
+        hash ^= static_cast<unsigned char>(character);
+        hash *= SnapshotHashPrime;
+    }
+}
+
+[[nodiscard]] std::uint64_t hashSnapshotPayload(const std::string& scene, const std::string& data) noexcept {
+    std::uint64_t hash = SnapshotHashOffset;
+    hashSnapshotPayload(hash, scene);
+    hashSnapshotPayload(hash, data);
+    return hash;
+}
 constexpr std::size_t MaxIndices = 150'000'000;
 constexpr std::size_t MaxEntities = 10'000'000;
 constexpr std::size_t FloatBufferSize = 32;
@@ -997,6 +1016,31 @@ void SceneSerializer::load(Scene& scene, std::istream& input, std::optional<std:
     msaaSamples = antialiasing ? std::optional{msaaFromAntialiasing(*antialiasing)} : std::nullopt;
 }
 
+SceneSerializer::Snapshot SceneSerializer::saveSnapshot(const Scene& scene) {
+    return saveSnapshot(scene.registry());
+}
+
+SceneSerializer::Snapshot SceneSerializer::saveSnapshot(const Scene& scene, const AntialiasingLevel antialiasing) {
+    return saveSnapshot(scene.registry(), antialiasing);
+}
+
+void SceneSerializer::loadSnapshot(Scene& scene, const Snapshot& snapshot) {
+    std::optional<AntialiasingLevel> ignoredAntialiasing;
+    loadSnapshot(scene, snapshot, ignoredAntialiasing);
+}
+
+void SceneSerializer::loadSnapshot(Scene& scene, const Snapshot& snapshot,
+                                   std::optional<AntialiasingLevel>& antialiasing) {
+    scene.detachObjectHandles();
+    try {
+        loadSnapshot(scene.registry(), snapshot, antialiasing);
+    } catch (...) {
+        scene.rebuildObjectHandles();
+        throw;
+    }
+    scene.rebuildObjectHandles();
+}
+
 void SceneSerializer::replace(Scene& destination, Scene& source) {
     if (&destination == &source) {
         return;
@@ -1048,6 +1092,65 @@ void SceneSerializer::save(const Registry& registry, const std::filesystem::path
 
 void SceneSerializer::save(const Registry& registry, std::ostream& output) {
     save(registry, output, AntialiasingLevel::TAA);
+}
+
+SceneSerializer::Snapshot SceneSerializer::saveSnapshot(const Registry& registry) {
+    return saveSnapshot(registry, AntialiasingLevel::TAA);
+}
+
+SceneSerializer::Snapshot SceneSerializer::saveSnapshot(const Registry& registry,
+                                                         const AntialiasingLevel antialiasing) {
+    std::ostringstream scene;
+    std::ostringstream data{std::ios::out | std::ios::binary};
+    data.write(TerrainDataMagic.data(), static_cast<std::streamsize>(TerrainDataMagic.size()));
+    writeLittleEndianU32(data, TerrainDataVersion);
+    scene.pword(terrainDataStreamSlot()) = &data;
+    save(registry, scene, antialiasing);
+    scene.pword(terrainDataStreamSlot()) = nullptr;
+    if (!scene || !data) {
+        throw std::runtime_error("Could not serialize in-memory scene snapshot");
+    }
+    Snapshot snapshot{scene.str(), data.str()};
+    snapshot.hash = hashSnapshotPayload(snapshot.scene, snapshot.data);
+    return snapshot;
+}
+
+bool SceneSerializer::Snapshot::operator==(const Snapshot& other) const noexcept {
+    if (hash != other.hash) {
+        return false;
+    }
+    return scene == other.scene && data == other.data;
+}
+
+void SceneSerializer::loadSnapshot(Registry& registry, const Snapshot& snapshot) {
+    std::optional<AntialiasingLevel> ignoredAntialiasing;
+    loadSnapshot(registry, snapshot, ignoredAntialiasing);
+}
+
+void SceneSerializer::loadSnapshot(Registry& registry, const Snapshot& snapshot,
+                                   std::optional<AntialiasingLevel>& antialiasing) {
+    std::istringstream scene{snapshot.scene};
+    if (snapshot.data.empty()) {
+        // Empty sidecars are tolerated so that a snapshot written by an
+        // older in-memory path (text-only image payloads) still loads.
+        load(registry, scene, antialiasing);
+        return;
+    }
+
+    std::istringstream data{snapshot.data, std::ios::in | std::ios::binary};
+    std::array<char, TerrainDataMagic.size()> magic{};
+    data.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+    if (magic != TerrainDataMagic || readLittleEndianU32(data, "terrain data version") != TerrainDataVersion) {
+        invalidScene("unsupported in-memory terrain data sidecar");
+    }
+    scene.pword(terrainDataStreamSlot()) = &data;
+    try {
+        load(registry, scene, antialiasing);
+    } catch (...) {
+        scene.pword(terrainDataStreamSlot()) = nullptr;
+        throw;
+    }
+    scene.pword(terrainDataStreamSlot()) = nullptr;
 }
 
 // The serializer's format branches are kept together to make the output

@@ -138,6 +138,16 @@ class GtaoPass final {
     VkPipeline depthPipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool depthDescriptorPool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, FramesInFlight> depthSets_{};
+    // The linear-depth inputs only change when the pass is recreated (resize,
+    // quality change) or the caller swaps its depth target. Re-writing six
+    // descriptors every frame was pure API overhead.
+    struct LinearDepthDescriptorCache final {
+        VkImageView depthView = VK_NULL_HANDLE;
+        VkSampler depthSampler = VK_NULL_HANDLE;
+        std::uint32_t generation = 0;
+    };
+    std::array<LinearDepthDescriptorCache, FramesInFlight> linearDepthDescriptorCache_{};
+    std::uint32_t linearDepthDescriptorGeneration_ = 0;
     // Main AO, 5x5 denoise and bilateral upsample are all compute pipelines.
     std::array<VkDescriptorSetLayout, 3> computeLayouts_{};
     std::array<VkPipelineLayout, 3> computePipelineLayouts_{};

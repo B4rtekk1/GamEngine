@@ -8,6 +8,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(GamEngineTests
     MathTests.cpp EcsTests.cpp GeneralTests.cpp ComponentTests.cpp UiAndLayoutTests.cpp TimeTests.cpp SceneBuilderTests.cpp ScriptRegistryTests.cpp ProjectTests.cpp GPUSceneDatabaseTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Camera.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/TaskScheduler.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Time.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Project.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/ECS/ComponentId.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Terrain.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/ProceduralCloud.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Meshlet.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Culling/MeshletCulling.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/GPUSceneDatabase.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Lighting/EnvironmentBaker.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Canvas.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/RectTransform.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/UIBatch.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Vulkan/UIFontAtlas.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Vulkan/UIFontAtlasRuntime.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Scripting/ScriptRegistry.cpp)
 target_sources(GamEngineTests PRIVATE ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Lighting/ReflectionProbeCapture.cpp)
@@ -111,6 +112,7 @@ gtest_discover_tests(PlayModePerformanceTests TEST_PREFIX "PlayMode.")
 
 add_executable(TransformPerformanceTests
     TransformPerformanceTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/ECS/ComponentId.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/TransformSystem.cpp)
 target_link_libraries(TransformPerformanceTests PRIVATE GTest::gtest_main Vulkan::Vulkan)
 target_include_directories(TransformPerformanceTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR})

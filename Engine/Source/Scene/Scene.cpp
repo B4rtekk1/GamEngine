@@ -319,6 +319,7 @@ void Scene::load(const std::filesystem::path& path) {
 
 void Scene::rebuildObjectHandles() {
     objects_.clear();
+    objectSlot_.clear();
     names_.clear();
     objectById_.clear();
     objectByEntity_.clear();

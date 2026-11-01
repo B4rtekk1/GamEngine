@@ -229,7 +229,11 @@ TEST(CullingTypes, ObjectAndUniformDataHaveGpuCompatibleAlignment) {
     EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, cameraPosition), 128u);
     EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, objectCount), 240u);
     EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, drawCategory), 284u);
-    EXPECT_EQ(sizeof(Engine::Culling::CullingUniformData), 288u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, maxShadowInstances), 288u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, shadowCacheMode), 292u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, padding1), 296u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, padding2), 300u);
+    EXPECT_EQ(sizeof(Engine::Culling::CullingUniformData), 304u);
 }
 
 TEST(InputEnums, ExposeStableDistinctButtonAndKeyValues) {

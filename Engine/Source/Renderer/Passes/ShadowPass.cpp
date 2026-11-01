@@ -1438,8 +1438,10 @@ void ShadowPass::record(
             if (activeLevels[level])
                 twoSidedCullingPass.recordCandidates(commandBuffer, objectCount, clipMatrices[level], level);
         }
+        // prepareCandidateReads() emits a global memory dependency, so one
+        // call publishes both the one-sided and two-sided candidate lists.
+        // Issuing it twice in a row only duplicated the barrier.
         cullingPass.prepareCandidateReads(commandBuffer);
-        twoSidedCullingPass.prepareCandidateReads(commandBuffer);
         // The second dispatch dimension selects an active virtual page.  This
         // replaces the former one-dispatch-per-page pattern with a single
         // compute launch for each material-sidedness stream.
@@ -1510,6 +1512,33 @@ void ShadowPass::record(
     constexpr VkDeviceSize offsets[] = {0, 0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    // Page tiles are disjoint, so every depth clear can be recorded before the
+    // draw loop instead of one call per page. vkCmdClearAttachments ignores the
+    // bound viewport/scissor and clips each rect to the render area.
+    {
+        constexpr std::size_t clearBatchSize = 32;
+        std::array<VkClearRect, clearBatchSize> clearRects{};
+        std::size_t pendingClears = 0;
+        const VkClearAttachment clear{VK_IMAGE_ASPECT_DEPTH_BIT, 0, {.depthStencil = {1.0F, 0}}};
+        const auto flushClears = [&] {
+            if (pendingClears == 0)
+                return;
+            vkCmdClearAttachments(commandBuffer, 1, &clear, static_cast<std::uint32_t>(pendingClears),
+                                  clearRects.data());
+            pendingClears = 0;
+        };
+        for (const std::uint32_t physical : pagesToRender_) {
+            const std::int32_t x =
+                static_cast<std::int32_t>((physical % ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
+            const std::int32_t y =
+                static_cast<std::int32_t>((physical / ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
+            clearRects[pendingClears++] = {
+                VkRect2D{{x, y}, {ShadowMap::PageResolution, ShadowMap::PageResolution}}, 0, 1};
+            if (pendingClears == clearRects.size())
+                flushClears();
+        }
+        flushClears();
+    }
     for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
         const std::uint32_t physical = pagesToRender_[pageIndex];
         const PhysicalPage& page = physicalPages_[physical];
@@ -1519,9 +1548,6 @@ void ShadowPass::record(
         const std::int32_t y =
             static_cast<std::int32_t>((physical / ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
         const VkRect2D tile{{x, y}, {ShadowMap::PageResolution, ShadowMap::PageResolution}};
-        const VkClearAttachment clear{VK_IMAGE_ASPECT_DEPTH_BIT, 0, {.depthStencil = {1.0F, 0}}};
-        const VkClearRect clearRect{tile, 0, 1};
-        vkCmdClearAttachments(commandBuffer, 1, &clear, 1, &clearRect);
         const VkViewport viewport{static_cast<float>(x),
                                   static_cast<float>(y),
                                   static_cast<float>(ShadowMap::PageResolution),

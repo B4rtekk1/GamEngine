@@ -105,6 +105,7 @@
 #include <filesystem>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <numbers>
@@ -565,14 +566,12 @@ class Renderer::Backend {
         Diagnostics::instance().report(DiagnosticSeverity::Info,
                                        "[SceneSync] waiting for frame/upload retirement before topology rebuild",
                                        {.subsystem = "Renderer"});
-        Diagnostics::instance().flush();
         const std::uint64_t uploadRetireValue = uploadContext.lastSubmittedValue();
         waitForAllFrames();
         if (uploadRetireValue != 0U)
             uploadContext.wait(uploadRetireValue);
         Diagnostics::instance().report(DiagnosticSeverity::Info, "[SceneSync] frame/upload retirement complete",
                                        {.subsystem = "Renderer"});
-        Diagnostics::instance().flush();
     }
 
     [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path& path) {
@@ -781,6 +780,9 @@ class Renderer::Backend {
         textureGpuResources.clear();
         meshTextureIds.clear();
         meshTextureSlots.clear();
+        decodedMeshSources.clear();
+        decodedMeshSourceBytes = 0;
+        decodedMeshSourceClock = 0;
         nextMaterialTextureSlot = 1;
         freeMaterialTextureSlots.clear();
         materialTextureDescriptors.clear();
@@ -969,7 +971,6 @@ class Renderer::Backend {
         lastRenderTopologyRevision = updatedTopologyRevision;
         lastParticleEmitterRevision = updatedParticleEmitterRevision;
         lastSmokeEmitterRevision = updatedSmokeEmitterRevision;
-        assetManager.unload_unused();
     }
 
     void updateMeshGeometry(const Entity entity, const std::uint32_t firstVertex,

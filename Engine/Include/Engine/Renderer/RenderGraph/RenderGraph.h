@@ -436,7 +436,9 @@ class RenderGraph final {
     std::vector<BufferResource> buffers_;
     std::vector<Pass> passes_;
     std::vector<std::uint32_t> order_;
-    std::vector<std::string> orderNames_;
+    mutable std::vector<std::string> orderNames_;
+    /** False when orderNames_ must be rebuilt from order_ before being read. */
+    mutable bool orderNamesValid_{};
     std::vector<BarrierBatch> barriers_;
     std::vector<BarrierBatch> releaseBarriers_;
     std::vector<QueueDependency> queueDependencies_;

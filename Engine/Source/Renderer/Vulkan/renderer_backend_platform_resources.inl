@@ -616,13 +616,15 @@ void createForwardPass() {
                        shadowPass.descriptorSetLayout(), assetManager, VK_IMAGE_LAYOUT_UNDEFINED, false,
                        !msaa.enabled() ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED,
                        !msaa.enabled() ? VK_FORMAT_R16G16_SNORM : VK_FORMAT_UNDEFINED, false, true, true);
+    // TAA velocity is written exactly once, by the depth prepass. The
+    // lighting pass used to clear a full-resolution RG16F target and
+    // recompute the same motion vectors for every opaque fragment, which
+    // doubled velocity bandwidth in the heaviest pass of the frame.
     lightingForwardPass.create(device, HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
                                msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                                msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
                                shadowPass.descriptorSetLayout(), assetManager, VK_IMAGE_LAYOUT_UNDEFINED, false,
-                               antialiasingLevel == AntialiasingLevel::TAA ? VK_FORMAT_R16G16_SFLOAT
-                                                                           : VK_FORMAT_UNDEFINED,
-                               VK_FORMAT_UNDEFINED, true, false, true);
+                               VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, true, false, true);
     waterPass.create(
         device, HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
         msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,

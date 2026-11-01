@@ -57,8 +57,6 @@ class ForwardPass final {
     void drawGrass(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
                    const Culling::IndexedIndirectDrawCount& indirectDraw) const;
 
-    void drawOutline(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
-                     const Culling::IndexedIndirectDrawCount& indirectDraw) const;
 
     static void end(VkCommandBuffer commandBuffer);
 
@@ -68,7 +66,6 @@ class ForwardPass final {
     std::array<GraphicsPipeline, MaterialShaderCount> meshletMaterialPipelines_;
     GraphicsPipeline foliagePipeline_;
     GraphicsPipeline grassPipeline_;
-    GraphicsPipeline outlinePipeline_;
     ShaderGraphPipelineCache shaderGraphPipelines_;
     GraphicsPipelineOptions shaderGraphPipelineOptions_{};
     bool hasVelocityAttachment_ = false;

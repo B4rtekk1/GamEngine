@@ -92,7 +92,7 @@ if(WIN32)
 endif()
 # The upstream CMake file expects a package-installed ImGui; this project owns
 # its ImGui target, so only populate the source and build the single TU below.
-FetchContent_Declare(ImNodes GIT_REPOSITORY https://github.com/Nelarius/imnodes.git GIT_TAG master GIT_SHALLOW TRUE SOURCE_SUBDIR cmake-not-used)
+FetchContent_Declare(ImNodes GIT_REPOSITORY https://github.com/Nelarius/imnodes.git GIT_TAG 2d0c280b07b2f62b120034811cc6e41251673961 GIT_SHALLOW TRUE SOURCE_SUBDIR cmake-not-used)
 FetchContent_MakeAvailable(ImNodes)
 add_library(GameEngineImNodes STATIC ${imnodes_SOURCE_DIR}/imnodes.cpp)
 target_include_directories(GameEngineImNodes PUBLIC ${imnodes_SOURCE_DIR})

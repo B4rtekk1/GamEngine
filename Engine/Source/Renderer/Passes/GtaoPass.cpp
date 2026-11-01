@@ -137,6 +137,7 @@ void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkCommandPool 
     if (quality.denoisePassCount > 3)
         throw std::invalid_argument("GTAO supports at most three denoise passes");
     destroy();
+    ++linearDepthDescriptorGeneration_;
     device_ = device;
     beginLabel_ = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
         vkGetDeviceProcAddr(device_, "vkCmdBeginDebugUtilsLabelEXT"));
@@ -404,25 +405,31 @@ void GtaoPass::buildLinearDepth(VkCommandBuffer cmd, uint32_t frame, VkImageView
             linearDepthInitialized_ ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, 0, linearDepthMipCount_);
     VkDescriptorImageInfo src{depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-    std::array<VkDescriptorImageInfo, 6> images{};
-    images[0] = src;
-    for (uint32_t binding = 1; binding < images.size(); ++binding)
-        images[binding] = {VK_NULL_HANDLE, linearDepthMipViews_[std::min(binding - 1, linearDepthMipCount_ - 1)],
-                           VK_IMAGE_LAYOUT_GENERAL};
-    std::array<VkWriteDescriptorSet, 6> writes{};
-    for (uint32_t binding = 0; binding < writes.size(); ++binding) {
-        writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                           nullptr,
-                           depthSets_[frame],
-                           binding,
-                           0,
-                           1,
-                           binding == 0 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                           &images[binding],
-                           nullptr,
-                           nullptr};
+    const LinearDepthDescriptorCache& cached = linearDepthDescriptorCache_.at(frame);
+    if (cached.generation != linearDepthDescriptorGeneration_ || cached.depthView != depth ||
+        cached.depthSampler != depthSampler) {
+        std::array<VkDescriptorImageInfo, 6> images{};
+        images[0] = src;
+        for (uint32_t binding = 1; binding < images.size(); ++binding)
+            images[binding] = {VK_NULL_HANDLE, linearDepthMipViews_[std::min(binding - 1, linearDepthMipCount_ - 1)],
+                               VK_IMAGE_LAYOUT_GENERAL};
+        std::array<VkWriteDescriptorSet, 6> writes{};
+        for (uint32_t binding = 0; binding < writes.size(); ++binding) {
+            writes[binding] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                nullptr,
+                depthSets_[frame],
+                binding,
+                0,
+                1,
+                binding == 0 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                &images[binding],
+                nullptr,
+                nullptr};
+        }
+        vkUpdateDescriptorSets(device_, uint32_t(writes.size()), writes.data(), 0, nullptr);
+        linearDepthDescriptorCache_[frame] = {depth, depthSampler, linearDepthDescriptorGeneration_};
     }
-    vkUpdateDescriptorSets(device_, uint32_t(writes.size()), writes.data(), 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipeline_);
     auto set = depthSets_[frame];
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelineLayout_, 0, 1, &set, 0, nullptr);
@@ -652,6 +659,8 @@ void GtaoPass::destroy() noexcept {
     depthPipeline_ = {};
     depthDescriptorPool_ = {};
     depthSets_.fill({});
+    linearDepthDescriptorCache_ = {};
+    linearDepthDescriptorGeneration_ = 0;
     linearDepthMipViews_.clear();
     linearDepthImage_ = {};
     linearDepthFormat_ = VK_FORMAT_UNDEFINED;

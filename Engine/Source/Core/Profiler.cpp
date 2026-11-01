@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <mutex>
@@ -23,6 +24,7 @@ struct Storage final {
     std::uint32_t nextFrame{};
     std::uint32_t frameCount{};
     std::uint64_t frameNumber{};
+    std::atomic<bool> enabled{true};
     bool recording{};
     bool clearRequested{};
     Clock::time_point frameStart{};
@@ -40,6 +42,10 @@ Storage& storage() {
     return value;
 }
 thread_local std::vector<ActiveZone> activeZones;
+// The recording thread is immutable for a profiler session, so hashing its id
+// on every zone start was pure per-event overhead.
+thread_local const std::uint32_t threadHash =
+    static_cast<std::uint32_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
 std::uint64_t nowNs(const Clock::time_point origin) {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - origin).count());
@@ -80,6 +86,14 @@ void Profiler::beginFrame() {
     }
     ProfileFrame& frame = state.frames[state.nextFrame];
     frame.frameNumber = ++state.frameNumber;
+    if (!state.enabled.load(std::memory_order_relaxed)) {
+        // Keep the ring empty so consumers report "no data" instead of showing
+        // a stale frame. The frame number above still advances because GPU
+        // results are matched against it after the fence completes.
+        state.recording = false;
+        state.frameCount = 0;
+        return;
+    }
     frame.cpuFrameMs = 0.0;
     frame.gpuFrameMs = 0.0;
     frame.cpuEvents.clear();
@@ -116,8 +130,7 @@ void Profiler::beginCpuZone(const ProfileNameId name) {
     ProfileFrame& frame = state.frames[state.nextFrame];
     if (frame.cpuEvents.size() == MaxEventsPerFrame)
         return;
-    frame.cpuEvents.push_back({name, nowNs(state.frameStart), 0,
-                               static_cast<std::uint32_t>(std::hash<std::thread::id>{}(std::this_thread::get_id())),
+    frame.cpuEvents.push_back({name, nowNs(state.frameStart), 0, threadHash,
                                static_cast<std::uint16_t>(activeZones.size())});
     activeZones.push_back({frame.cpuEvents.size() - 1});
 }
@@ -133,6 +146,9 @@ void Profiler::endCpuZone() {
 void Profiler::attachGpuFrame(const std::uint64_t frameNumber, const double milliseconds,
                               const std::span<const GpuProfileEvent> events) noexcept {
     Storage& state = storage();
+    if (!state.enabled.load(std::memory_order_relaxed)) {
+        return;
+    }
     for (ProfileFrame& frame : state.frames) {
         if (frame.frameNumber != frameNumber)
             continue;
@@ -168,8 +184,21 @@ std::uint64_t Profiler::currentFrameNumber() noexcept {
     return storage().frameNumber;
 }
 
+void Profiler::setEnabled(const bool enabled) noexcept {
+    Storage& state = storage();
+    state.enabled.store(enabled, std::memory_order_relaxed);
+    if (!enabled) {
+        state.recording = false;
+    }
+}
+
+bool Profiler::enabled() noexcept {
+    return storage().enabled.load(std::memory_order_relaxed);
+}
+
 std::uint32_t Profiler::historySize() noexcept {
-    return storage().frameCount;
+    Storage& state = storage();
+    return state.enabled.load(std::memory_order_relaxed) ? state.frameCount : 0;
 }
 
 const ProfileFrame& Profiler::historyFrame(const std::uint32_t index) noexcept {

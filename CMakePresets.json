@@ -74,6 +74,44 @@
       }
     },
     {
+      "name": "linux-dev-ninja",
+      "displayName": "Development (Ninja)",
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-profile",
+      "displayName": "Profile (RelWithDebInfo, Ninja)",
+      "description": "Optimized build with debug info and source-tree fallbacks; use this one for measurements.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "GE_DISTRIBUTION_BUILD": "OFF"
+      }
+    },
+    {
+      "name": "linux-tests-ninja",
+      "displayName": "Development with tests (Ninja)",
+      "inherits": "linux-dev-ninja",
+      "cacheVariables": {
+        "GE_BUILD_TESTS": "ON"
+      }
+    },
+    {
       "name": "linux-release",
       "inherits": "base",
       "generator": "Unix Makefiles",
@@ -129,6 +167,18 @@
     {
       "name": "linux-tests",
       "configurePreset": "linux-tests"
+    },
+    {
+      "name": "linux-dev-ninja",
+      "configurePreset": "linux-dev-ninja"
+    },
+    {
+      "name": "linux-profile",
+      "configurePreset": "linux-profile"
+    },
+    {
+      "name": "linux-tests-ninja",
+      "configurePreset": "linux-tests-ninja"
     },
     {
       "name": "linux-release",

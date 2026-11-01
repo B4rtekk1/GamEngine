@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ComponentId.h"
 #include "Entity.h"
 
 #include <cassert>
@@ -7,7 +8,6 @@
 #include <functional>
 #include <limits>
 #include <stdexcept>
-#include <typeindex>
 #include <utility>
 #include <vector>
 
@@ -39,8 +39,11 @@ class IComponentPool {
      *
      * The operation is a no-op when the source entity does not own a
      * component from this pool.
+     *
+     * @return true when a component was copied; false when the source entity
+     * does not own a component from this pool.
      */
-    virtual void clone(Entity source, Entity target) = 0;
+    virtual bool clone(Entity source, Entity target) = 0;
 
     /**
      * @brief Checks whether an entity owns a component in this pool.
@@ -50,8 +53,8 @@ class IComponentPool {
      */
     [[nodiscard]] virtual bool has(Entity entity) const = 0;
 
-    /** Concrete component type stored by this type-erased pool. */
-    [[nodiscard]] virtual std::type_index componentType() const noexcept = 0;
+    /** Dense, process-wide identifier of the concrete component type. */
+    [[nodiscard]] virtual std::size_t componentTypeId() const noexcept = 0;
 };
 
 /**
@@ -129,12 +132,15 @@ template <typename T> class ComponentPool final : public IComponentPool {
         m_entities.pop_back();
         m_changeRevisions.pop_back();
         m_sparse[entityIndex(entity)] = InvalidIndex;
+        trimSparseTail();
     }
 
-    void clone(Entity source, Entity target) override {
-        if (has(source)) {
-            add(target, get(source));
+    bool clone(Entity source, Entity target) override {
+        if (!has(source)) {
+            return false;
         }
+        add(target, get(source));
+        return true;
     }
 
     /**
@@ -149,8 +155,8 @@ template <typename T> class ComponentPool final : public IComponentPool {
                m_entities[m_sparse[index]] == entity;
     }
 
-    [[nodiscard]] std::type_index componentType() const noexcept override {
-        return typeid(T);
+    [[nodiscard]] std::size_t componentTypeId() const noexcept override {
+        return Detail::componentTypeId<T>();
     }
 
     /**
@@ -240,6 +246,28 @@ template <typename T> class ComponentPool final : public IComponentPool {
      * @brief Sentinel indicating that an entity has no dense-array entry.
      */
     static constexpr std::uint32_t InvalidIndex = std::numeric_limits<std::uint32_t>::max();
+
+    /**
+     * @brief Releases trailing sparse slots that no longer reference a
+     * component.
+     *
+     * Entity indices are recycled, so the sparse map normally keeps growing
+     * with the highest entity index ever used. Repeatedly creating and
+     * destroying entities at the end of the index space would otherwise leave
+     * a permanently oversized table behind. Trimming only the tail is O(1)
+     * when the last slot is still occupied and never touches live mappings.
+     */
+    void trimSparseTail() noexcept {
+        // Only consider the tail once it dominates live storage; this keeps
+        // the common case a single comparison.
+        if (m_sparse.size() <= 1024 || m_sparse.size() <= m_entities.size() * 4 ||
+            m_sparse.back() != InvalidIndex) {
+            return;
+        }
+        while (!m_sparse.empty() && m_sparse.back() == InvalidIndex) {
+            m_sparse.pop_back();
+        }
+    }
 
     /**
      * @brief Enlarges the sparse array so it can index an entity.

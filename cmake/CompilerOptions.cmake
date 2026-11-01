@@ -20,12 +20,53 @@ function(gameengine_enable_release_ipo target)
         message(STATUS "IPO disabled for ${target}: WINDOWS_EXPORT_ALL_SYMBOLS requires readable COFF objects")
         return()
     endif()
+    # RelWithDebInfo is the configuration used for profiling builds; it must
+    # optimize as aggressively as Release or the measurements are meaningless.
     set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+endfunction()
+
+function(gameengine_enable_optimization_flags target)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        # Engine is a shared library. With default ELF interposition rules the
+        # compiler must assume every externally visible symbol can be replaced
+        # at load time, so calls to its own hot helpers cannot be inlined or
+        # constant-folded across the library boundary. Nothing in this project
+        # interposes those symbols, so opt in to the direct-call assumption.
+        target_compile_options(${target} PRIVATE -fno-semantic-interposition)
+    endif()
 endfunction()
 
 option(GAMEENGINE_ENABLE_WARNINGS "Enable strict compiler warnings" ON)
 option(GAMEENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(GAMEENGINE_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
+option(GAMEENGINE_ENABLE_CCACHE "Use ccache or sccache as the compiler launcher when available" ON)
+option(GAMEENGINE_ENABLE_PCH "Precompile stable standard-library headers to speed up clean builds" ON)
+
+if(GAMEENGINE_ENABLE_CCACHE)
+    find_program(GAMEENGINE_COMPILER_LAUNCHER NAMES ccache sccache)
+    if(GAMEENGINE_COMPILER_LAUNCHER)
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${GAMEENGINE_COMPILER_LAUNCHER}")
+        set(CMAKE_C_COMPILER_LAUNCHER "${GAMEENGINE_COMPILER_LAUNCHER}")
+        message(STATUS "GamEngine compiler launcher: ${GAMEENGINE_COMPILER_LAUNCHER}")
+    endif()
+endif()
+
+# Standard-library headers are parsed by almost every translation unit. A PCH
+# is shared per target and removes that repeated work from clean builds. Only
+# stable, macro-independent headers belong here: project headers and glm must
+# stay out because several sources define configuration macros before them.
+function(gameengine_enable_pch target)
+    if(NOT GAMEENGINE_ENABLE_PCH)
+        return()
+    endif()
+    target_precompile_headers(${target} PRIVATE
+        <algorithm> <array> <atomic> <chrono> <cmath> <cstdint> <cstring>
+        <filesystem> <functional> <limits> <map> <memory> <mutex> <optional>
+        <span> <sstream> <string> <string_view> <thread> <unordered_map>
+        <unordered_set> <utility> <variant> <vector>)
+endfunction()
+
 function(gameengine_enable_warnings target)
     if(NOT GAMEENGINE_ENABLE_WARNINGS)
         return()

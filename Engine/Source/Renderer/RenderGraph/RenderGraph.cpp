@@ -594,6 +594,10 @@ void RenderGraph::compile() {
     if (compiled_) {
         return;
     }
+    // Pass names are only needed by executionOrder(), which debug tooling and
+    // tests call on demand. Rebuilding the string vector here made every frame
+    // pay for data no runtime path reads.
+    orderNamesValid_ = false;
     const auto count = static_cast<std::uint32_t>(passes_.size());
     // Hash only declarative structure, never VkImage/VkBuffer handles:
     // imported physical resources are expected to change per frame.
@@ -694,9 +698,6 @@ void RenderGraph::compile() {
             resources_[resource].lifetime = cachedTemplate->textureLifetimes[resource];
         for (std::uint32_t resource = 0; resource < buffers_.size(); ++resource)
             buffers_[resource].lifetime = cachedTemplate->bufferLifetimes[resource];
-        orderNames_.clear();
-        for (const auto pass : order_)
-            orderNames_.push_back(passes_[pass].name);
         allocateTransients(cachedImageSlotDescs);
         allocateTransientBuffers(cachedBufferSlotDescs);
         barriers_ = cachedTemplate->barriers;
@@ -713,7 +714,6 @@ void RenderGraph::compile() {
         rebindBarriers(releaseBarriers_);
     } else {
         order_.clear();
-        orderNames_.clear();
         const auto cachedTopology =
             std::find_if(topologyCaches_.begin(), topologyCaches_.end(), [signature](const TopologyCache& cache) {
                 return cache.valid && cache.signature == signature;
@@ -885,9 +885,6 @@ void RenderGraph::compile() {
                 pending.insert(pending.end(), dependencies[pass].begin(), dependencies[pass].end());
             }
             std::erase_if(order_, [&live](const std::uint32_t pass) { return !live[pass]; });
-        }
-        for (const auto pass : order_) {
-            orderNames_.push_back(passes_[pass].name);
         }
 
         // Keep the cross-queue edges separately from the topological order.
@@ -1821,6 +1818,14 @@ void RenderGraph::trimTransientPool() noexcept {
 }
 
 const std::vector<std::string>& RenderGraph::executionOrder() const noexcept {
+    if (!orderNamesValid_) {
+        orderNames_.clear();
+        orderNames_.reserve(order_.size());
+        for (const auto pass : order_) {
+            orderNames_.push_back(passes_[pass].name);
+        }
+        orderNamesValid_ = true;
+    }
     return orderNames_;
 }
 const std::vector<QueueDependency>& RenderGraph::queueDependencies() const noexcept {

@@ -1,5 +1,14 @@
 void synchronizeGlassAtlasSlots() {
     const Registry& readRegistry = registry;
+    const std::uint64_t structureRevision = readRegistry.structuralRevision();
+    const std::uint64_t glassRevision = readRegistry.componentRevision<GlassDestructionComponent>();
+    const std::uint64_t meshRevision = readRegistry.componentRevision<MeshRendererComponent>();
+    const std::uint64_t uuidRevision = readRegistry.componentRevision<UUIDComponent>();
+    if (glassAtlasSyncedRegistry == &registry && glassAtlasStructureRevision == structureRevision &&
+        glassAtlasComponentRevision == glassRevision && glassAtlasMeshRevision == meshRevision &&
+        glassAtlasUuidRevision == uuidRevision) {
+        return;
+    }
     std::array<GlassAtlasOwner, 512> owners{};
     std::unordered_map<Entity, unsigned> slots;
     unsigned count = 0;
@@ -37,6 +46,11 @@ void synchronizeGlassAtlasSlots() {
                 markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
             }
         });
+    glassAtlasSyncedRegistry = &registry;
+    glassAtlasStructureRevision = structureRevision;
+    glassAtlasComponentRevision = glassRevision;
+    glassAtlasMeshRevision = meshRevision;
+    glassAtlasUuidRevision = uuidRevision;
 }
 
 [[nodiscard]] float glassCrackSlot(Entity entity) {

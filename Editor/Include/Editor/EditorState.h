@@ -9,9 +9,10 @@
 #include "Engine/Scene/ScenePresets.h"
 #include "Engine/Scene/SceneSerializer.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <variant>
@@ -19,16 +20,33 @@
 
 namespace Editor {
 
-inline std::string serializeScene(const Engine::ScenePreset& scene) {
-    std::ostringstream output;
-    Engine::SceneSerializer::save(scene, output);
-    return output.str();
-}
-
 class SceneHistory final {
   public:
+    /**
+     * @brief Limits retained snapshot memory; the oldest undo entries are
+     * evicted first.
+     *
+     * A zero limit disables eviction. The default keeps an editor session
+     * responsive when scenes contain large terrain or embedded textures.
+     */
+    void setMemoryLimit(const std::size_t bytes) noexcept {
+        memoryLimit_ = bytes;
+    }
+
+    /** @brief Approximate bytes retained by the baseline and history entries. */
+    [[nodiscard]] std::size_t memoryUsage() const noexcept {
+        std::size_t bytes = baseline_.scene.size() + baseline_.data.size();
+        for (const Entry& entry : undo_) {
+            bytes += entryBytes(entry);
+        }
+        for (const Entry& entry : redo_) {
+            bytes += entryBytes(entry);
+        }
+        return bytes;
+    }
+
     void reset(const Engine::ScenePreset& scene) {
-        baseline_ = serializeScene(scene);
+        baseline_ = Engine::SceneSerializer::saveSnapshot(scene);
         observedRevision_ = scene.view().mutationRevision();
         undo_.clear();
         redo_.clear();
@@ -38,13 +56,16 @@ class SceneHistory final {
         const std::uint64_t revision = scene.view().mutationRevision();
         if (revision == observedRevision_)
             return false;
-        const std::string current = serializeScene(scene);
+        Engine::SceneSerializer::Snapshot current = Engine::SceneSerializer::saveSnapshot(scene);
         observedRevision_ = revision;
-        if (current == baseline_)
+        // The hash is computed while serializing; comparing it avoids walking
+        // the full text and binary payloads of a potentially huge scene.
+        if (current.hash == baseline_.hash)
             return false;
         undo_.emplace_back(std::move(baseline_));
-        baseline_ = current;
+        baseline_ = std::move(current);
         redo_.clear();
+        trimToMemoryLimit();
         return true;
     }
 
@@ -75,9 +96,10 @@ class SceneHistory final {
         if (edit.before == edit.after)
             return false;
         undo_.emplace_back(std::move(edit));
-        baseline_ = serializeScene(scene);
+        baseline_ = Engine::SceneSerializer::saveSnapshot(scene);
         observedRevision_ = view.mutationRevision();
         redo_.clear();
+        trimToMemoryLimit();
         return true;
     }
 
@@ -103,18 +125,41 @@ class SceneHistory final {
         std::vector<float> before;
         std::vector<float> after;
     };
-    using Entry = std::variant<std::string, TerrainEdit>;
+    using Entry = std::variant<Engine::SceneSerializer::Snapshot, TerrainEdit>;
 
-    bool restore(Engine::ScenePreset& scene, std::vector<Entry>& from, std::vector<Entry>& to, const bool forward) {
+    /** Default cap for in-memory undo state (512 MiB). */
+    static constexpr std::size_t DefaultMemoryLimit = 512ULL * 1024ULL * 1024ULL;
+
+    [[nodiscard]] static std::size_t entryBytes(const Entry& entry) noexcept {
+        if (const auto* snapshot = std::get_if<Engine::SceneSerializer::Snapshot>(&entry)) {
+            return snapshot->scene.size() + snapshot->data.size();
+        }
+        const auto& edit = std::get<TerrainEdit>(entry);
+        return sizeof(TerrainEdit) + (edit.before.size() + edit.after.size()) * sizeof(float);
+    }
+
+    void trimToMemoryLimit() {
+        if (memoryLimit_ == 0)
+            return;
+        std::size_t bytes = memoryUsage();
+        while (!undo_.empty() && bytes > memoryLimit_) {
+            // Dropping the oldest state keeps the most recent undo steps
+            // available; a snapshot can be hundreds of megabytes when the
+            // scene embeds terrain layers or textures.
+            bytes -= entryBytes(undo_.front());
+            undo_.erase(undo_.begin());
+        }
+    }
+
+    bool restore(Engine::ScenePreset& scene, std::deque<Entry>& from, std::deque<Entry>& to, const bool forward) {
         if (from.empty())
             return false;
         Entry entry = std::move(from.back());
         from.pop_back();
-        if (auto* snapshot = std::get_if<std::string>(&entry)) {
+        if (auto* snapshot = std::get_if<Engine::SceneSerializer::Snapshot>(&entry)) {
             to.emplace_back(std::move(baseline_));
             baseline_ = std::move(*snapshot);
-            std::istringstream input{baseline_};
-            Engine::SceneSerializer::load(scene, input);
+            Engine::SceneSerializer::loadSnapshot(scene, baseline_);
         } else {
             const TerrainEdit& edit = std::get<TerrainEdit>(entry);
             Engine::Entity found = Engine::NullEntity;
@@ -160,16 +205,19 @@ class SceneHistory final {
                 });
             }
             to.push_back(std::move(entry));
-            baseline_ = serializeScene(scene);
+            baseline_ = Engine::SceneSerializer::saveSnapshot(scene);
         }
         observedRevision_ = scene.editor().mutationRevision();
         return true;
     }
 
-    std::string baseline_;
-    std::vector<Entry> undo_;
-    std::vector<Entry> redo_;
+    Engine::SceneSerializer::Snapshot baseline_;
+    // Deques make evicting the oldest entry O(1); a vector shifted every
+    // retained variant on every trim.
+    std::deque<Entry> undo_;
+    std::deque<Entry> redo_;
     std::uint64_t observedRevision_{};
+    std::size_t memoryLimit_{DefaultMemoryLimit};
 };
 
 class EntityClipboard final {

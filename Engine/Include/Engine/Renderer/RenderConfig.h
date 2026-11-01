@@ -205,7 +205,12 @@ struct RenderFeatures final {
     bool transformCaching = true;
     bool materialCaching = true;
     bool gpuCulling = true;
-    bool occlusionCulling = false;
+    // Hi-Z occlusion culling reuses the hierarchy that virtual shadow maps
+    // already build every frame, so enabling it costs no extra GPU work.
+    // The cull test keeps expanding bounds and disables itself on camera
+    // cuts; MSAA paths without conservative depth resolve fall back to
+    // frustum-only culling in canUseHiZOcclusionCulling().
+    bool occlusionCulling = true;
 };
 
 /** Distance limits for the GPU-driven grass visibility streams, in metres. */

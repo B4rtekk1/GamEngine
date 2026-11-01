@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iosfwd>
 #include <optional>
+#include <string>
 
 namespace Engine {
 class Registry;
@@ -59,6 +60,43 @@ class SceneSerializer final {
     static void save(const Scene& scene, std::ostream& output, AntialiasingLevel antialiasing);
     /** @deprecated Use the AntialiasingLevel overload. */
     static void save(const Scene& scene, std::ostream& output, std::uint32_t msaaSamples);
+
+    /**
+     * @brief Complete serialized scene held in memory.
+     *
+     * `scene` stores the regular text format and `data` the lossless binary
+     * sidecar (terrain samples and embedded RGBA images). Keeping both
+     * together avoids formatting large buffers as decimal text when the
+     * editor captures an undo snapshot.
+     */
+    struct Snapshot final {
+        std::string scene;
+        std::string data;
+        /**
+         * Content hash of both payloads, filled in by saveSnapshot().
+         *
+         * The editor rejects no-op undo captures by comparing this value, so a
+         * frame that changed only runtime state does not walk hundreds of
+         * megabytes of scene text. operator== still verifies the bytes to keep
+         * equality exact.
+         */
+        std::uint64_t hash{};
+
+        [[nodiscard]] bool operator==(const Snapshot& other) const noexcept;
+    };
+
+    /** @brief Serializes a scene and its binary sidecar into memory. */
+    static Snapshot saveSnapshot(const Registry& registry);
+    static Snapshot saveSnapshot(const Registry& registry, AntialiasingLevel antialiasing);
+    static Snapshot saveSnapshot(const Scene& scene);
+    static Snapshot saveSnapshot(const Scene& scene, AntialiasingLevel antialiasing);
+
+    /** @brief Replaces registry with an in-memory snapshot. */
+    static void loadSnapshot(Registry& registry, const Snapshot& snapshot);
+    static void loadSnapshot(Registry& registry, const Snapshot& snapshot,
+                             std::optional<AntialiasingLevel>& antialiasing);
+    static void loadSnapshot(Scene& scene, const Snapshot& snapshot);
+    static void loadSnapshot(Scene& scene, const Snapshot& snapshot, std::optional<AntialiasingLevel>& antialiasing);
 
     /**
      * @brief Replaces registry with the scene read from a text file.

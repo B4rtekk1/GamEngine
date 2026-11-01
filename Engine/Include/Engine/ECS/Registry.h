@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ComponentId.h"
 #include "Componentpool.h"
 #include "Components/MeshRendererComponent.h"
 #include "Components/RigidbodyComponent.h"
@@ -8,6 +9,8 @@
 #include "Entity.h"
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
 #include <cassert>
 #include <deque>
 #include <functional>
@@ -15,8 +18,6 @@
 #include <ranges>
 #include <stdexcept>
 #include <tuple>
-#include <typeindex>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -47,6 +48,9 @@ class Registry {
             index = m_nextEntity++;
             m_generations.push_back(0);
             m_entityPositions.push_back(InvalidEntityIndex);
+            // Component masks are indexed by entity index, so a newly
+            // addressable slot needs a zeroed row.
+            m_componentMasks.resize(m_entityPositions.size() * m_componentMaskWords, 0);
         }
         const Entity entity = makeEntity(index, m_generations[index]);
         m_entityPositions[index] = static_cast<std::uint32_t>(m_entities.size());
@@ -72,16 +76,26 @@ class Registry {
         const bool removedRenderableTopology =
             has<Transform>(entity) && (has<MeshRendererComponent>(entity) || has<TerrainGrassComponent>(entity));
 
-        for (auto& pool : m_componentPools | std::views::values) {
-            if (!pool->has(entity))
-                continue;
-            // Destroy is a removal from every present component pool. Log
-            // each one before erasing it so incremental observers receive
-            // the same removal event as Registry::remove<T>().
-            static_cast<void>(bumpComponentRevision(pool->componentType(), entity));
-            pool->remove(entity);
-        }
         const std::uint32_t index = entityIndex(entity);
+        // Walk the entity's component mask instead of probing every registered
+        // pool. Destroying an entity used to perform one type-erased virtual
+        // has() per component type known to the registry.
+        const std::size_t row = static_cast<std::size_t>(index) * m_componentMaskWords;
+        for (std::size_t word = 0; word < m_componentMaskWords; ++word) {
+            std::uint64_t bits = m_componentMasks[row + word];
+            m_componentMasks[row + word] = 0;
+            while (bits != 0) {
+                const std::size_t type = word * 64 + std::countr_zero(bits);
+                bits &= bits - 1;
+                if (type >= m_componentPools.size() || !m_componentPools[type])
+                    continue;
+                // Destroy is a removal from every present component pool. Log
+                // each one before erasing it so incremental observers receive
+                // the same removal event as Registry::remove<T>().
+                static_cast<void>(bumpComponentRevision(type, entity));
+                m_componentPools[type]->remove(entity);
+            }
+        }
         const std::uint32_t denseIndex = m_entityPositions[index];
         const Entity movedEntity = m_entities.back();
         m_entities[denseIndex] = movedEntity;
@@ -114,8 +128,10 @@ class Registry {
 
         const Entity target = create();
         try {
-            for (auto& pool : m_componentPools | std::views::values) {
-                pool->clone(source, target);
+            for (auto& pool : m_componentPools) {
+                if (pool && pool->clone(source, target)) {
+                    setComponentBit(target, pool->componentTypeId());
+                }
             }
         } catch (...) {
             destroy(target);
@@ -146,6 +162,18 @@ class Registry {
         return m_entities.size();
     }
 
+    /**
+     * @brief Process-wide unique identifier of this registry instance.
+     *
+     * Runtime caches keyed by a registry must use this value rather than the
+     * object address: a destroyed registry releases its address, and an
+     * allocator may place a completely different registry there. Registry
+     * instances are never copied, so the identifier is stable for a lifetime.
+     */
+    [[nodiscard]] std::uint64_t instanceId() const noexcept {
+        return m_instanceId;
+    }
+
     /** @brief Monotonically increasing revision for explicit ECS changes. */
     [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
         return m_mutationRevision;
@@ -172,8 +200,8 @@ class Registry {
 
     /** Returns the revision of one concrete component type. */
     template <typename T> [[nodiscard]] std::uint64_t componentRevision() const noexcept {
-        const auto it = m_componentRevisions.find(typeid(T)); // NOLINT
-        return it == m_componentRevisions.end() ? 0 : it->second;
+        const std::size_t type = Detail::componentTypeId<T>();
+        return type < m_componentRevisions.size() ? m_componentRevisions[type] : 0;
     }
 
     /**
@@ -183,15 +211,15 @@ class Registry {
      */
     template <typename T>
     [[nodiscard]] std::vector<Entity> componentEntitiesChangedSince(const std::uint64_t revision) const {
-        const auto type = std::type_index(typeid(T)); // NOLINT
+        const std::size_t type = Detail::componentTypeId<T>();
         std::vector<Entity> changed;
-        const auto log = m_componentChangeLogs.find(type);
-        if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
-            revision >= log->second.firstRevision - 1) {
-            const auto& records = log->second.records;
+        const ComponentChangeLog* log =
+            type < m_componentChangeLogs.size() ? &m_componentChangeLogs[type] : nullptr;
+        if (log != nullptr && !log->records.empty() && revision >= log->firstRevision - 1) {
+            const auto& records = log->records;
             if (revision >= records.back().revision)
                 return changed;
-            const auto first = static_cast<std::size_t>(revision - log->second.firstRevision + 1);
+            const auto first = static_cast<std::size_t>(revision - log->firstRevision + 1);
             changed.reserve(records.size() - first);
             for (std::size_t index = first; index < records.size(); ++index) {
                 changed.push_back(records[index].entity);
@@ -217,24 +245,21 @@ class Registry {
      */
     template <typename T, typename Func>
     void forEachComponentChangedSince(const std::uint64_t revision, Func&& func) const {
-        const auto type = std::type_index(typeid(T)); // NOLINT
-        const auto log = m_componentChangeLogs.find(type);
-        if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
-            revision >= log->second.firstRevision - 1) {
-            const auto& records = log->second.records;
-            if (revision >= records.back().revision)
-                return;
-            // Component revisions are consecutive, so jump directly to
-            // the first unseen record instead of scanning the old prefix.
-            const auto first = static_cast<std::size_t>(revision - log->second.firstRevision + 1);
-            for (std::size_t index = first; index < records.size(); ++index) {
-                std::invoke(func, records[index].entity);
-            }
-            return;
-        }
-        if (const auto* pool = findPool<T>(); pool != nullptr) {
-            pool->forEachChangedSince(revision, std::forward<Func>(func));
-        }
+        forEachComponentChangedSinceImpl<false, T>(revision, std::forward<Func>(func));
+    }
+
+    /**
+     * Visits component changes after @p revision, skipping repeated log
+     * entries for the same entity.
+     *
+     * Systems that only inspect current state (transforms, physics commands,
+     * renderer topology) can use this overload to avoid redundant work when a
+     * component was edited several times in one frame. The visited set is
+     * per-thread and reused between calls.
+     */
+    template <typename T, typename Func>
+    void forEachComponentChangedSinceUnique(const std::uint64_t revision, Func&& func) const {
+        forEachComponentChangedSinceImpl<true, T>(revision, std::forward<Func>(func));
     }
 
     /** Number of sparse entity slots, suitable for index-addressed caches. */
@@ -266,6 +291,7 @@ class Registry {
             throw std::logic_error("Component already exists for this entity");
         }
         T& component = getOrCreatePool<T>().add(entity, std::forward<Args>(args)...);
+        setComponentBit(entity, Detail::componentTypeId<T>());
         ++m_mutationRevision;
         ++m_structuralRevision;
         bumpComponentRevision<T>(entity);
@@ -294,6 +320,7 @@ class Registry {
 
         if (auto* pool = findPool<T>(); pool != nullptr && pool->has(entity)) {
             pool->remove(entity);
+            clearComponentBit(entity, Detail::componentTypeId<T>());
             ++m_mutationRevision;
             ++m_structuralRevision;
             bumpComponentRevision<T>(entity);
@@ -342,6 +369,12 @@ class Registry {
             return false;
         }
 
+        // The per-entity mask answers "never had this component type" without
+        // touching the pool vector.
+        const std::size_t type = Detail::componentTypeId<T>();
+        if (!componentBitSet(entity, type)) {
+            return false;
+        }
         const auto* pool = findPool<T>();
         return pool != nullptr && pool->has(entity);
     }
@@ -388,6 +421,41 @@ class Registry {
             throw std::out_of_range("Component does not exist for this entity");
         }
         return pool->get(entity);
+    }
+
+    /**
+     * @brief Returns a mutable component assigned to an entity, or nullptr.
+     *
+     * Unlike @ref get, a missing component is not an error. Use this in hot
+     * paths that would otherwise combine has() and get().
+     *
+     * @tparam T Component type.
+     * @param entity Entity owning the component.
+     * @return Pointer to the component, or nullptr when the entity is invalid
+     * or does not own a component of type @p T.
+     */
+    template <typename T> T* tryGet(Entity entity) {
+        if (!valid(entity) || !componentBitSet(entity, Detail::componentTypeId<T>())) {
+            return nullptr;
+        }
+        auto* pool = findPool<T>();
+        return pool != nullptr && pool->has(entity) ? &pool->getUnchecked(entity) : nullptr;
+    }
+
+    /**
+     * @brief Returns a read-only component assigned to an entity, or nullptr.
+     *
+     * @tparam T Component type.
+     * @param entity Entity owning the component.
+     * @return Pointer to the component, or nullptr when the entity is invalid
+     * or does not own a component of type @p T.
+     */
+    template <typename T> const T* tryGet(Entity entity) const {
+        if (!valid(entity) || !componentBitSet(entity, Detail::componentTypeId<T>())) {
+            return nullptr;
+        }
+        const auto* pool = findPool<T>();
+        return pool != nullptr && pool->has(entity) ? &pool->getUnchecked(entity) : nullptr;
     }
 
     /**
@@ -448,6 +516,38 @@ class Registry {
     }
 
   private:
+    template <bool Deduplicate, typename T, typename Func>
+    void forEachComponentChangedSinceImpl(const std::uint64_t revision, Func&& func) const {
+        const std::size_t type = Detail::componentTypeId<T>();
+        const ComponentChangeLog* log =
+            type < m_componentChangeLogs.size() ? &m_componentChangeLogs[type] : nullptr;
+        if (log != nullptr && !log->records.empty() && revision >= log->firstRevision - 1) {
+            const auto& records = log->records;
+            if (revision >= records.back().revision)
+                return;
+            // Component revisions are consecutive, so jump directly to
+            // the first unseen record instead of scanning the old prefix.
+            const auto first = static_cast<std::size_t>(revision - log->firstRevision + 1);
+            if constexpr (Deduplicate) {
+                ChangeVisitScratch& scratch = changeVisitScratch();
+                const std::uint32_t token = beginChangeVisit(scratch);
+                for (std::size_t index = first; index < records.size(); ++index) {
+                    const Entity entity = records[index].entity;
+                    if (firstChangeVisit(scratch, token, entity))
+                        std::invoke(func, entity);
+                }
+            } else {
+                for (std::size_t index = first; index < records.size(); ++index) {
+                    std::invoke(func, records[index].entity);
+                }
+            }
+            return;
+        }
+        if (const auto* pool = findPool<T>(); pool != nullptr) {
+            pool->forEachChangedSince(revision, std::forward<Func>(func));
+        }
+    }
+
     template <typename T> [[nodiscard]] static consteval bool isRenderTopologyComponent() {
         return std::is_same_v<T, MeshRendererComponent> || std::is_same_v<T, TerrainGrassComponent> ||
                std::is_same_v<T, RigidbodyComponent>;
@@ -537,7 +637,7 @@ class Registry {
     }
 
     template <typename T> void bumpComponentRevision(const Entity entity) {
-        const auto revision = bumpComponentRevision(std::type_index(typeid(T)), entity);
+        const auto revision = bumpComponentRevision(Detail::componentTypeId<T>(), entity);
         // Keep current-state tracking alongside the sparse set, rather
         // than in a node-based Entity -> revision hash table.
         if (auto* pool = findPool<T>(); pool != nullptr && pool->has(entity)) {
@@ -545,7 +645,13 @@ class Registry {
         }
     }
 
-    [[nodiscard]] std::uint64_t bumpComponentRevision(const std::type_index type, const Entity entity) {
+    [[nodiscard]] std::uint64_t bumpComponentRevision(const std::size_t type, const Entity entity) {
+        if (m_componentRevisions.size() <= type) {
+            m_componentRevisions.resize(type + 1);
+        }
+        if (m_componentChangeLogs.size() <= type) {
+            m_componentChangeLogs.resize(type + 1);
+        }
         const auto revision = ++m_componentRevisions[type];
         ComponentChangeLog& log = m_componentChangeLogs[type];
         log.records.push_back({entity, revision});
@@ -592,22 +698,133 @@ class Registry {
     }
 
     /**
+     * @brief Number of 64-bit words needed for @p typeCount component bits.
+     */
+    [[nodiscard]] static constexpr std::size_t componentMaskWords(std::size_t typeCount) noexcept {
+        return (typeCount + 63U) / 64U;
+    }
+
+    /**
+     * @brief Ensures every entity row can address component type bits.
+     *
+     * Growing the word count changes the row stride, so existing rows are
+     * re-laid-out once. This happens only when a previously unseen component
+     * type is first used, never on per-entity operations.
+     */
+    void ensureComponentMaskLayout(std::size_t typeCount) {
+        const std::size_t entityCapacity = m_entityPositions.size();
+        const std::size_t requiredWords = componentMaskWords(typeCount);
+        const std::size_t requiredSize = entityCapacity * requiredWords;
+        if (m_componentMaskWords >= requiredWords && m_componentMasks.size() >= requiredSize) {
+            return;
+        }
+
+        const std::size_t words = std::max(requiredWords, m_componentMaskWords);
+        std::vector<std::uint64_t> masks(entityCapacity * words, 0);
+        if (m_componentMaskWords != 0) {
+            const std::size_t entityCount = std::min(entityCapacity, m_componentMasks.size() / m_componentMaskWords);
+            for (std::size_t entity = 0; entity < entityCount; ++entity) {
+                const auto* source = m_componentMasks.data() + entity * m_componentMaskWords;
+                std::copy_n(source, m_componentMaskWords, masks.data() + entity * words);
+            }
+        }
+        m_componentMasks = std::move(masks);
+        m_componentMaskWords = words;
+    }
+
+    void setComponentBit(Entity entity, std::size_t type) noexcept {
+        const std::size_t word = type >> 6U;
+        assert(word < m_componentMaskWords);
+        m_componentMasks[static_cast<std::size_t>(entityIndex(entity)) * m_componentMaskWords + word] |=
+            std::uint64_t{1} << (type & 63U);
+    }
+
+    void clearComponentBit(Entity entity, std::size_t type) noexcept {
+        const std::size_t word = type >> 6U;
+        if (word >= m_componentMaskWords) {
+            return;
+        }
+        m_componentMasks[static_cast<std::size_t>(entityIndex(entity)) * m_componentMaskWords + word] &=
+            ~(std::uint64_t{1} << (type & 63U));
+    }
+
+    [[nodiscard]] bool componentBitSet(Entity entity, std::size_t type) const noexcept {
+        const std::size_t word = type >> 6U;
+        if (word >= m_componentMaskWords) {
+            return false;
+        }
+        const std::size_t offset = static_cast<std::size_t>(entityIndex(entity)) * m_componentMaskWords + word;
+        if (offset >= m_componentMasks.size()) {
+            return false;
+        }
+        return (m_componentMasks[offset] & (std::uint64_t{1} << (type & 63U))) != 0;
+    }
+
+    /**
+     * @brief Per-thread dedup state for the recent-change log.
+     *
+     * The log records one entry per mutation, so a component edited several
+     * times in a frame appears repeatedly. A generation stamp per entity slot
+     * removes those duplicates without allocating inside the observer.
+     */
+    struct ChangeVisitStamp final {
+        Entity entity{NullEntity};
+        std::uint32_t token{0};
+    };
+
+    struct ChangeVisitScratch final {
+        std::vector<ChangeVisitStamp> stamps;
+        std::uint32_t token{0};
+    };
+
+    [[nodiscard]] static ChangeVisitScratch& changeVisitScratch() {
+        static thread_local ChangeVisitScratch scratch;
+        return scratch;
+    }
+
+    [[nodiscard]] static std::uint32_t beginChangeVisit(ChangeVisitScratch& scratch) noexcept {
+        if (++scratch.token == 0) {
+            // After a wrap, old stamps could look current. Clearing is a
+            // one-off pass every ~4 billion visits.
+            for (ChangeVisitStamp& stamp : scratch.stamps) {
+                stamp.token = 0;
+            }
+            scratch.token = 1;
+        }
+        return scratch.token;
+    }
+
+    [[nodiscard]] static bool firstChangeVisit(ChangeVisitScratch& scratch, const std::uint32_t token,
+                                               const Entity entity) {
+        const std::size_t index = entityIndex(entity);
+        if (scratch.stamps.size() <= index) {
+            scratch.stamps.resize(index + 1);
+        }
+        ChangeVisitStamp& stamp = scratch.stamps[index];
+        if (stamp.token == token && stamp.entity == entity) {
+            return false;
+        }
+        stamp.token = token;
+        stamp.entity = entity;
+        return true;
+    }
+
+    /**
      * @brief Returns the pool for a component type, creating it when needed.
      *
      * @tparam T Component type.
      * @return Reference to the component pool.
      */
     template <typename T> ComponentPool<T>& getOrCreatePool() {
-        const std::type_index type = typeid(T);
-        if (const auto found = m_componentPools.find(type); found != m_componentPools.end()) {
-            return static_cast<ComponentPool<T>&>(*found->second);
+        const std::size_t type = Detail::componentTypeId<T>();
+        ensureComponentMaskLayout(type + 1);
+        if (m_componentPools.size() <= type) {
+            m_componentPools.resize(type + 1);
         }
-        const auto it = m_componentPools
-                            .try_emplace( // NOLINT
-                                type, std::make_unique<ComponentPool<T>>())
-                            .first;
-
-        return static_cast<ComponentPool<T>&>(*it->second);
+        if (m_componentPools[type] == nullptr) {
+            m_componentPools[type] = std::make_unique<ComponentPool<T>>();
+        }
+        return static_cast<ComponentPool<T>&>(*m_componentPools[type]);
     }
 
     /**
@@ -617,8 +834,10 @@ class Registry {
      * @return Pointer to the pool, or nullptr if it has not been created.
      */
     template <typename T> ComponentPool<T>* findPool() {
-        const auto it = m_componentPools.find(typeid(T)); // NOLINT
-        return it == m_componentPools.end() ? nullptr : static_cast<ComponentPool<T>*>(it->second.get());
+        const std::size_t type = Detail::componentTypeId<T>();
+        return type < m_componentPools.size() && m_componentPools[type]
+                   ? static_cast<ComponentPool<T>*>(m_componentPools[type].get())
+                   : nullptr;
     }
 
     /**
@@ -628,8 +847,10 @@ class Registry {
      * @return Pointer to the pool, or nullptr if it has not been created.
      */
     template <typename T> const ComponentPool<T>* findPool() const {
-        const auto it = m_componentPools.find(typeid(T)); // NOLINT
-        return it == m_componentPools.end() ? nullptr : static_cast<const ComponentPool<T>*>(it->second.get());
+        const std::size_t type = Detail::componentTypeId<T>();
+        return type < m_componentPools.size() && m_componentPools[type]
+                   ? static_cast<const ComponentPool<T>*>(m_componentPools[type].get())
+                   : nullptr;
     }
 
     /**
@@ -650,11 +871,21 @@ class Registry {
     std::vector<std::uint32_t> m_entityPositions{InvalidEntityIndex};
 
     /**
-     * @brief Type-erased component pools indexed by component type.
+     * Per-entity component bitmasks: one row of m_componentMaskWords 64-bit
+     * words per entity slot, addressed by component type id.
      */
-    std::unordered_map<std::type_index, std::unique_ptr<IComponentPool>> m_componentPools;
+    std::vector<std::uint64_t> m_componentMasks;
+    std::size_t m_componentMaskWords = 0;
 
-    std::unordered_map<std::type_index, std::uint64_t> m_componentRevisions;
+    /**
+     * @brief Type-erased component pools indexed by component type id.
+     *
+     * Entries are null until the component type is used. A dense vector
+     * replaces the former std::type_index hash lookup in every ECS call.
+     */
+    std::vector<std::unique_ptr<IComponentPool>> m_componentPools;
+
+    std::vector<std::uint64_t> m_componentRevisions;
     struct ComponentChange {
         Entity entity{NullEntity};
         std::uint64_t revision{0};
@@ -664,11 +895,18 @@ class Registry {
         std::deque<ComponentChange> records;
     };
     static constexpr std::size_t MaxComponentChangeLogSize = 4096;
-    std::unordered_map<std::type_index, ComponentChangeLog> m_componentChangeLogs;
+    std::vector<ComponentChangeLog> m_componentChangeLogs;
 
     std::uint64_t m_mutationRevision = 0;
     std::uint64_t m_structuralRevision = 0;
     std::uint64_t m_renderTopologyRevision = 0;
     std::uint32_t m_mutableViewDepth = 0;
+
+    static std::uint64_t allocateInstanceId() noexcept {
+        static std::atomic<std::uint64_t> next{1};
+        return next.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    std::uint64_t m_instanceId = allocateInstanceId();
 };
 } // namespace Engine

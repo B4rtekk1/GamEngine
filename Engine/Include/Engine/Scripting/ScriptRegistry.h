@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -17,6 +18,21 @@
 
 namespace Engine {
 class Script;
+
+/** Heterogeneous hash so string_view lookups do not allocate a temporary. */
+struct TransparentStringHash {
+    using is_transparent = void;
+
+    [[nodiscard]] std::size_t operator()(const std::string_view value) const noexcept {
+        return std::hash<std::string_view>{}(value);
+    }
+    [[nodiscard]] std::size_t operator()(const std::string& value) const noexcept {
+        return operator()(std::string_view{value});
+    }
+    [[nodiscard]] std::size_t operator()(const char* value) const noexcept {
+        return operator()(std::string_view{value});
+    }
+};
 
 struct ScriptClassDescriptor {
     using Create = Script* (*)();
@@ -165,7 +181,7 @@ class ScriptRegistry final {
     }
 
   private:
-    std::unordered_map<std::string, ScriptClassDescriptor> classes_;
+    std::unordered_map<std::string, ScriptClassDescriptor, TransparentStringHash, std::equal_to<>> classes_;
     std::unordered_map<std::type_index, std::string> typeNames_;
     std::uint64_t activeRegistrationGeneration_ = 0;
 };

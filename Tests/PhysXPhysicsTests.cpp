@@ -546,6 +546,43 @@ TEST(SceneSerializer, StoresEmbeddedImagePixelsInBinarySidecar) {
     std::filesystem::remove(sidecar, error);
 }
 
+TEST(SceneSerializer, InMemorySnapshotRoundTripsTerrainAndEmbeddedImages) {
+    Engine::Scene source;
+    const auto terrainActor =
+        source.createTerrain("Snapshot terrain", Engine::TerrainComponent{5, 4.0F, 4.0F, -1.0F, 1.0F});
+    auto mesh = std::make_shared<Engine::Mesh>();
+    mesh->vertices.resize(3);
+    mesh->indices = {0, 1, 2};
+    mesh->images.push_back({.width = 2, .height = 1, .rgbaPixels = {1, 2, 3, 4, 250, 251, 252, 253}});
+    static_cast<void>(source.createMesh("Snapshot mesh", mesh));
+
+    const auto snapshot = Engine::SceneSerializer::saveSnapshot(source);
+    ASSERT_FALSE(snapshot.scene.empty());
+    ASSERT_FALSE(snapshot.data.empty());
+    // Terrain samples and image pixels must use the binary sidecar instead of
+    // being formatted as decimal text into the in-memory scene.
+    EXPECT_EQ(snapshot.scene.find("PIXELS"), std::string::npos);
+    EXPECT_NE(snapshot.scene.find("IMAGE_BIN"), std::string::npos);
+
+    Engine::Scene loaded;
+    ASSERT_NO_THROW(Engine::SceneSerializer::loadSnapshot(loaded, snapshot));
+    const auto loadedTerrainEntity = loaded.findEntity(loaded.findActor("Snapshot terrain").id());
+    ASSERT_NE(loadedTerrainEntity, Engine::NullEntity);
+    const auto sourceEntity = source.findEntity(terrainActor.id());
+    ASSERT_NE(sourceEntity, Engine::NullEntity);
+    const auto& restoredTerrain = loaded.editor().read<Engine::TerrainComponent>(loadedTerrainEntity);
+    const auto& sourceTerrain = source.editor().read<Engine::TerrainComponent>(sourceEntity);
+    EXPECT_EQ(restoredTerrain.heights, sourceTerrain.heights);
+    EXPECT_EQ(restoredTerrain.colors.size(), sourceTerrain.colors.size());
+
+    const auto loadedMeshEntity = loaded.findEntity(loaded.findActor("Snapshot mesh").id());
+    ASSERT_NE(loadedMeshEntity, Engine::NullEntity);
+    const auto restoredSource = loaded.editor().read<Engine::MeshRendererComponent>(loadedMeshEntity).mesh.source();
+    ASSERT_TRUE(restoredSource);
+    ASSERT_EQ(restoredSource->images.size(), 1U);
+    EXPECT_EQ(restoredSource->images[0].rgbaPixels, mesh->images[0].rgbaPixels);
+}
+
 TEST(SceneSerializer, RejectsInvalidFilesWithoutChangingTheScene) {
     const auto path = std::filesystem::temp_directory_path() / "gameengine-invalid-scene-test.scene";
     {

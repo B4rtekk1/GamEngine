@@ -1922,8 +1922,32 @@ void GlassDestructionSystem::update(Scene& scene, float deltaTime, const Physics
         const auto colliderRevision = scene.registry().componentRevision<ColliderComponent>();
         const auto transformRevision = scene.registry().componentRevision<Transform>();
         const auto structureRevision = scene.registry().structuralRevision();
-        for (auto entity : panes) {
-            auto& registry = scene.registry();
+        auto& registry = scene.registry();
+
+        // Collect the change sets once per frame. They used to be built (with
+        // an allocation and a sort) inside the per-pane loop, i.e. O(panes *
+        // changed). Taking the oldest observed revision is conservative: it
+        // may visit a few extra candidates but never misses one.
+        std::vector<Entity> changedColliders;
+        std::vector<Entity> changedTransforms;
+        std::uint64_t oldestColliderRevision = colliderRevision;
+        std::uint64_t oldestTransformRevision = transformRevision;
+        for (const Entity entity : panes) {
+            const auto& glass = registry.get<GlassDestructionComponent>(entity);
+            if (glass.supportMode != GlassSupportMode::Bottom) {
+                continue;
+            }
+            oldestColliderRevision = std::min(oldestColliderRevision, glass.supportColliderRevision);
+            oldestTransformRevision = std::min(oldestTransformRevision, glass.supportTransformRevision);
+        }
+        if (oldestColliderRevision < colliderRevision) {
+            changedColliders = registry.componentEntitiesChangedSince<ColliderComponent>(oldestColliderRevision);
+        }
+        if (oldestTransformRevision < transformRevision) {
+            changedTransforms = registry.componentEntitiesChangedSince<Transform>(oldestTransformRevision);
+        }
+
+        for (const Entity entity : panes) {
             const auto world = TransformSystem::worldTransform(registry, entity);
             auto& glass = registry.get<GlassDestructionComponent>(entity);
             if (glass.supportMode != GlassSupportMode::Bottom)
@@ -1936,15 +1960,13 @@ void GlassDestructionSystem::update(Scene& scene, float deltaTime, const Physics
                               glass.supportPaneMatrix != registry.get<Transform>(entity).worldMatrix().native() ||
                               glass.supportGravity != gravity.native();
             if (!glass.physicalSupports.empty()) {
-                const auto changed =
-                    registry.componentEntitiesChangedSince<ColliderComponent>(glass.supportColliderRevision);
                 for (const auto& support : glass.physicalSupports)
                     needsCheck |=
                         !registry.valid(support.entity) || !registry.has<Transform>(support.entity) ||
                         !registry.has<ColliderComponent>(support.entity) ||
                         (registry.get<Transform>(support.entity).worldRevision() != support.worldRevision &&
                          registry.get<Transform>(support.entity).worldMatrix().native() != support.worldMatrix) ||
-                        std::ranges::find(changed, support.entity) != changed.end();
+                        std::ranges::find(changedColliders, support.entity) != changedColliders.end();
             } else {
                 // An implicit mount observes newly added/moved static supports.
                 // Moving debris cannot invalidate every pane's support cache.
@@ -1954,10 +1976,9 @@ void GlassDestructionSystem::update(Scene& scene, float deltaTime, const Physics
                            (!registry.has<RigidbodyComponent>(candidate) ||
                             registry.get<RigidbodyComponent>(candidate).type != RigidbodyType::Dynamic);
                 };
-                for (auto candidate :
-                     registry.componentEntitiesChangedSince<ColliderComponent>(glass.supportColliderRevision))
+                for (const Entity candidate : changedColliders)
                     needsCheck |= relevant(candidate);
-                for (auto candidate : registry.componentEntitiesChangedSince<Transform>(glass.supportTransformRevision))
+                for (const Entity candidate : changedTransforms)
                     needsCheck |= relevant(candidate);
             }
             glass.supportColliderRevision = colliderRevision;

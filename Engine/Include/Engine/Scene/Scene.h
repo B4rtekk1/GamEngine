@@ -530,22 +530,32 @@ class Scene {
             destroy(child);
         }
 
-        // Recursive destruction can reallocate objects_, invalidating it.
+        // Recursive destruction can reallocate objects_, invalidating iterators
+        // but not the heap-owned GameObject these maps are keyed by.
         GameObject* ownerObject = find(objectId);
         if (ownerObject == nullptr)
             return;
-        const auto owner =
-            std::ranges::find_if(objects_, [ownerObject](const auto& object) { return object.get() == ownerObject; });
-        if (owner == objects_.end())
+        const auto slotIt = objectSlot_.find(ownerObject);
+        if (slotIt == objectSlot_.end())
             return;
+        const std::size_t slot = slotIt->second;
 
-        names_.erase((*owner)->name()); // NOLINT
-        unindexObject(**owner);
+        names_.erase(ownerObject->name()); // NOLINT
+        unindexObject(*ownerObject);
         // Destroy the ECS entity before removing its owning wrapper. Merely
         // detaching it would make it disappear from the hierarchy while the
         // renderer could still find and draw the live registry entity.
-        (*owner)->destroy(); // NOLINT
-        objects_.erase(owner);
+        ownerObject->destroy(); // NOLINT
+        // Swap-and-pop keeps removal O(1). The moved element's slot is
+        // repaired before the vector shrinks, so objectSlot_ never points past
+        // the end. Moving the last element into its own slot is skipped to
+        // avoid self-move-assignment.
+        const std::size_t last = objects_.size() - 1;
+        if (slot != last) {
+            objects_[slot] = std::move(objects_.back());
+            objectSlot_[objects_[slot].get()] = slot;
+        }
+        objects_.pop_back();
     }
 
     [[nodiscard]] std::uint64_t renderTopologyRevision() const noexcept {
@@ -674,6 +684,9 @@ class Scene {
         objectById_[object.objectId()] = &object;
         objectByEntity_[object.entity()] = &object;
         entityByObjectId_[object.objectId()] = object.entity();
+        // Slot lookup keeps destroy() O(1); the vector is the storage of
+        // record, so the index must be recorded whenever it grows.
+        objectSlot_[&object] = objects_.size() - 1;
         if (registry_.has<UUIDComponent>(object.entity())) {
             entityByUuid_[registry_.get<UUIDComponent>(object.entity()).value] = object.entity();
         }
@@ -683,6 +696,7 @@ class Scene {
         objectById_.erase(object.objectId());
         objectByEntity_.erase(object.entity());
         entityByObjectId_.erase(object.objectId());
+        objectSlot_.erase(&object);
         if (registry_.has<UUIDComponent>(object.entity())) {
             entityByUuid_.erase(registry_.get<UUIDComponent>(object.entity()).value);
         }
@@ -727,6 +741,7 @@ class Scene {
             object->detach();
         }
         objects_.clear();
+        objectSlot_.clear();
         names_.clear();
         objectById_.clear();
         objectByEntity_.clear();
@@ -745,6 +760,7 @@ class Scene {
     GlassSimulationSettings glassSimulationSettings_;
     Physics physics_;
     std::vector<std::unique_ptr<GameObject>> objects_;
+    std::unordered_map<const GameObject*, std::size_t> objectSlot_;
     std::unordered_map<std::string, ObjectId> names_;
     std::unordered_map<ObjectId, GameObject*> objectById_;
     std::unordered_map<Entity, GameObject*> objectByEntity_;
