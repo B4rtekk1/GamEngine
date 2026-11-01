@@ -60,6 +60,7 @@ class GlassPass final {
     VkSampler crackSampler_{};
     VkPipeline crackPipeline_{};
     VkPipelineLayout crackPipelineLayout_{};
+    VkDescriptorSetLayout crackEmptyLayout_{VK_NULL_HANDLE};
     bool crackAtlasInitialized_{};
     std::array<VkBuffer, FramesInFlight> crackMetadata_{};
     std::array<VmaAllocation, FramesInFlight> crackMetadataMemory_{};

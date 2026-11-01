@@ -21,6 +21,8 @@ enum class TexturePixelFormat : uint8_t {
     RG16F,
     /** A single unsigned 16-bit channel, for integer lookup textures. */
     R16_UINT,
+    /** A single unsigned 32-bit channel, for integer shader images. */
+    R32_UINT,
 };
 
 // Owns a sampled image uploaded to device-local memory and ready for sampling.

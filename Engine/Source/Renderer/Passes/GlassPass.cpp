@@ -234,11 +234,10 @@ void GlassPass::createCrackResources(Assets::AssetManager& assets, unsigned pane
     if (vkCreateSampler(device_, &sampler, nullptr, &crackSampler_) != VK_SUCCESS)
         throw std::runtime_error("Could not create glass crack sampler");
     // Empty set zero preserves the same set-one binding numbers as GlassThin.
-    VkDescriptorSetLayout empty{};
     VkDescriptorSetLayoutCreateInfo emptyInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    if (vkCreateDescriptorSetLayout(device_, &emptyInfo, nullptr, &empty) != VK_SUCCESS)
+    if (vkCreateDescriptorSetLayout(device_, &emptyInfo, nullptr, &crackEmptyLayout_) != VK_SUCCESS)
         throw std::runtime_error("Could not create glass compute layout");
-    const std::array layouts{empty, sceneTextureLayout_};
+    const std::array layouts{crackEmptyLayout_, sceneTextureLayout_};
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64};
     VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layout.setLayoutCount = 2;
@@ -246,7 +245,6 @@ void GlassPass::createCrackResources(Assets::AssetManager& assets, unsigned pane
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &push;
     const auto result = vkCreatePipelineLayout(device_, &layout, nullptr, &crackPipelineLayout_);
-    vkDestroyDescriptorSetLayout(device_, empty, nullptr);
     if (result != VK_SUCCESS)
         throw std::runtime_error("Could not create glass crack pipeline layout");
     const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/glass_crack_stamp.spv");
@@ -450,11 +448,14 @@ void GlassPass::destroy() noexcept {
         vkDestroyPipeline(device_, crackPipeline_, nullptr);
     if (device_ && crackPipelineLayout_)
         vkDestroyPipelineLayout(device_, crackPipelineLayout_, nullptr);
+    if (device_ && crackEmptyLayout_)
+        vkDestroyDescriptorSetLayout(device_, crackEmptyLayout_, nullptr);
     if (device_ && crackSampler_)
         vkDestroySampler(device_, crackSampler_, nullptr);
     destroyCrackStorage();
     crackPipeline_ = VK_NULL_HANDLE;
     crackPipelineLayout_ = VK_NULL_HANDLE;
+    crackEmptyLayout_ = VK_NULL_HANDLE;
     crackSampler_ = VK_NULL_HANDLE;
     crackAtlasView_ = VK_NULL_HANDLE;
     crackAtlas_ = VK_NULL_HANDLE;

@@ -645,10 +645,10 @@ void createForwardPass() {
 }
 
 void createSceneViewportForwardPass() {
-    if (msaa.enabled())
-        return;
+    // Scene View renders into its own single-sample color/depth targets even
+    // when the game view uses MSAA. Give it a matching one-color pipeline.
     sceneViewportForwardPass.create(
-        device, HdrBuffer::Format, depthBuffer.format(), VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED,
+        device, HdrBuffer::Format, sceneViewportDepthBuffer.format(), VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED,
         VK_RESOLVE_MODE_NONE, sceneDescriptorPass.descriptorSetLayout(), assetManager,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, true, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, false);
 }
@@ -708,6 +708,10 @@ void createParticleResources() {
     // Dynamic rendering makes this pipeline independent from the
     // target used by the Game or Scene View.
     options.dynamicRendering = true;
+    // The Scene View uses a single color attachment. The Game View may have
+    // a velocity attachment for TAA, so do not inherit that format here.
+    options.additionalColorFormat = VK_FORMAT_UNDEFINED;
+    options.thirdColorFormat = VK_FORMAT_UNDEFINED;
     options.shader = "shaders/particle_billboard_no_velocity.spv";
     sceneParticlePipeline.create(device, options);
 

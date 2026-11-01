@@ -47,9 +47,10 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
         options.depthWriteEnable = VK_FALSE;
         options.depthCompareOp = VK_COMPARE_OP_EQUAL;
     }
-    options.shader =
-        depthOnly ? (hasVelocityAttachment_ ? "shaders/depth_velocity.spv" : "shaders/depth_velocity_no_velocity.spv")
-                  : "shaders/forward_pbr.spv";
+    options.shader = depthOnly ? (hasVelocityAttachment_ ? "shaders/depth_velocity.spv"
+                                                          : "shaders/depth_velocity_no_velocity.spv")
+                               : (hasVelocityAttachment_ ? "shaders/forward_pbr.spv"
+                                                        : "shaders/forward_pbr_no_velocity.spv");
     options.assetManager = &assets;
     options.cullMode = VK_CULL_MODE_BACK_BIT;
     options.alphaBlendEnable = VK_FALSE;

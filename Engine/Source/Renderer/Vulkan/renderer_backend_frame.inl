@@ -932,7 +932,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             vkCmdPipelineBarrier2(commandBuffer, &meshTaskIndirectDependency);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
         }
-        const ForwardPass& sceneForwardPass = msaa.enabled() ? forwardPass : sceneViewportForwardPass;
+        const ForwardPass& sceneForwardPass = sceneViewportForwardPass;
         const DirectionalLight& mainLight = sceneFrameDataCache.data.directionalLight;
         const bool mainLightShadows =
             mainLight.enabled && mainLight.castShadows && optimizationFeatures.shadows && hasShadowCasters;

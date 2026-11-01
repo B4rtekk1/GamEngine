@@ -219,7 +219,10 @@ void Texture2D::create(const VkPhysicalDevice physicalDevice, const VkDevice dev
         throw std::invalid_argument("Texture2D dimensions cannot be zero");
     }
     const std::size_t bytesPerPixel =
-        pixelFormat == TexturePixelFormat::R8 ? 1u : (pixelFormat == TexturePixelFormat::R16_UINT ? 2u : 4u);
+        pixelFormat == TexturePixelFormat::R8 ? 1u
+        : pixelFormat == TexturePixelFormat::R16_UINT ? 2u
+        : pixelFormat == TexturePixelFormat::R32_UINT ? 4u
+                                                     : 4u;
     if (width > std::numeric_limits<std::size_t>::max() / bytesPerPixel / height) {
         throw std::invalid_argument("Texture2D dimensions are too large");
     }
@@ -231,12 +234,14 @@ void Texture2D::create(const VkPhysicalDevice physicalDevice, const VkDevice dev
 
     const VkFormat format = pixelFormat == TexturePixelFormat::R8
                                 ? VK_FORMAT_R8_UNORM
-                                : (pixelFormat == TexturePixelFormat::R16_UINT
+                                : (pixelFormat == TexturePixelFormat::R32_UINT
+                                       ? VK_FORMAT_R32_UINT
+                                       : (pixelFormat == TexturePixelFormat::R16_UINT
                                        ? VK_FORMAT_R16_UINT
                                        : (pixelFormat == TexturePixelFormat::RG16F
                                               ? VK_FORMAT_R16G16_SFLOAT
                                               : (colorSpace == TextureColorSpace::SRGB ? VK_FORMAT_R8G8B8A8_SRGB
-                                                                                       : VK_FORMAT_R8G8B8A8_UNORM)));
+                                                                                       : VK_FORMAT_R8G8B8A8_UNORM))));
     const std::uint32_t mipLevels = generateMipmaps ? std::bit_width(std::max(width, height)) : 1u;
 
     if (generateMipmaps && mipLevels > 1) {

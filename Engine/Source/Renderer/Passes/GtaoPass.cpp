@@ -172,14 +172,14 @@ void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkCommandPool 
             full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, filteredAoFormat, true,
                          sharingFamilies);
         resultFormat_ = nativeResolution_ && quality_.denoisePassCount == 0 ? RawAoFormat : filteredAoFormat;
-        std::array<std::uint16_t, 64 * 64> hilbertValues{};
+        std::array<std::uint32_t, 64 * 64> hilbertValues{};
         for (std::uint32_t y = 0; y < 64; ++y)
             for (std::uint32_t x = 0; x < 64; ++x)
                 hilbertValues[y * 64 + x] = hilbertIndex(x, y);
         hilbertLut_.create(physical, device_, commandPool, queue, 64, 64,
                            std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(hilbertValues.data()),
-                                                         hilbertValues.size() * sizeof(std::uint16_t)},
-                           TextureColorSpace::Linear, false, allocator, TexturePixelFormat::R16_UINT);
+                                                         hilbertValues.size() * sizeof(std::uint32_t)},
+                           TextureColorSpace::Linear, false, allocator, TexturePixelFormat::R32_UINT);
         linearDepthMipCount_ = 1;
         for (auto d = std::max(fullExtent.width, fullExtent.height); d > 1; d >>= 1)
             ++linearDepthMipCount_;
