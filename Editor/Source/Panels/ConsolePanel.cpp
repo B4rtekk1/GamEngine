@@ -186,7 +186,7 @@ void ConsolePanel::draw(bool& isOpen) {
     for (const Engine::Diagnostic& entry : diagnostics)
         ++counts[static_cast<std::size_t>(toLogLevel(entry.severity))];
 
-    if (EditorUI::iconButton("##console-clear", EditorUI::Icon::Stop, "Clear the console"))
+    if (EditorUI::iconButton("##console-clear", EditorUI::Icon::Trash, "Clear the console"))
         clear();
     EditorUI::toolbarSeparator();
     levelToggle("##console-info", LogLevel::Info, counts[0], "Show info messages", showInfo);

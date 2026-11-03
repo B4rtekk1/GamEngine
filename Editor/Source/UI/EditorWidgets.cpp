@@ -20,6 +20,16 @@ bool primaryButton(const char* label, const ImVec2 size) {
     return pressed;
 }
 
+bool dangerButton(const char* label, const ImVec2 size) {
+    ImGui::PushStyleColor(ImGuiCol_Button, withAlpha(colors().error, 0.18F));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(colors().error, 0.42F));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, withAlpha(colors().error, 0.6F));
+    ImGui::PushStyleColor(ImGuiCol_Text, colors().error);
+    const bool pressed = ImGui::Button(label, size);
+    ImGui::PopStyleColor(4);
+    return pressed;
+}
+
 void panelHeader(const char* title, const char* detail) {
     ImGui::TextDisabled("%s", title);
     if (detail != nullptr && *detail != '\0') {
@@ -85,6 +95,23 @@ bool collapsingSection(const char* label, const ImGuiTreeNodeFlags flags) {
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, colors().controlHover);
     const bool open = ImGui::CollapsingHeader(label, flags);
     ImGui::PopStyleColor(3);
+    return open;
+}
+
+bool collapsingSectionWithAction(const char* label, const Icon actionIcon, const char* actionTooltip,
+                                 bool& actionClicked, const ImGuiTreeNodeFlags flags) {
+    // AllowOverlap lets the action button drawn on top of the header receive
+    // the click instead of toggling the section.
+    const bool open = collapsingSection(label, flags | ImGuiTreeNodeFlags_AllowOverlap);
+    const ImVec2 headerMin = ImGui::GetItemRectMin();
+    const ImVec2 headerMax = ImGui::GetItemRectMax();
+    const float size = headerMax.y - headerMin.y;
+    const ImVec2 resume = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos({headerMax.x - size - 2.0F, headerMin.y});
+    ImGui::PushID(label);
+    actionClicked = iconButton("##section-action", actionIcon, actionTooltip, {.size = {size, size}});
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(resume);
     return open;
 }
 

@@ -17,27 +17,83 @@ void setTerrainTool(TerrainSculptState& state, const TerrainToolMode mode) {
     state.grassEnabled = mode == TerrainToolMode::Details;
 }
 
-bool terrainModeButton(const char* label, const char* hint, const bool active) {
-    if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, EditorUI::colors().accent);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorUI::colors().accentHover);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorUI::colors().accent);
-    }
-    const bool clicked = ImGui::Button(label, {ImGui::GetContentRegionAvail().x, 42.0F});
-    if (active)
-        ImGui::PopStyleColor(3);
-    if (ImGui::IsItemHovered())
+/** Square tool tile with an icon above its label, used for the main terrain modes. */
+bool terrainModeTile(const char* id, const EditorUI::Icon icon, const char* label, const char* hint, const bool active,
+                     const float width) {
+    const EditorUI::Palette& palette = EditorUI::colors();
+    const float height = ImGui::GetTextLineHeight() + 44.0F;
+    const bool clicked = ImGui::InvisibleButton(id, {width, height});
+    const bool hovered = ImGui::IsItemHovered();
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float rounding = ImGui::GetStyle().FrameRounding + 1.0F;
+    draw->AddRectFilled(min, max,
+                        ImGui::GetColorU32(active    ? palette.accentMuted
+                                           : hovered ? palette.controlHover
+                                                     : palette.surface),
+                        rounding);
+    draw->AddRect(min, max, ImGui::GetColorU32(active ? palette.accent : palette.border), rounding);
+    const ImVec4 foreground = active ? palette.accentHover : hovered ? palette.textPrimary : palette.textSecondary;
+    EditorUI::drawIcon(draw, icon, {(min.x + max.x) * 0.5F, min.y + 20.0F}, 22.0F, ImGui::GetColorU32(foreground));
+    const ImVec2 textSize = ImGui::CalcTextSize(label);
+    draw->AddText({(min.x + max.x - textSize.x) * 0.5F, max.y - textSize.y - 7.0F},
+                  ImGui::GetColorU32(active ? palette.textPrimary : palette.textSecondary), label);
+    if (hovered)
         ImGui::SetTooltip("%s", hint);
     return clicked;
 }
 
+/**
+ * Asset drop target drawn as a dashed box. It lights up while a drag is in
+ * progress; the caller attaches BeginDragDropTarget to this item.
+ */
+void assetDropZone(const char* id, const EditorUI::Icon icon, const char* label, const bool assigned) {
+    const EditorUI::Palette& palette = EditorUI::colors();
+    const float height = 48.0F;
+    ImGui::InvisibleButton(id, {ImGui::GetContentRegionAvail().x, height});
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const bool dragging = ImGui::GetDragDropPayload() != nullptr;
+    const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec4 edge = dragging && hovered ? palette.accentHover
+                        : dragging          ? palette.accent
+                        : assigned          ? EditorUI::withAlpha(palette.success, 0.7F)
+                                            : palette.border;
+    draw->AddRectFilled(
+        min, max,
+        ImGui::GetColorU32(dragging ? EditorUI::withAlpha(palette.accent, hovered ? 0.18F : 0.08F) : palette.surface),
+        6.0F);
+    // Dashed outline.
+    constexpr float dash = 6.0F;
+    const ImU32 edgeColor = ImGui::GetColorU32(edge);
+    for (float x = min.x + 4.0F; x < max.x - 4.0F; x += dash * 2.0F) {
+        draw->AddLine({x, min.y}, {std::min(x + dash, max.x - 4.0F), min.y}, edgeColor);
+        draw->AddLine({x, max.y - 1.0F}, {std::min(x + dash, max.x - 4.0F), max.y - 1.0F}, edgeColor);
+    }
+    for (float y = min.y + 4.0F; y < max.y - 4.0F; y += dash * 2.0F) {
+        draw->AddLine({min.x, y}, {min.x, std::min(y + dash, max.y - 4.0F)}, edgeColor);
+        draw->AddLine({max.x - 1.0F, y}, {max.x - 1.0F, std::min(y + dash, max.y - 4.0F)}, edgeColor);
+    }
+    const ImVec4 foreground = assigned ? palette.textPrimary : palette.textSecondary;
+    const ImVec2 textSize = ImGui::CalcTextSize(label);
+    const float contentWidth = 18.0F + 8.0F + textSize.x;
+    const float startX = std::max(min.x + 10.0F, (min.x + max.x - contentWidth) * 0.5F);
+    const float centerY = (min.y + max.y) * 0.5F;
+    EditorUI::drawIcon(draw, icon, {startX + 9.0F, centerY}, 18.0F,
+                       ImGui::GetColorU32(assigned ? palette.success : palette.textSecondary));
+    draw->PushClipRect(min, max, true);
+    draw->AddText({startX + 26.0F, centerY - textSize.y * 0.5F}, ImGui::GetColorU32(foreground), label);
+    draw->PopClipRect();
+}
+
 void panelSection(const char* title, const char* description) {
     ImGui::Spacing();
-    ImGui::TextColored({0.55F, 0.80F, 0.92F, 1.0F}, "%s", title);
+    ImGui::SeparatorText(title);
     if (description != nullptr) {
         ImGui::TextDisabled("%s", description);
     }
-    ImGui::Separator();
     ImGui::Spacing();
 }
 
@@ -48,7 +104,7 @@ void fullWidthSlider(const char* label, float* value, const float minimum, const
 }
 
 void drawSculptSettings(TerrainSculptState& state) {
-    panelSection("SCULPT BRUSH", "Shape the terrain heightmap");
+    panelSection("Sculpt brush", "Shape the terrain heightmap");
     constexpr const char* modes[]{"Raise", "Lower", "Smooth", "Flatten"};
     int mode = static_cast<int>(state.mode);
     ImGui::TextDisabled("Action");
@@ -68,18 +124,17 @@ void drawSculptSettings(TerrainSculptState& state) {
     fullWidthSlider("Spacing", &state.spacing, 0.05F, 1.0F, "%.2f");
 
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorUI::colors().surface);
-    ImGui::BeginChild("##sculpt-help", {0.0F, 56.0F}, true,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    ImGui::TextDisabled("Shift  Invert raise / lower");
-    ImGui::TextDisabled("Ctrl   Pick flatten height");
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
+    EditorUI::keyChip("Shift");
+    ImGui::SameLine();
+    ImGui::TextDisabled("Invert raise / lower");
+    EditorUI::keyChip("Ctrl");
+    ImGui::SameLine();
+    ImGui::TextDisabled("Pick flatten height");
 }
 
 void drawPaintSettings(Engine::ScenePreset& scene, Engine::Assets::Content& content, const Engine::Entity selected,
                        Engine::Renderer& renderer, TerrainSculptState& state) {
-    panelSection("MATERIAL PAINT", "Blend texture layers on the terrain");
+    panelSection("Material paint", "Blend texture layers on the terrain");
     constexpr const char* layers[]{"Layer 1", "Layer 2", "Layer 3", "Base layer"};
     ImGui::TextDisabled("Active layer");
     ImGui::SetNextItemWidth(-1.0F);
@@ -91,11 +146,8 @@ void drawPaintSettings(Engine::ScenePreset& scene, Engine::Assets::Content& cont
     const auto terrainSource = terrainRenderer.mesh.source();
     const bool hasTexture = terrainSource && terrainSource->images.size() > static_cast<std::size_t>(state.paintLayer);
     ImGui::TextDisabled("Layer texture");
-    ImGui::PushStyleColor(ImGuiCol_Button,
-                          hasTexture ? ImVec4{0.10F, 0.25F, 0.29F, 1.0F} : ImVec4{0.11F, 0.125F, 0.158F, 1.0F});
-    const std::string textureLabel = hasTexture ? "Texture assigned  -  drop to replace" : "Drop a texture asset here";
-    ImGui::Button(textureLabel.c_str(), {-1.0F, 46.0F});
-    ImGui::PopStyleColor();
+    assetDropZone("##terrain-layer-texture", EditorUI::Icon::Image,
+                  hasTexture ? "Texture assigned - drop to replace" : "Drop a texture asset here", hasTexture);
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::texturePayload)) {
             const auto texture = content.texture(Editor::AssetDragDrop::texturePath(*payload));
@@ -126,26 +178,12 @@ void drawPaintSettings(Engine::ScenePreset& scene, Engine::Assets::Content& cont
 
 void drawDetailSettings(Engine::ScenePreset& scene, Engine::Assets::Content& content, const Engine::Entity selected,
                         TerrainSculptState& state) {
-    panelSection("TREES & GRASS", "Scatter or erase detail meshes");
-    const float halfWidth = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5F;
-    if (!state.grassErase) {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.08F, 0.42F, 0.32F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.10F, 0.55F, 0.40F, 1.0F});
-    }
-    if (ImGui::Button("+  Add details", {halfWidth, 36.0F}))
-        state.grassErase = false;
-    if (!state.grassErase)
-        ImGui::PopStyleColor(2);
-    ImGui::SameLine();
-    if (state.grassErase) {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.52F, 0.20F, 0.23F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.66F, 0.25F, 0.28F, 1.0F});
-    }
-    if (ImGui::Button("-  Erase details", {halfWidth, 36.0F}))
-        state.grassErase = true;
-    if (state.grassErase) {
-        ImGui::PopStyleColor(2);
-    }
+    panelSection("Trees & grass", "Scatter or erase detail meshes");
+    constexpr std::array<const char*, 2> brushModes{"Add details", "Erase details"};
+    int brushMode = state.grassErase ? 1 : 0;
+    if (EditorUI::segmentedControl("##terrain-detail-mode", brushModes, brushMode))
+        state.grassErase = brushMode == 1;
+    ImGui::Spacing();
 
     const bool hasDetails = scene.editor().has<Engine::TerrainGrassComponent>(selected) &&
                             scene.editor().read<Engine::TerrainGrassComponent>(selected).hasPrefab();
@@ -157,10 +195,7 @@ void drawDetailSettings(Engine::ScenePreset& scene, Engine::Assets::Content& con
         ImGui::TextDisabled("%zu placed instances", details.instances.size());
     }
     ImGui::TextDisabled("Detail prefab");
-    ImGui::PushStyleColor(ImGuiCol_Button,
-                          hasDetails ? ImVec4{0.10F, 0.25F, 0.20F, 1.0F} : ImVec4{0.11F, 0.125F, 0.158F, 1.0F});
-    ImGui::Button(prefabLabel.c_str(), {-1.0F, 48.0F});
-    ImGui::PopStyleColor();
+    assetDropZone("##terrain-detail-prefab", EditorUI::Icon::Leaf, prefabLabel.c_str(), hasDetails);
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::modelPayload)) {
             const auto prefab = Engine::Prefab::model(content, Editor::AssetDragDrop::modelPath(*payload));
@@ -208,25 +243,27 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         if (state.strokeActive)
             finishTerrainStroke(scene, state);
         setTerrainTool(state, TerrainToolMode::None);
-        ImGui::Dummy({0.0F, 24.0F});
-        const float center = ImGui::GetContentRegionAvail().x * 0.5F;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0F, center - 28.0F));
-        ImGui::TextColored(EditorUI::colors().textSecondary, "TERRAIN");
-        ImGui::Spacing();
-        ImGui::TextWrapped(playing ? "Terrain editing is unavailable in Play mode."
-                                   : "Select a terrain object to start sculpting, painting, or placing details.");
+        ImGui::Dummy({0.0F, ImGui::GetContentRegionAvail().y * 0.15F});
+        EditorUI::emptyState(EditorUI::Icon::Terrain, playing ? "Unavailable in Play Mode" : "No terrain selected",
+                             playing ? "Stop Play Mode to sculpt, paint or place details."
+                                     : "Select a terrain object to start sculpting, painting, or placing details.");
         ImGui::End();
         return;
     }
 
     const auto& terrain = scene.editor().read<Engine::TerrainComponent>(selected);
-    ImGui::TextColored(EditorUI::colors().accent, "TERRAIN EDITOR");
-    ImGui::TextDisabled("%u x %u heightmap  |  %.0f x %.0f m", terrain.resolution, terrain.resolution, terrain.width,
+    EditorUI::iconLabel(EditorUI::Icon::Terrain, EditorUI::colors().iconTerrain);
+    ImGui::SameLine(0.0F, 6.0F);
+    ImGui::TextUnformatted(entityName(scene, selected));
+    ImGui::TextDisabled("%u x %u heightmap  ·  %.0f x %.0f m", terrain.resolution, terrain.resolution, terrain.width,
                         terrain.depth);
     ImGui::Spacing();
 
     const TerrainToolMode active = activeTerrainTool(state);
-    if (terrainModeButton("Sculpt", "Raise, lower, smooth, and flatten terrain", active == TerrainToolMode::Sculpt)) {
+    const float tileSpacing = 4.0F;
+    const float tileWidth = std::floor((ImGui::GetContentRegionAvail().x - tileSpacing * 2.0F) / 3.0F);
+    if (terrainModeTile("##terrain-sculpt", EditorUI::Icon::Terrain, "Sculpt",
+                        "Raise, lower, smooth, and flatten terrain", active == TerrainToolMode::Sculpt, tileWidth)) {
         const TerrainToolMode next =
             active == TerrainToolMode::Sculpt ? TerrainToolMode::None : TerrainToolMode::Sculpt;
         setTerrainTool(state, next);
@@ -238,11 +275,13 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         });
         renderer.synchronizeScene(scene);
     }
-    if (terrainModeButton("Paint Materials", "Blend up to four terrain texture layers",
-                          active == TerrainToolMode::Paint))
+    ImGui::SameLine(0.0F, tileSpacing);
+    if (terrainModeTile("##terrain-paint", EditorUI::Icon::Brush, "Paint", "Blend up to four terrain texture layers",
+                        active == TerrainToolMode::Paint, tileWidth))
         setTerrainTool(state, active == TerrainToolMode::Paint ? TerrainToolMode::None : TerrainToolMode::Paint);
-    if (terrainModeButton("Trees & Grass", "Scatter foliage and other detail meshes",
-                          active == TerrainToolMode::Details))
+    ImGui::SameLine(0.0F, tileSpacing);
+    if (terrainModeTile("##terrain-details", EditorUI::Icon::Leaf, "Details",
+                        "Scatter trees, grass and other detail meshes", active == TerrainToolMode::Details, tileWidth))
         setTerrainTool(state, active == TerrainToolMode::Details ? TerrainToolMode::None : TerrainToolMode::Details);
 
     if (state.enabled)
@@ -252,7 +291,7 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
     else if (state.grassEnabled)
         drawDetailSettings(scene, content, selected, state);
     else {
-        panelSection("TERRAIN PREVIEW", "Display quality while editing");
+        panelSection("Terrain preview", "Display quality while editing");
         int lod = static_cast<int>(state.previewLod);
         ImGui::TextDisabled("Level of detail");
         ImGui::SetNextItemWidth(-1.0F);

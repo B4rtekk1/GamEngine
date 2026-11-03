@@ -1,5 +1,8 @@
 #include "Editor/Panels/TerminalPanel.h"
 
+#include "Editor/UI/EditorIcons.h"
+#include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
 #include "Platform/Terminal/TerminalSession.h"
 #include "imgui.h"
 
@@ -65,6 +68,12 @@ void TerminalPanel::handleKeyboard() {
     if (!hasKeyboardFocus_ || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || !session_ ||
         !session_->running())
         return;
+    // Claim the editor's global file shortcuts while the shell has focus, so
+    // e.g. Ctrl+O or Ctrl+N reach the shell instead of opening dialogs.
+    for (const ImGuiKeyChord chord :
+         {ImGuiMod_Ctrl | ImGuiKey_S, ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S, ImGuiMod_Ctrl | ImGuiKey_N,
+          ImGuiMod_Ctrl | ImGuiKey_O, ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_O})
+        static_cast<void>(ImGui::Shortcut(chord, ImGuiInputFlags_RouteFocused));
     ImGuiIO& io = ImGui::GetIO();
     io.WantCaptureKeyboard = true;
     io.WantTextInput = true;
@@ -196,15 +205,20 @@ void TerminalPanel::draw(bool& isOpen) {
         ImGui::End();
         return;
     }
-    if (ImGui::Button("Restart"))
+    const EditorUI::Palette& palette = EditorUI::colors();
+    if (EditorUI::iconButton("##terminal-restart", EditorUI::Icon::Restart, "Restart the shell"))
         restart();
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", shell_.string().c_str());
+    const bool running = session_ && session_->running();
+    EditorUI::badge(running ? "Running" : "Stopped",
+                    EditorUI::withAlpha(running ? palette.success : palette.error, 0.16F),
+                    running ? palette.success : palette.error);
     ImGui::SameLine();
-    ImGui::TextDisabled(session_ && session_->running() ? "running" : "stopped");
-    ImGui::Separator();
+    ImGui::TextDisabled("%s", shell_.string().c_str());
     if (startFailed_) {
-        ImGui::TextColored({0.95F, 0.35F, 0.35F, 1.0F}, "Could not start %s.", shell_.string().c_str());
+        EditorUI::iconLabel(EditorUI::Icon::Error, palette.error);
+        ImGui::SameLine(0.0F, 6.0F);
+        ImGui::TextColored(palette.error, "Could not start %s.", shell_.string().c_str());
 #ifdef _WIN32
         ImGui::TextDisabled("Windows 10 version 1809 or newer is required for ConPTY.");
 #else
@@ -216,11 +230,13 @@ void TerminalPanel::draw(bool& isOpen) {
         ImGui::PushFont(terminalFont_ != nullptr ? terminalFont_ : ImGui::GetFont());
         cellWidth_ = ImGui::CalcTextSize("M").x;
         cellHeight_ = ImGui::GetTextLineHeightWithSpacing();
-        ImGui::BeginChild("##terminal-output", {0.0F, 0.0F}, false,
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, palette.appBackground);
+        ImGui::BeginChild("##terminal-output", {0.0F, 0.0F}, ImGuiChildFlags_Borders,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         handleKeyboard();
         drawScreen();
         ImGui::EndChild();
+        ImGui::PopStyleColor();
         ImGui::PopFont();
     }
     ImGui::End();

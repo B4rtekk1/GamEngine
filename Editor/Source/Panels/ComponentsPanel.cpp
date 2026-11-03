@@ -46,18 +46,9 @@
 #include <utility>
 
 static bool drawRemovableComponentHeader(const char* label, const char* id, bool& remove) {
-    const bool open = EditorUI::collapsingSection(label);
-    // SameLine(pos_x) is relative to the content origin.  Using
-    // GetWindowContentRegionMax() here placed the button outside the active
-    // item/clip region in the editor after the ImGui backend became shared.
-    // Keep the button outside the header's full-width hit rectangle. Drawing
-    // it over the header makes ImGui toggle the collapse state instead of
-    // delivering the click to the button.
-    ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x);
     ImGui::PushID(id);
-    remove = ImGui::SmallButton("Remove");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Remove this component");
+    const bool open =
+        EditorUI::collapsingSectionWithAction(label, EditorUI::Icon::Trash, "Remove this component", remove);
     ImGui::PopID();
     return open;
 }
@@ -1087,16 +1078,15 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
             }
         }
     }
-    ImGui::TextDisabled("COMPONENTS");
     ImGui::Spacing();
-    ImGui::SetNextItemWidth(-1.0F);
-    ImGui::PushStyleColor(ImGuiCol_Button, {0.20F, 0.36F, 0.52F, 1.0F});
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.28F, 0.48F, 0.68F, 1.0F});
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.16F, 0.30F, 0.44F, 1.0F});
-    if (EditorButton("+  Add Component", {-1.0F, 0.0F}).draw()) {
+    ImGui::PushStyleColor(ImGuiCol_Button, EditorUI::colors().accentMuted);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorUI::withAlpha(EditorUI::colors().accent, 0.42F));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorUI::withAlpha(EditorUI::colors().accent, 0.55F));
+    ImGui::PushStyleColor(ImGuiCol_Text, EditorUI::colors().accentHover);
+    if (EditorButton("+  Add Component", {-1.0F, ImGui::GetFrameHeight() * 1.25F}).draw()) {
         ImGui::OpenPopup("Add Component");
     }
-    ImGui::PopStyleColor(3);
+    ImGui::PopStyleColor(4);
     // A popup retains its previous auto-fit size. Force a usable picker size
     // every frame so a popup first opened before scripts were loaded does not
     // remain a narrow menu.
@@ -1105,9 +1095,9 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
         // The popup deliberately knows nothing about concrete ECS types. New
         // components appear here solely by registering a descriptor.
         static char componentSearch[128]{};
-        ImGui::SetNextItemWidth(-1.0F);
-        ImGui::InputTextWithHint("##component-search", "Search components...", componentSearch,
-                                 sizeof(componentSearch));
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+        EditorUI::searchBox("##component-search", "Search components...", componentSearch, sizeof(componentSearch));
         ImGui::Separator();
         ImGui::BeginChild("##add-component-results", {0.0F, 0.0F}, false);
 
@@ -1122,7 +1112,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
             if (previousCategory != descriptor.category) {
                 if (!previousCategory.empty())
                     ImGui::Spacing();
-                ImGui::TextDisabled("%.*s", static_cast<int>(descriptor.category.size()), descriptor.category.data());
+                const std::string category{descriptor.category};
+                ImGui::SeparatorText(category.c_str());
                 previousCategory = descriptor.category;
             }
             const bool available = descriptor.canAdd && descriptor.canAdd(scene, selected);

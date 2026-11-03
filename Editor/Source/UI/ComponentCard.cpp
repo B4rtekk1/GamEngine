@@ -18,13 +18,13 @@ bool ComponentCard::begin() {
 
     if (removable_ && ImGui::BeginTable("component-card-header", 2, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("title", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("actions", ImGuiTableColumnFlags_WidthFixed,
-                                ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0F);
+        ImGui::TableSetupColumn("actions", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         open_ = collapsingSection(name_);
         ImGui::TableSetColumnIndex(1);
-        if (ImGui::SmallButton("..."))
+        if (iconButton("##component-actions", Icon::Gear, "Component actions",
+                       {.size = {ImGui::GetItemRectSize().y, ImGui::GetItemRectSize().y}}))
             ImGui::OpenPopup("component-actions");
         if (ImGui::BeginPopup("component-actions")) {
             ImGui::TextDisabled("%s", name_);

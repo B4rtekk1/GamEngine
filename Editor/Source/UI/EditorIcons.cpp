@@ -298,6 +298,112 @@ void drawIcon(ImDrawList* drawList, const Icon icon, const ImVec2 center, const 
             drawList->AddPolyline(layer.data(), static_cast<int>(layer.size()), color, ImDrawFlags_Closed, stroke);
         }
         break;
+    case Icon::Back:
+        drawList->AddLine(p(0.36F, 0.0F), p(-0.3F, 0.0F), color, stroke * 1.3F);
+        drawList->AddLine(p(-0.36F, 0.0F), p(-0.06F, -0.3F), color, stroke * 1.3F);
+        drawList->AddLine(p(-0.36F, 0.0F), p(-0.06F, 0.3F), color, stroke * 1.3F);
+        break;
+    case Icon::Refresh: {
+        constexpr float arcStart = -0.1F * kPi;
+        constexpr float arcEnd = 1.45F * kPi;
+        drawList->PathArcTo(p(0.0F, 0.0F), size * 0.32F, arcStart, arcEnd, 20);
+        drawList->PathStroke(color, ImDrawFlags_None, stroke * 1.2F);
+        const ImVec2 tip = p(std::cos(arcEnd) * 0.32F, std::sin(arcEnd) * 0.32F);
+        drawArrowHead(drawList, tip, -std::sin(arcEnd), std::cos(arcEnd), size * 0.2F, color);
+        break;
+    }
+    case Icon::Folder:
+        drawList->AddRectFilled(p(-0.44F, -0.32F), p(-0.04F, -0.12F), color, size * 0.06F);
+        drawList->AddRectFilled(p(-0.44F, -0.2F), p(0.44F, 0.34F), color, size * 0.08F);
+        break;
+    case Icon::Import:
+        drawList->AddLine(p(0.0F, -0.42F), p(0.0F, 0.08F), color, stroke * 1.3F);
+        drawArrowHead(drawList, p(0.0F, 0.16F), 0.0F, 1.0F, size * 0.24F, color);
+        drawList->AddLine(p(-0.42F, 0.12F), p(-0.42F, 0.4F), color, stroke * 1.2F);
+        drawList->AddLine(p(-0.42F, 0.4F), p(0.42F, 0.4F), color, stroke * 1.2F);
+        drawList->AddLine(p(0.42F, 0.4F), p(0.42F, 0.12F), color, stroke * 1.2F);
+        break;
+    case Icon::Archive:
+        drawList->AddRect(p(-0.4F, -0.36F), p(0.4F, -0.14F), color, size * 0.04F, 0, stroke);
+        drawList->AddRect(p(-0.34F, -0.14F), p(0.34F, 0.4F), color, size * 0.04F, 0, stroke);
+        drawList->AddLine(p(-0.1F, 0.02F), p(0.1F, 0.02F), color, stroke * 1.3F);
+        break;
+    case Icon::Grid:
+        for (const float x : {-0.38F, 0.06F})
+            for (const float y : {-0.38F, 0.06F})
+                drawList->AddRectFilled(p(x, y), p(x + 0.32F, y + 0.32F), color, size * 0.05F);
+        break;
+    case Icon::List:
+        for (const float y : {-0.3F, 0.0F, 0.3F}) {
+            drawList->AddRectFilled(p(-0.42F, y - 0.06F), p(-0.3F, y + 0.06F), color);
+            drawList->AddLine(p(-0.18F, y), p(0.42F, y), color, stroke * 1.2F);
+        }
+        break;
+    case Icon::Sidebar:
+        drawList->AddRect(p(-0.42F, -0.36F), p(0.42F, 0.36F), color, size * 0.06F, 0, stroke);
+        drawList->AddRectFilled(p(0.12F, -0.36F), p(0.42F, 0.36F), color, size * 0.06F, ImDrawFlags_RoundCornersRight);
+        break;
+    case Icon::Trash:
+        drawList->AddLine(p(-0.4F, -0.28F), p(0.4F, -0.28F), color, stroke * 1.2F);
+        drawList->AddLine(p(-0.12F, -0.4F), p(0.12F, -0.4F), color, stroke * 1.2F);
+        drawList->AddQuad(p(-0.3F, -0.2F), p(0.3F, -0.2F), p(0.24F, 0.42F), p(-0.24F, 0.42F), color, stroke);
+        drawList->AddLine(p(-0.08F, -0.06F), p(-0.08F, 0.28F), color, stroke);
+        drawList->AddLine(p(0.08F, -0.06F), p(0.08F, 0.28F), color, stroke);
+        break;
+    case Icon::Image:
+        drawList->AddRect(p(-0.44F, -0.36F), p(0.44F, 0.36F), color, size * 0.06F, 0, stroke);
+        drawList->AddTriangleFilled(p(-0.34F, 0.28F), p(-0.08F, -0.06F), p(0.16F, 0.28F), color);
+        drawList->AddTriangleFilled(p(0.04F, 0.28F), p(0.2F, 0.06F), p(0.36F, 0.28F), color);
+        drawList->AddCircleFilled(p(0.2F, -0.16F), size * 0.08F, color, 10);
+        break;
+    case Icon::Code:
+        drawList->AddLine(p(-0.16F, -0.3F), p(-0.42F, 0.0F), color, stroke * 1.3F);
+        drawList->AddLine(p(-0.42F, 0.0F), p(-0.16F, 0.3F), color, stroke * 1.3F);
+        drawList->AddLine(p(0.16F, -0.3F), p(0.42F, 0.0F), color, stroke * 1.3F);
+        drawList->AddLine(p(0.42F, 0.0F), p(0.16F, 0.3F), color, stroke * 1.3F);
+        drawList->AddLine(p(0.08F, -0.38F), p(-0.08F, 0.38F), color, stroke);
+        break;
+    case Icon::Audio:
+        drawList->AddLine(p(-0.06F, 0.26F), p(-0.06F, -0.38F), color, stroke * 1.2F);
+        drawList->AddLine(p(-0.06F, -0.38F), p(0.3F, -0.26F), color, stroke * 1.4F);
+        drawList->AddCircleFilled(p(-0.2F, 0.28F), size * 0.15F, color, 12);
+        break;
+    case Icon::File: {
+        const std::array page{p(-0.32F, -0.44F), p(0.12F, -0.44F), p(0.32F, -0.24F), p(0.32F, 0.44F), p(-0.32F, 0.44F)};
+        drawList->AddPolyline(page.data(), static_cast<int>(page.size()), color, ImDrawFlags_Closed, stroke);
+        drawList->AddLine(p(0.12F, -0.44F), p(0.12F, -0.24F), color, stroke);
+        drawList->AddLine(p(0.12F, -0.24F), p(0.32F, -0.24F), color, stroke);
+        break;
+    }
+    case Icon::ChevronRight:
+        drawList->AddLine(p(-0.1F, -0.26F), p(0.14F, 0.0F), color, stroke * 1.2F);
+        drawList->AddLine(p(0.14F, 0.0F), p(-0.1F, 0.26F), color, stroke * 1.2F);
+        break;
+    case Icon::Save:
+        drawList->AddRect(p(-0.4F, -0.4F), p(0.4F, 0.4F), color, size * 0.06F, 0, stroke);
+        drawList->AddRectFilled(p(-0.22F, -0.4F), p(0.18F, -0.12F), color);
+        drawList->AddRectFilled(p(-0.24F, 0.08F), p(0.24F, 0.4F), color, size * 0.03F);
+        break;
+    case Icon::Brush:
+        drawList->AddLine(p(0.4F, -0.4F), p(-0.02F, 0.04F), color, stroke * 1.6F);
+        drawList->AddCircleFilled(p(-0.18F, 0.2F), size * 0.15F, color, 12);
+        drawList->AddTriangleFilled(p(-0.32F, 0.26F), p(-0.12F, 0.34F), p(-0.44F, 0.44F), color);
+        break;
+    case Icon::Leaf: {
+        constexpr int segments = 10;
+        std::array<ImVec2, segments * 2> leaf{};
+        for (int index = 0; index < segments; ++index) {
+            const float t = static_cast<float>(index) / static_cast<float>(segments - 1);
+            const float bulge = std::sin(t * kPi) * 0.22F;
+            const float x = -0.34F + t * 0.72F;
+            const float y = 0.34F - t * 0.72F;
+            leaf[static_cast<std::size_t>(index)] = p(x - bulge, y - bulge);
+            leaf[static_cast<std::size_t>(segments * 2 - 1 - index)] = p(x + bulge, y + bulge);
+        }
+        drawList->AddConvexPolyFilled(leaf.data(), static_cast<int>(leaf.size()), color);
+        drawList->AddLine(p(-0.44F, 0.44F), p(-0.2F, 0.2F), color, stroke * 1.2F);
+        break;
+    }
     }
 }
 

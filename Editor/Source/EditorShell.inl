@@ -307,9 +307,9 @@ namespace {
 // Give them a larger target and a clearly visible hover/open state while
 // keeping the rest of the editor's button styling unchanged.
 bool beginTopMenu(const char* label, const char* tooltip, Editor::WindowsTitleBar& titleBar) {
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {11.0F, ImGui::GetStyle().FramePadding.y});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3.0F, 0.0F});
-    ImGui::PushStyleColor(ImGuiCol_Header, {0.0F, 0.0F, 0.0F, 0.0F});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0F, ImGui::GetStyle().FramePadding.y});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {2.0F, 0.0F});
+    ImGui::PushStyleColor(ImGuiCol_Header, EditorUI::colors().surfaceRaised);
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorUI::colors().controlHover);
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorUI::colors().accentMuted);
 
@@ -317,11 +317,21 @@ bool beginTopMenu(const char* label, const char* tooltip, Editor::WindowsTitleBa
     const ImVec2 itemMin = ImGui::GetItemRectMin();
     const ImVec2 itemMax = ImGui::GetItemRectMax();
     titleBar.addHitRegion(itemMin.x, itemMin.y, itemMax.x, itemMax.y, Editor::WindowsTitleBar::clientHitTestResult);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && tooltip != nullptr) {
+    if (open) {
+        // Accent underline marks the open menu in the bar.
+        ImGui::GetForegroundDrawList(ImGui::GetMainViewport())
+            ->AddLine({itemMin.x + 6.0F, itemMax.y - 1.5F}, {itemMax.x - 6.0F, itemMax.y - 1.5F},
+                      ImGui::GetColorU32(EditorUI::colors().accent), 2.0F);
+        // The bar uses tall frames and tight spacing; menu contents need
+        // regular controls and comfortable rows instead.
+        ImGui::PopStyleVar(2);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.0F, 4.0F});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {10.0F, 7.0F});
+        return true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && tooltip != nullptr) {
         ImGui::SetTooltip("%s", tooltip);
     }
-    if (open)
-        return true;
 
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar(2);
@@ -332,6 +342,73 @@ void endTopMenu() {
     ImGui::EndMenu();
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar(2);
+}
+
+// Every menu row reserves the same icon column so labels line up whether or
+// not an entry has an icon. The column is reserved with spaces and the vector
+// icon is drawn into it afterwards.
+constexpr const char* kMenuIconSlot = "    ";
+
+void drawMenuIcon(const ImVec2 rowStart, const std::optional<EditorUI::Icon> icon, const bool enabled,
+                  const ImVec4& color) {
+    if (!icon)
+        return;
+    const float offset = ImGui::GetCurrentWindow()->DC.MenuColumns.OffsetIcon;
+    const float size = ImGui::GetFontSize() * 0.86F;
+    ImVec4 tint = color;
+    if (!enabled)
+        tint.w *= ImGui::GetStyle().DisabledAlpha;
+    EditorUI::drawIcon(
+        ImGui::GetWindowDrawList(), *icon,
+        {std::round(rowStart.x + offset + size * 0.5F), std::round(rowStart.y + ImGui::GetTextLineHeight() * 0.5F)},
+        size, ImGui::GetColorU32(tint));
+}
+
+bool menuItem(const char* label, const char* shortcut = nullptr,
+              const std::optional<EditorUI::Icon> icon = std::nullopt, const bool selected = false,
+              const bool enabled = true) {
+    const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::MenuItemEx(label, kMenuIconSlot, shortcut, selected, enabled);
+    // An enclosing BeginDisabled() is already applied through style alpha.
+    drawMenuIcon(rowStart, icon, enabled, EditorUI::colors().textSecondary);
+    return pressed;
+}
+
+/** Checkable entry that toggles @p value, e.g. a panel visibility switch. */
+bool menuToggle(const char* label, const std::optional<EditorUI::Icon> icon, bool& value) {
+    if (!menuItem(label, nullptr, icon, value))
+        return false;
+    value = !value;
+    return true;
+}
+
+bool beginSubMenu(const char* label, const std::optional<EditorUI::Icon> icon = std::nullopt,
+                  const bool enabled = true) {
+    const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+    const bool open = ImGui::BeginMenuEx(label, kMenuIconSlot, enabled);
+    // BeginMenuEx switches to the child menu window when it opens; draw into
+    // the parent row using its own draw list.
+    if (icon) {
+        ImGuiWindow* parent = open ? ImGui::GetCurrentWindow()->ParentWindow : ImGui::GetCurrentWindow();
+        if (parent != nullptr) {
+            const float size = ImGui::GetFontSize() * 0.86F;
+            ImVec4 tint = EditorUI::colors().textSecondary;
+            if (!enabled)
+                tint.w *= ImGui::GetStyle().DisabledAlpha;
+            EditorUI::drawIcon(parent->DrawList, *icon,
+                               {std::round(rowStart.x + parent->DC.MenuColumns.OffsetIcon + size * 0.5F),
+                                std::round(rowStart.y + ImGui::GetTextLineHeight() * 0.5F)},
+                               size, ImGui::GetColorU32(tint));
+        }
+    }
+    return open;
+}
+
+/** Small caption that groups the entries below it inside a menu. */
+void menuSection(const char* title) {
+    ImGui::PushStyleColor(ImGuiCol_Text, EditorUI::colors().textSecondary);
+    ImGui::SeparatorText(title);
+    ImGui::PopStyleColor();
 }
 
 [[nodiscard]] float pixelAligned(const float value) {
@@ -527,51 +604,71 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
     }
 
     const std::filesystem::path activeScenePath = EditorSceneSession::scenePath();
-    const std::string sceneLabel = activeScenePath.empty() ? "Untitled" : activeScenePath.filename().string();
-    const std::string titleLabel = sceneLabel + " — " + (playing ? "DEMO" : "EDITOR") + " — " + project.name();
-    ImVec4 titleColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
-        titleColor.w *= 0.62F;
-    ImGui::PushStyleColor(ImGuiCol_Text, titleColor);
-    ImGui::TextUnformatted(titleLabel.c_str());
-    ImGui::PopStyleColor();
-    ImGui::SameLine(0.0F, 14.0F);
-    if (beginTopMenu("File", "Project and scene files", titleBar)) {
-        ImGui::BeginDisabled(playing);
-        if (ImGui::MenuItem("New Project...")) {
-            if (newProjectLocation[0] == '\0') {
-                const std::string defaultLocation = (std::filesystem::current_path() / newProjectName).string();
-                std::snprintf(newProjectLocation, sizeof(newProjectLocation), "%s", defaultLocation.c_str());
+    const EditorUI::Palette& palette = EditorUI::colors();
+    const auto saveCurrentScene = [&] {
+        try {
+            if (EditorSceneSession::hasSavedScene()) {
+                saveScene(activeScenePath);
+            } else {
+                saveSceneAs();
             }
-            newProjectError.clear();
-            openNewProject = true;
+        } catch (const std::exception& error) {
+            sceneFileError = error.what();
+            Editor::ConsolePanel::error("Could not save scene: " + sceneFileError);
         }
-        ImGui::Separator();
-        if (ImGui::MenuItem("New Scene...", "Ctrl+N")) {
-            createScene();
+    };
+    const auto requestNewProject = [&] {
+        if (newProjectLocation[0] == '\0') {
+            const std::string defaultLocation = (std::filesystem::current_path() / newProjectName).string();
+            std::snprintf(newProjectLocation, sizeof(newProjectLocation), "%s", defaultLocation.c_str());
         }
-        if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
-            try {
-                if (EditorSceneSession::hasSavedScene()) {
-                    saveScene(activeScenePath);
-                } else {
-                    saveSceneAs();
-                }
-            } catch (const std::exception& error) {
-                sceneFileError = error.what();
-                Editor::ConsolePanel::error("Could not save scene: " + sceneFileError);
-            }
-        }
-        if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {
+        newProjectError.clear();
+        openNewProject = true;
+    };
+
+    // File shortcuts shown in the menu. Global routing lets a focused panel
+    // with its own binding (Shader Graph's Ctrl+S) take precedence.
+    if (!playing) {
+        constexpr ImGuiInputFlags route = ImGuiInputFlags_RouteGlobal;
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, route))
+            saveCurrentScene();
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S, route))
             saveSceneAs();
-        }
-        if (ImGui::MenuItem("Delete Scene...", nullptr, false, EditorSceneSession::hasSavedScene())) {
-            openDeleteScene = true;
-        }
-        if (ImGui::MenuItem("Open Scene...", "Ctrl+Alt+O")) {
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_N, route))
+            createScene();
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O, route))
+            EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::LoadProject);
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_O, route))
             EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::LoadScene);
-        }
-        if (ImGui::BeginMenu("Project Scenes")) {
+    }
+
+    // Engine mark on the far left.
+    {
+        const float barHeight = ImGui::GetFrameHeight();
+        const float markSize = std::round(barHeight * 0.62F);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 4.0F);
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        ImGui::Dummy({markSize + 6.0F, barHeight});
+        const ImVec2 center{std::round(origin.x + markSize * 0.5F), std::round(origin.y + barHeight * 0.5F)};
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        drawList->AddRectFilled({center.x - markSize * 0.5F, center.y - markSize * 0.5F},
+                                {center.x + markSize * 0.5F, center.y + markSize * 0.5F},
+                                ImGui::GetColorU32(palette.accentMuted), 5.0F);
+        EditorUI::drawIcon(drawList, EditorUI::Icon::Mesh, center, markSize * 0.72F,
+                           ImGui::GetColorU32(palette.accentHover));
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+            ImGui::SetTooltip("GamEngine Editor");
+        ImGui::SameLine(0.0F, 4.0F);
+    }
+
+    if (beginTopMenu("File", "Projects, scenes and game builds", titleBar)) {
+        ImGui::BeginDisabled(playing);
+        menuSection("Scene");
+        if (menuItem("New Scene...", "Ctrl+N", EditorUI::Icon::File))
+            createScene();
+        if (menuItem("Open Scene...", "Ctrl+Alt+O", EditorUI::Icon::Folder))
+            EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::LoadScene);
+        if (beginSubMenu("Project Scenes", EditorUI::Icon::Layers)) {
             const auto scenes = project.scenes();
             if (scenes.empty()) {
                 ImGui::TextDisabled("No scenes in %s", (project.assetRoot() / "Scenes").string().c_str());
@@ -579,42 +676,48 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             for (const auto& path : scenes) {
                 const std::string label = path.lexically_relative(project.rootPath()).string();
                 const bool active = path == activeScenePath;
-                if (ImGui::MenuItem(label.c_str(), nullptr, active, !active)) {
+                if (menuItem(label.c_str(), nullptr, std::nullopt, active, !active)) {
                     tryLoadScene(path);
                 }
             }
             ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Load Project...", "Ctrl+O")) {
+        if (menuItem("Save Scene", "Ctrl+S", EditorUI::Icon::Save))
+            saveCurrentScene();
+        if (menuItem("Save Scene As...", "Ctrl+Shift+S"))
+            saveSceneAs();
+        if (menuItem("Delete Scene...", nullptr, EditorUI::Icon::Trash, false, EditorSceneSession::hasSavedScene()))
+            openDeleteScene = true;
+        menuSection("Project");
+        if (menuItem("New Project...", nullptr, EditorUI::Icon::Plus))
+            requestNewProject();
+        if (menuItem("Open Project...", "Ctrl+O", EditorUI::Icon::Folder))
             EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::LoadProject);
-        }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Build Game", "", false, !project.manifestPath().empty())) {
+        if (menuItem("Build Game", nullptr, EditorUI::Icon::Archive, false, !project.manifestPath().empty()))
             gameBuildRequested = true;
-        }
         ImGui::EndDisabled();
-        ImGui::Separator();
-        if (ImGui::MenuItem(playing ? "Stop" : "Play", "F5")) {
-            playToggleRequested = true;
-        }
-        if (ImGui::MenuItem(paused ? "Resume" : "Pause", "F6", false, playing)) {
-            pauseToggleRequested = true;
-        }
         if (!sceneFileError.empty()) {
-            ImGui::TextDisabled("%s", sceneFileError.c_str());
+            ImGui::Separator();
+            EditorUI::iconLabel(EditorUI::Icon::Error, palette.error);
+            ImGui::SameLine(0.0F, 6.0F);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 320.0F);
+            ImGui::TextColored(palette.error, "%s", sceneFileError.c_str());
+            ImGui::PopTextWrapPos();
         }
         ImGui::Separator();
-        ImGui::TextDisabled("Auto-save: every 30 seconds after changes");
+        ImGui::TextDisabled("Scenes auto-save every 30 seconds after changes.");
         endTopMenu();
     }
 
     if (openDeleteScene)
         ImGui::OpenPopup("##confirm-delete-scene");
     if (ImGui::BeginPopupModal("##confirm-delete-scene", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        EditorUI::iconLabel(EditorUI::Icon::Warning, EditorUI::colors().warning);
+        ImGui::SameLine(0.0F, 6.0F);
         ImGui::TextWrapped("Delete scene '%s'?", activeScenePath.filename().string().c_str());
         ImGui::TextDisabled("This permanently removes the scene file from the project.");
         ImGui::Separator();
-        if (ImGui::Button("Delete", {120.0F, 0.0F})) {
+        if (EditorUI::dangerButton("Delete", {120.0F, 0.0F})) {
             std::error_code error;
             if (std::filesystem::remove(activeScenePath, error) && !error) {
                 const auto terrainPath = std::filesystem::path{activeScenePath.string() + ".terrain"};
@@ -641,143 +744,93 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         ImGui::EndPopup();
     }
 
-    // Keep scene navigation in the main bar: switching levels should not
-    // require opening File and then a nested project-scene menu.
-    ImGui::SameLine(0.0F, 10.0F);
-    ImGui::TextDisabled("Scene:");
-    ImGui::SameLine(0.0F, 5.0F);
-    ImGui::BeginDisabled(playing);
-    ImGui::SetNextItemWidth(240.0F);
-    const std::string activeSceneName =
-        activeScenePath.empty() ? "No scene selected" : activeScenePath.filename().string();
-    if (ImGui::BeginCombo("##active-project-scene", activeSceneName.c_str())) {
-        if (ImGui::Selectable("No scene selected", activeScenePath.empty())) {
-            EditorSceneSession::clearSavedScene();
-            sceneDeleted = true;
-        }
+    if (beginTopMenu("Edit", "Undo, clipboard and Play Mode", titleBar)) {
+        if (menuItem("Undo", "Ctrl+Z", EditorUI::Icon::Back, false, canUndo && !playing))
+            undoRequested = true;
+        if (menuItem("Redo", "Ctrl+Y", std::nullopt, false, canRedo && !playing))
+            redoRequested = true;
         ImGui::Separator();
-        for (const auto& path : project.scenes()) {
-            const std::string label = path.lexically_relative(project.rootPath()).string();
-            const bool active = path == activeScenePath;
-            if (ImGui::Selectable(label.c_str(), active) && !active) {
-                tryLoadScene(path);
-            }
-            if (active)
-                ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
+        if (menuItem("Copy", "Ctrl+C", std::nullopt, false, !playing))
+            copyRequested = true;
+        if (menuItem("Paste", "Ctrl+V", std::nullopt, false, canPaste && !playing))
+            pasteRequested = true;
+        if (menuItem("Duplicate", "Ctrl+D", std::nullopt, false, !playing))
+            duplicateRequested = true;
+        menuSection("Play Mode");
+        if (menuItem(playing ? "Stop" : "Play", "F5", playing ? EditorUI::Icon::Stop : EditorUI::Icon::Play))
+            playToggleRequested = true;
+        if (menuItem(paused ? "Resume" : "Pause", "F6", EditorUI::Icon::Pause, paused, playing))
+            pauseToggleRequested = true;
+        if (menuItem("Restart", nullptr, EditorUI::Icon::Restart, false, playing))
+            restartRequested = true;
+        endTopMenu();
     }
-    ImGui::EndDisabled();
-    const ImVec2 sceneSelectorMin = ImGui::GetItemRectMin();
-    const ImVec2 sceneSelectorMax = ImGui::GetItemRectMax();
-    titleBar.addHitRegion(sceneSelectorMin.x, sceneSelectorMin.y, sceneSelectorMax.x, sceneSelectorMax.y,
-                          Editor::WindowsTitleBar::clientHitTestResult);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-        ImGui::SetTooltip("Switch scenes in the current project");
+
+    if (beginTopMenu("View", "Show, hide and arrange editor panels", titleBar)) {
+        menuSection("Panels");
+        menuToggle("Hierarchy", EditorUI::Icon::List, showHierarchy);
+        menuToggle("Viewport", EditorUI::Icon::Frame, showViewport);
+        menuToggle("Inspector", EditorUI::Icon::Sidebar, showInspector);
+        menuToggle("Asset Manager", EditorUI::Icon::Folder, showAssetManager);
+        menuToggle("Terrain Tools", EditorUI::Icon::Terrain, showTerrainTools);
+        menuToggle("Console", EditorUI::Icon::Info, showConsole);
+        menuToggle("Terminal", EditorUI::Icon::Code, showTerminal);
+        menuToggle("Shader Graph", EditorUI::Icon::Layers, showShaderGraph);
+        menuToggle("Profiler", EditorUI::Icon::Gear, showGpuProfile);
+        ImGui::Separator();
+        if (menuItem("Reset Layout", nullptr, EditorUI::Icon::Refresh)) {
+            showHierarchy = showViewport = showInspector = showAssetManager = true;
+            showTerrainTools = showConsole = showTerminal = true;
+            EditorStyle::requestDockLayoutReset();
+        }
+        endTopMenu();
     }
 
     if (beginTopMenu("GameObject", "Create objects in the current scene", titleBar)) {
         ImGui::BeginDisabled(playing);
-        if (ImGui::MenuItem("Create Empty", "Ctrl+Shift+N")) {
+        if (menuItem("Create Empty", "Ctrl+Shift+N", EditorUI::Icon::GameObject))
             createdEntity = scene.createGameObject();
+        if (beginSubMenu("3D Object", EditorUI::Icon::Mesh)) {
+            if (menuItem("Cube"))
+                createdEntity = scene.createCube();
+            if (menuItem("Sphere"))
+                createdEntity = scene.createSphere();
+            if (menuItem("Capsule"))
+                createdEntity = scene.createCapsule();
+            if (menuItem("Plane"))
+                createdEntity = scene.createPlane();
+            if (menuItem("Ramp"))
+                createdEntity = scene.createRamp();
+            ImGui::Separator();
+            if (menuItem("Glass"))
+                createdEntity = scene.createGlass();
+            ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Create Cube")) {
-            createdEntity = scene.createCube();
-        }
-        if (ImGui::MenuItem("Create Glass")) {
-            createdEntity = scene.createGlass();
-        }
-        if (ImGui::MenuItem("Create Plane")) {
-            createdEntity = scene.createPlane();
-        }
-        if (ImGui::MenuItem("Create Sphere")) {
-            createdEntity = scene.createSphere();
-        }
-        if (ImGui::MenuItem("Create Capsule")) {
-            createdEntity = scene.createCapsule();
-        }
-        if (ImGui::MenuItem("Create Ramp")) {
-            createdEntity = scene.createRamp();
-        }
-        if (ImGui::MenuItem("Create Camera")) {
+        ImGui::Separator();
+        if (menuItem("Camera", nullptr, EditorUI::Icon::Camera))
             createdEntity = scene.createCamera();
-        }
-        if (ImGui::MenuItem("Create Light")) {
+        if (menuItem("Light", nullptr, EditorUI::Icon::Light))
             createdEntity = scene.createLight();
-        }
-        if (ImGui::MenuItem("Create Terrain")) {
+        ImGui::Separator();
+        if (menuItem("Terrain", nullptr, EditorUI::Icon::Terrain))
             createdEntity = scene.createTerrain();
-        }
-        if (ImGui::MenuItem("Create Procedural Cloud")) {
-            createdEntity = scene.createProceduralCloud();
-        }
-        if (ImGui::BeginMenu("Water")) {
-            if (ImGui::MenuItem("Ocean"))
+        if (beginSubMenu("Water", EditorUI::Icon::Water)) {
+            if (menuItem("Ocean"))
                 createdEntity = scene.createOcean();
-            if (ImGui::MenuItem("Lake"))
+            if (menuItem("Lake"))
                 createdEntity = scene.createLake();
-            if (ImGui::MenuItem("River"))
+            if (menuItem("River"))
                 createdEntity = scene.createRiver();
             ImGui::EndMenu();
         }
+        if (menuItem("Procedural Cloud", nullptr, EditorUI::Icon::Cloud))
+            createdEntity = scene.createProceduralCloud();
         ImGui::EndDisabled();
         endTopMenu();
     }
 
-    if (beginTopMenu("Scene", "Scene and rendering settings", titleBar)) {
-        if (ImGui::MenuItem("Antialiasing...")) {
-            openSceneSettings = true;
-        }
-        ImGui::Separator();
-        if (ImGui::BeginMenu("Shadow Debug")) {
-            const Engine::ShadowDebugView current = renderer.shadowDebugView();
-            const auto selectDebugView = [&](const char* label, const Engine::ShadowDebugView view) {
-                if (ImGui::MenuItem(label, nullptr, current == view))
-                    renderer.setShadowDebugView(view);
-            };
-            selectDebugView("Off", Engine::ShadowDebugView::Off);
-            ImGui::Separator();
-            selectDebugView("Blocker Count", Engine::ShadowDebugView::BlockerCount);
-            selectDebugView("Penumbra Radius", Engine::ShadowDebugView::PenumbraRadius);
-            selectDebugView("Desired Clip Level", Engine::ShadowDebugView::DesiredClipLevel);
-            selectDebugView("Resolved Clip Level", Engine::ShadowDebugView::ResolvedClipLevel);
-            selectDebugView("Fallback Delta", Engine::ShadowDebugView::FallbackDelta);
-            selectDebugView("Virtual Page", Engine::ShadowDebugView::VirtualPage);
-            selectDebugView("Residency", Engine::ShadowDebugView::Residency);
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("GTAO Debug")) {
-            const Engine::GtaoDebugView current = renderer.gtaoDebugView();
-            const auto selectGtaoDebugView = [&](const char* label, const Engine::GtaoDebugView view) {
-                if (ImGui::MenuItem(label, nullptr, current == view))
-                    renderer.setGtaoDebugView(view);
-            };
-            selectGtaoDebugView("Final Lighting", Engine::GtaoDebugView::Off);
-            ImGui::Separator();
-            selectGtaoDebugView("GTAO Raw", Engine::GtaoDebugView::Raw);
-            selectGtaoDebugView("GTAO Filtered", Engine::GtaoDebugView::Filtered);
-            selectGtaoDebugView("GTAO Full", Engine::GtaoDebugView::Full);
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("PBR Diagnostics")) {
-            const Engine::PbrDebugView current = renderer.pbrDebugView();
-            const auto selectPbrDebugView = [&](const char* label, const Engine::PbrDebugView view) {
-                if (ImGui::MenuItem(label, nullptr, current == view))
-                    renderer.setPbrDebugView(view);
-            };
-            selectPbrDebugView("Final Lighting", Engine::PbrDebugView::FinalLighting);
-            ImGui::Separator();
-            selectPbrDebugView("Disable Specular IBL", Engine::PbrDebugView::NoSpecularIbl);
-            selectPbrDebugView("Disable Direct Specular", Engine::PbrDebugView::NoDirectSpecular);
-            selectPbrDebugView("Disable GTAO", Engine::PbrDebugView::NoGtao);
-            ImGui::Separator();
-            selectPbrDebugView("Geometric Direct Diffuse", Engine::PbrDebugView::GeometricDirectDiffuse);
-            ImGui::EndMenu();
-        }
-        endTopMenu();
-    }
-
-    if (beginTopMenu("Rendering", "Quickly switch renderer quality", titleBar)) {
+    if (beginTopMenu("Rendering", "Renderer quality, features and debug views", titleBar)) {
+        menuSection("Quality preset");
         constexpr std::array<const char*, 4> presetLabels{"Low", "Medium", "High", "Ultra"};
         const auto currentPreset = [&] {
             for (const auto preset : {Engine::RenderQualityPreset::Low, Engine::RenderQualityPreset::Medium,
@@ -791,105 +844,140 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         }();
         const int currentIndex = static_cast<int>(currentPreset);
         for (int index = 0; index < static_cast<int>(presetLabels.size()); ++index) {
-            if (ImGui::MenuItem(presetLabels[static_cast<std::size_t>(index)], nullptr, currentIndex == index)) {
+            if (menuItem(presetLabels[static_cast<std::size_t>(index)], nullptr, std::nullopt, currentIndex == index)) {
                 renderer.applyRenderQualityPreset(static_cast<Engine::RenderQualityPreset>(index));
                 antialiasingChanged = true;
                 Editor::ConsolePanel::info(std::string{"Renderer preset: "} +
                                            presetLabels[static_cast<std::size_t>(index)]);
             }
         }
-        ImGui::Separator();
-        if (ImGui::BeginMenu("Render path")) {
+        menuSection("Features");
+        if (menuItem("Antialiasing...", nullptr, EditorUI::Icon::Gear))
+            openSceneSettings = true;
+        if (beginSubMenu("Render Path", EditorUI::Icon::Layers)) {
             const Engine::RenderPath currentPath = renderer.renderPath();
-            if (ImGui::MenuItem("Async compute", nullptr, currentPath == Engine::RenderPath::AsyncCompute)) {
+            if (menuItem("Async compute", nullptr, std::nullopt, currentPath == Engine::RenderPath::AsyncCompute))
                 renderer.setRenderPath(Engine::RenderPath::AsyncCompute);
-            }
-            if (ImGui::MenuItem("Sequential", nullptr, currentPath == Engine::RenderPath::Sequential)) {
+            if (menuItem("Sequential", nullptr, std::nullopt, currentPath == Engine::RenderPath::Sequential))
                 renderer.setRenderPath(Engine::RenderPath::Sequential);
-            }
             ImGui::EndMenu();
         }
         bool contactShadowsEnabled = renderer.contactShadowMode() == Engine::ContactShadowMode::RayTraced;
-        if (ImGui::MenuItem("RT contact refinement (VSM)", nullptr, &contactShadowsEnabled)) {
+        if (menuToggle("RT Contact Shadows (VSM)", EditorUI::Icon::Light, contactShadowsEnabled)) {
             renderer.setContactShadowMode(contactShadowsEnabled ? Engine::ContactShadowMode::RayTraced
                                                                 : Engine::ContactShadowMode::Off);
         }
         if (contactShadowsEnabled) {
-            ImGui::TextDisabled(renderer.contactShadowsActive() ? "Active in Game View"
-                                                                : "Requested; inactive in current view/frame");
+            ImGui::Indent(ImGui::GetFontSize() * 1.6F);
+            EditorUI::badge(
+                renderer.contactShadowsActive() ? "Active in Game View" : "Inactive in this view",
+                EditorUI::withAlpha(renderer.contactShadowsActive() ? palette.success : palette.warning, 0.16F),
+                renderer.contactShadowsActive() ? palette.success : palette.warning);
             ImGui::TextDisabled("Requires Game View, VSM shadows, Ray Query and no MSAA.");
             auto settings = renderer.rtContactShadowSettings();
             bool settingsChanged = false;
-            settingsChanged |= ImGui::SliderFloat("Contact distance", &settings.maxDistance, 0.05F, 2.0F, "%.2f m");
+            ImGui::PushItemWidth(180.0F);
+            settingsChanged |= ImGui::SliderFloat("Distance", &settings.maxDistance, 0.05F, 2.0F, "%.2f m");
             settingsChanged |= ImGui::SliderFloat("Normal bias", &settings.normalBias, 0.0005F, 0.05F, "%.4f");
             static float resolutionScaleDraft = -1.0F;
             if (resolutionScaleDraft < 0.0F)
                 resolutionScaleDraft = settings.resolutionScale;
-            ImGui::SliderFloat("Resolution scale", &resolutionScaleDraft, 0.25F, 1.0F, "%.2f");
+            ImGui::SliderFloat("Resolution", &resolutionScaleDraft, 0.25F, 1.0F, "%.2fx");
             if (ImGui::IsItemDeactivatedAfterEdit()) {
                 settings.resolutionScale = resolutionScaleDraft;
                 settingsChanged = true;
             } else if (!ImGui::IsItemActive()) {
                 resolutionScaleDraft = settings.resolutionScale;
             }
+            ImGui::PopItemWidth();
             if (settingsChanged)
                 renderer.setRtContactShadowSettings(settings);
+            ImGui::Unindent(ImGui::GetFontSize() * 1.6F);
         }
+        menuSection("Debug views");
+        const Engine::ShadowDebugView shadowView = renderer.shadowDebugView();
+        if (beginSubMenu(shadowView != Engine::ShadowDebugView::Off ? "Shadows (active)###shadow-debug"
+                                                                    : "Shadows###shadow-debug",
+                         EditorUI::Icon::Eye)) {
+            const auto selectDebugView = [&](const char* label, const Engine::ShadowDebugView view) {
+                if (menuItem(label, nullptr, std::nullopt, shadowView == view))
+                    renderer.setShadowDebugView(view);
+            };
+            selectDebugView("Off", Engine::ShadowDebugView::Off);
+            ImGui::Separator();
+            selectDebugView("Blocker Count", Engine::ShadowDebugView::BlockerCount);
+            selectDebugView("Penumbra Radius", Engine::ShadowDebugView::PenumbraRadius);
+            selectDebugView("Desired Clip Level", Engine::ShadowDebugView::DesiredClipLevel);
+            selectDebugView("Resolved Clip Level", Engine::ShadowDebugView::ResolvedClipLevel);
+            selectDebugView("Fallback Delta", Engine::ShadowDebugView::FallbackDelta);
+            selectDebugView("Virtual Page", Engine::ShadowDebugView::VirtualPage);
+            selectDebugView("Residency", Engine::ShadowDebugView::Residency);
+            ImGui::EndMenu();
+        }
+        const Engine::GtaoDebugView gtaoView = renderer.gtaoDebugView();
+        if (beginSubMenu(gtaoView != Engine::GtaoDebugView::Off ? "Ambient Occlusion (active)###gtao-debug"
+                                                                : "Ambient Occlusion###gtao-debug",
+                         EditorUI::Icon::Eye)) {
+            const auto selectGtaoDebugView = [&](const char* label, const Engine::GtaoDebugView view) {
+                if (menuItem(label, nullptr, std::nullopt, gtaoView == view))
+                    renderer.setGtaoDebugView(view);
+            };
+            selectGtaoDebugView("Final Lighting", Engine::GtaoDebugView::Off);
+            ImGui::Separator();
+            selectGtaoDebugView("GTAO Raw", Engine::GtaoDebugView::Raw);
+            selectGtaoDebugView("GTAO Filtered", Engine::GtaoDebugView::Filtered);
+            selectGtaoDebugView("GTAO Full", Engine::GtaoDebugView::Full);
+            ImGui::EndMenu();
+        }
+        const Engine::PbrDebugView pbrView = renderer.pbrDebugView();
+        if (beginSubMenu(pbrView != Engine::PbrDebugView::FinalLighting ? "PBR (active)###pbr-debug"
+                                                                        : "PBR###pbr-debug",
+                         EditorUI::Icon::Eye)) {
+            const auto selectPbrDebugView = [&](const char* label, const Engine::PbrDebugView view) {
+                if (menuItem(label, nullptr, std::nullopt, pbrView == view))
+                    renderer.setPbrDebugView(view);
+            };
+            selectPbrDebugView("Final Lighting", Engine::PbrDebugView::FinalLighting);
+            ImGui::Separator();
+            selectPbrDebugView("Disable Specular IBL", Engine::PbrDebugView::NoSpecularIbl);
+            selectPbrDebugView("Disable Direct Specular", Engine::PbrDebugView::NoDirectSpecular);
+            selectPbrDebugView("Disable GTAO", Engine::PbrDebugView::NoGtao);
+            ImGui::Separator();
+            selectPbrDebugView("Geometric Direct Diffuse", Engine::PbrDebugView::GeometricDirectDiffuse);
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
         ImGui::TextDisabled("Shadows apply next frame; GTAO resources are rebuilt safely.");
         endTopMenu();
     }
 
-    if (beginTopMenu("View", "Show, hide and arrange editor panels", titleBar)) {
-        ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy);
-        ImGui::MenuItem("Viewport", nullptr, &showViewport);
-        ImGui::MenuItem("Inspector", nullptr, &showInspector);
-        ImGui::MenuItem("Asset Manager", nullptr, &showAssetManager);
-        ImGui::MenuItem("Terrain Tools", nullptr, &showTerrainTools);
-        ImGui::MenuItem("Console", nullptr, &showConsole);
-        ImGui::MenuItem("Terminal", nullptr, &showTerminal);
-        ImGui::MenuItem("Shader Graph", nullptr, &showShaderGraph);
-        ImGui::MenuItem("Profiler", nullptr, &showGpuProfile);
-        endTopMenu();
-    }
-
-    if (beginTopMenu("Edit", "Undo and common object actions", titleBar)) {
-        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndo)) {
-            undoRequested = true;
-        }
-        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, canRedo)) {
-            redoRequested = true;
-        }
-        ImGui::Separator();
-        ImGui::MenuItem("Cut", "Ctrl+X", false, false);
-        if (ImGui::MenuItem("Copy", "Ctrl+C")) {
-            copyRequested = true;
-        }
-        if (ImGui::MenuItem("Paste", "Ctrl+V", false, canPaste)) {
-            pasteRequested = true;
-        }
-        if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
-            duplicateRequested = true;
-        }
-        ImGui::Separator();
-        ImGui::MenuItem("Select All", "Ctrl+A", false, false);
-        endTopMenu();
-    }
-
     if (beginTopMenu("Help", "Shortcuts and editor information", titleBar)) {
-        if (ImGui::MenuItem("Keyboard Shortcuts")) {
+        if (menuItem("Keyboard Shortcuts", nullptr, EditorUI::Icon::Info))
             showShortcuts = true;
-        }
         ImGui::Separator();
-        if (ImGui::MenuItem("About GamEngine Editor")) {
+        if (menuItem("About GamEngine Editor"))
             showAbout = true;
-        }
         endTopMenu();
     }
+
+    // Any active debug view changes what the viewport shows; flag it in the bar.
+    const bool debugViewActive = renderer.shadowDebugView() != Engine::ShadowDebugView::Off ||
+                                 renderer.gtaoDebugView() != Engine::GtaoDebugView::Off ||
+                                 renderer.pbrDebugView() != Engine::PbrDebugView::FinalLighting;
+    if (debugViewActive) {
+        ImGui::SameLine(0.0F, 8.0F);
+        ImGui::SetCursorPosY(std::round((ImGui::GetFrameHeight() - ImGui::GetTextLineHeight() - 2.0F) * 0.5F));
+        EditorUI::badge("Debug view", EditorUI::withAlpha(palette.warning, 0.16F), palette.warning);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("A Rendering > Debug view is active. Viewport shading is not final.");
+        ImGui::SameLine();
+    }
+    const float menusEndX = ImGui::GetCursorPosX();
 
     // Play controls are centred in the title bar, where they stay reachable
     // whatever the dock layout is, instead of living inside one panel.
+    float playGroupEndX = menusEndX;
     {
-        const EditorUI::Palette& palette = EditorUI::colors();
         const float barHeight = ImGui::GetFrameHeight();
         const float buttonHeight = std::round(barHeight * 0.76F);
         const ImVec2 buttonSize{std::round(buttonHeight * 1.35F), buttonHeight};
@@ -898,8 +986,9 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         const float windowWidth = ImGui::GetWindowWidth();
         const float rightLimit =
             captionButtonsStart > 0.0F ? captionButtonsStart - ImGui::GetWindowPos().x - 8.0F : windowWidth - 8.0F;
-        const float groupX = std::max(std::round((windowWidth - groupWidth) * 0.5F), ImGui::GetCursorPosX() + 16.0F);
+        const float groupX = std::max(std::round((windowWidth - groupWidth) * 0.5F), menusEndX + 16.0F);
         if (groupX + groupWidth <= rightLimit) {
+            playGroupEndX = groupX + groupWidth + 3.0F;
             const float groupY = std::round((barHeight - buttonHeight) * 0.5F);
             const ImVec2 groupMin{ImGui::GetWindowPos().x + groupX - 3.0F, ImGui::GetWindowPos().y + groupY - 3.0F};
             ImGui::GetWindowDrawList()->AddRectFilled(
@@ -938,6 +1027,91 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             registerHitRegion();
             ImGui::EndDisabled();
         }
+    }
+
+    // Right side: project name and the scene switcher. Scene navigation lives
+    // in the bar so switching levels never needs a nested File menu.
+    {
+        const float barHeight = ImGui::GetFrameHeight();
+        const float rightLimit = captionButtonsStart > 0.0F ? captionButtonsStart - ImGui::GetWindowPos().x - 12.0F
+                                                            : ImGui::GetWindowWidth() - 10.0F;
+        const std::string projectLabel = project.name();
+        const float projectWidth = ImGui::CalcTextSize(projectLabel.c_str()).x + ImGui::GetFontSize() + 10.0F;
+        const float chevronWidth = ImGui::GetFontSize() + 2.0F;
+        float comboWidth = 210.0F;
+        float startX = rightLimit - comboWidth - chevronWidth - projectWidth;
+        bool showProject = true;
+        if (startX < playGroupEndX + 16.0F) {
+            showProject = false;
+            comboWidth = std::max(120.0F, rightLimit - playGroupEndX - 16.0F);
+            startX = rightLimit - comboWidth;
+        }
+        if (startX >= playGroupEndX + 16.0F) {
+            const float textY = std::round((barHeight - ImGui::GetTextLineHeight()) * 0.5F);
+            ImGui::SetCursorPos({startX, textY});
+            if (showProject) {
+                EditorUI::iconLabel(EditorUI::Icon::Folder, palette.warning);
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetCursorPosY(textY);
+                ImGui::TextDisabled("%s", projectLabel.c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", project.rootPath().string().c_str());
+                ImGui::SameLine(0.0F, 2.0F);
+                ImGui::SetCursorPosY(textY);
+                EditorUI::iconLabel(EditorUI::Icon::ChevronRight, palette.textSecondary);
+                ImGui::SameLine(0.0F, 2.0F);
+            }
+            const float comboHeight = std::round(barHeight * 0.76F);
+            ImGui::SetCursorPosY(std::round((barHeight - comboHeight) * 0.5F));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                {8.0F, std::max(0.0F, (comboHeight - ImGui::GetFontSize()) * 0.5F)});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {10.0F, 7.0F});
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, palette.surface);
+            ImGui::BeginDisabled(playing);
+            ImGui::SetNextItemWidth(comboWidth);
+            const std::string activeSceneName =
+                activeScenePath.empty() ? "No scene selected" : activeScenePath.filename().string();
+            if (ImGui::BeginCombo("##active-project-scene", activeSceneName.c_str())) {
+                if (ImGui::Selectable("No scene selected", activeScenePath.empty())) {
+                    EditorSceneSession::clearSavedScene();
+                    sceneDeleted = true;
+                }
+                ImGui::Separator();
+                for (const auto& path : project.scenes()) {
+                    const std::string label = path.lexically_relative(project.rootPath()).string();
+                    const bool active = path == activeScenePath;
+                    if (ImGui::Selectable(label.c_str(), active) && !active) {
+                        tryLoadScene(path);
+                    }
+                    if (active)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::Separator();
+                if (ImGui::Selectable("New Scene..."))
+                    createScene();
+                if (ImGui::Selectable("Open Scene..."))
+                    EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::LoadScene);
+                ImGui::EndCombo();
+            }
+            ImGui::EndDisabled();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar(2);
+            const ImVec2 sceneSelectorMin = ImGui::GetItemRectMin();
+            const ImVec2 sceneSelectorMax = ImGui::GetItemRectMax();
+            titleBar.addHitRegion(sceneSelectorMin.x, sceneSelectorMin.y, sceneSelectorMax.x, sceneSelectorMax.y,
+                                  Editor::WindowsTitleBar::clientHitTestResult);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s",
+                                  playing ? "Stop Play Mode to switch scenes" : "Switch scenes in the current project");
+        }
+    }
+
+    // Separate the bar from the dock space below.
+    {
+        const ImVec2 barMin = ImGui::GetWindowPos();
+        const float barBottom = barMin.y + ImGui::GetWindowHeight() - 1.0F;
+        ImGui::GetWindowDrawList()->AddLine({barMin.x, barBottom}, {barMin.x + ImGui::GetWindowWidth(), barBottom},
+                                            ImGui::GetColorU32(palette.border));
     }
 
     if (captionButtonsStart > 0.0F)
@@ -1002,7 +1176,7 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
     if (ImGui::BeginPopupModal("New Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Create a portable GamEngine project.");
         ImGui::TextDisabled("The project manifest and starter scene are created automatically.");
-        ImGui::Separator();
+        ImGui::Spacing();
         ImGui::SetNextItemWidth(420.0F);
         ImGui::InputText("Name", newProjectName, sizeof(newProjectName));
         ImGui::SetNextItemWidth(420.0F);
@@ -1014,11 +1188,15 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         ImGui::InputText("##project-template", templateName, sizeof(templateName), ImGuiInputTextFlags_ReadOnly);
         ImGui::EndDisabled();
         ImGui::TextDisabled("Assets/Models, Materials, Textures, Scenes, Scripts and Audio will be created.");
-        if (!newProjectError.empty())
+        if (!newProjectError.empty()) {
+            EditorUI::iconLabel(EditorUI::Icon::Error, EditorUI::colors().error);
+            ImGui::SameLine(0.0F, 6.0F);
             ImGui::TextColored(EditorUI::colors().error, "%s", newProjectError.c_str());
+        }
+        ImGui::Spacing();
         const bool valid = newProjectName[0] != '\0' && newProjectLocation[0] != '\0';
         ImGui::BeginDisabled(!valid);
-        if (EditorButton("Create", {110.0F, 0.0F}).draw()) {
+        if (EditorUI::primaryButton("Create", {110.0F, 0.0F})) {
             createProject();
             if (newProjectError.empty())
                 ImGui::CloseCurrentPopup();
@@ -1047,8 +1225,7 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         constexpr const char* typeLabels[] = {"None", "MSAA", "FXAA (placeholder)", "TAA"};
         constexpr const char* sampleLabels[] = {"2x", "4x"};
 
-        ImGui::TextUnformatted("Antialiasing");
-        ImGui::Separator();
+        ImGui::SeparatorText("Antialiasing");
         ImGui::SetNextItemWidth(230.0F);
         if (ImGui::BeginCombo("Type", typeLabels[antialiasingType])) {
             for (int index = 0; index < 4; ++index) {

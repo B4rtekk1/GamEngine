@@ -1,5 +1,8 @@
 #include "Editor/Panels/ShaderGraphPanel.h"
 
+#include "Editor/UI/EditorIcons.h"
+#include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
 #include "Engine/Renderer/ShaderGraph/ShaderNodeRegistry.h"
@@ -46,6 +49,42 @@ ShaderGraphPanel::ShaderGraphPanel() : editorContext_(ImNodes::EditorContextCrea
     // In addition to the middle mouse button, Alt + left mouse button pans the canvas.
     // This is especially useful on touchpads and leaves regular left-dragging for nodes.
     ImNodes::GetIO().EmulateThreeButtonMouse.Modifier = &ImGui::GetIO().KeyAlt;
+
+    // Match the node canvas to the editor palette instead of the stock
+    // ImNodes blue theme.
+    const EditorUI::Palette& palette = EditorUI::colors();
+    const auto color = [](const ImVec4 value) { return ImGui::ColorConvertFloat4ToU32(value); };
+    ImNodesStyle& style = ImNodes::GetStyle();
+    style.NodeCornerRounding = 6.0F;
+    style.NodeBorderThickness = 1.0F;
+    style.LinkThickness = 2.5F;
+    style.PinCircleRadius = 4.5F;
+    style.GridSpacing = 28.0F;
+    style.Colors[ImNodesCol_NodeBackground] = color(palette.surface);
+    style.Colors[ImNodesCol_NodeBackgroundHovered] = color(palette.surfaceRaised);
+    style.Colors[ImNodesCol_NodeBackgroundSelected] = color(palette.surfaceRaised);
+    style.Colors[ImNodesCol_NodeOutline] = color(palette.border);
+    style.Colors[ImNodesCol_TitleBar] = color(palette.control);
+    style.Colors[ImNodesCol_TitleBarHovered] = color(palette.controlHover);
+    style.Colors[ImNodesCol_TitleBarSelected] = color(palette.accentMuted);
+    style.Colors[ImNodesCol_Link] = color(EditorUI::withAlpha(palette.textSecondary, 0.85F));
+    style.Colors[ImNodesCol_LinkHovered] = color(palette.accentHover);
+    style.Colors[ImNodesCol_LinkSelected] = color(palette.accent);
+    style.Colors[ImNodesCol_PinHovered] = color(palette.accentHover);
+    style.Colors[ImNodesCol_BoxSelector] = color(EditorUI::withAlpha(palette.accent, 0.12F));
+    style.Colors[ImNodesCol_BoxSelectorOutline] = color(palette.accent);
+    style.Colors[ImNodesCol_GridBackground] = color(palette.appBackground);
+    style.Colors[ImNodesCol_GridLine] = color(EditorUI::withAlpha(palette.border, 0.45F));
+    style.Colors[ImNodesCol_GridLinePrimary] = color(palette.border);
+    style.Colors[ImNodesCol_MiniMapBackground] = color(EditorUI::withAlpha(palette.titleBar, 0.85F));
+    style.Colors[ImNodesCol_MiniMapBackgroundHovered] = color(palette.titleBar);
+    style.Colors[ImNodesCol_MiniMapOutline] = color(palette.border);
+    style.Colors[ImNodesCol_MiniMapOutlineHovered] = color(palette.accent);
+    style.Colors[ImNodesCol_MiniMapNodeBackground] = color(palette.surfaceRaised);
+    style.Colors[ImNodesCol_MiniMapNodeBackgroundSelected] = color(palette.accent);
+    style.Colors[ImNodesCol_MiniMapNodeOutline] = color(palette.border);
+    style.Colors[ImNodesCol_MiniMapLink] = color(palette.textSecondary);
+    style.Colors[ImNodesCol_MiniMapLinkSelected] = color(palette.accent);
 }
 
 ShaderGraphPanel::~ShaderGraphPanel() {
@@ -69,6 +108,9 @@ void ShaderGraphPanel::open(Engine::ShaderGraphAsset& graph, std::filesystem::pa
     for (const auto& link : graph.links)
         nextLinkId_ = std::max(nextLinkId_, link.id + 1);
     initializedPositions_.clear();
+    codeDirty_ = false;
+    layoutDirty_ = false;
+    saveError_.clear();
     contextNodeId_.reset();
     contextLinkId_.reset();
     ImNodes::EditorContextSet(editorContext_);
@@ -82,31 +124,58 @@ void ShaderGraphPanel::draw(bool& isOpen) {
         ImGui::End();
         return;
     }
-    ImGui::TextUnformatted(graph_->name.c_str());
-    ImGui::SameLine();
+    const EditorUI::Palette& palette = EditorUI::colors();
     ImGui::BeginDisabled(assetPath_.empty());
-    if (ImGui::Button("Save") ||
-        (ImGui::IsWindowFocused() && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))) {
+    // Focused routing wins over the editor's global Ctrl+S (save scene).
+    const bool saveShortcut = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S);
+    if (EditorUI::iconButton("##shader-save", EditorUI::Icon::Save, "Save (Ctrl+S)") || saveShortcut) {
         try {
             Engine::ShaderGraphSerializer::save(*graph_, assetPath_);
             codeDirty_ = false;
             layoutDirty_ = false;
+            saveError_.clear();
             if (savedCallback_)
                 savedCallback_(assetPath_);
         } catch (const std::exception& error) {
-            ImGui::TextColored({1.0F, 0.35F, 0.35F, 1.0F}, "%s", error.what());
+            saveError_ = error.what();
         }
     }
     ImGui::EndDisabled();
-    ImGui::Separator();
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(graph_->name.c_str());
+    if (codeDirty_ || layoutDirty_) {
+        ImGui::SameLine();
+        EditorUI::badge("Unsaved", EditorUI::withAlpha(palette.warning, 0.16F), palette.warning);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", assetPath_.empty() ? "Not saved to a file" : assetPath_.filename().string().c_str());
+    const char* hint = "Right-click: add node  ·  Alt+LMB / MMB: pan  ·  Del: remove";
+    const float hintX = ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(hint).x;
+    ImGui::SameLine();
+    if (hintX > ImGui::GetCursorPosX() + 16.0F) {
+        ImGui::SetCursorPosX(hintX);
+        ImGui::TextDisabled("%s", hint);
+    } else {
+        ImGui::NewLine();
+    }
+    if (!saveError_.empty()) {
+        EditorUI::iconLabel(EditorUI::Icon::Error, palette.error);
+        ImGui::SameLine(0.0F, 6.0F);
+        ImGui::TextColored(palette.error, "Could not save: %s", saveError_.c_str());
+    }
     constexpr float blackboardWidth = 240.0F;
     ImGui::BeginChild("##shader-blackboard", {blackboardWidth, 0.0F}, ImGuiChildFlags_Borders);
-    ImGui::TextUnformatted("Properties");
-    ImGui::Separator();
+    ImGui::SeparatorText("Properties");
     if (graph_->properties.empty())
-        ImGui::TextDisabled("No properties");
-    for (const auto& property : graph_->properties)
+        ImGui::TextDisabled("No exposed properties.");
+    for (const auto& property : graph_->properties) {
+        EditorUI::iconLabel(EditorUI::Icon::ChevronRight, palette.accent);
+        ImGui::SameLine(0.0F, 4.0F);
         ImGui::TextUnformatted(property.name.c_str());
+    }
+    ImGui::SeparatorText("Graph");
+    ImGui::TextDisabled("%zu nodes  ·  %zu links", graph_->nodes.size(), graph_->links.size());
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("##shader-canvas", {0.0F, 0.0F});

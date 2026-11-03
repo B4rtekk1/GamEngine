@@ -6,6 +6,7 @@
 #include <functional>
 #include <imnodes.h>
 #include <optional>
+#include <string>
 #include <unordered_set>
 #include <utility>
 
@@ -38,6 +39,7 @@ class ShaderGraphPanel final {
     bool codeDirty_{};
     bool layoutDirty_{};
     std::filesystem::path assetPath_;
+    std::string saveError_;
     SavedCallback savedCallback_;
 
     void drawCanvas();

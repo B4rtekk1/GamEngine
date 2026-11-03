@@ -9,6 +9,12 @@
 namespace EditorUI {
 
 bool primaryButton(const char* label, ImVec2 size = {});
+/** Button for destructive actions such as Delete; red on hover. */
+bool dangerButton(const char* label, ImVec2 size = {});
+
+/** Collapsing section with a trailing icon action (e.g. remove) on its right edge. */
+bool collapsingSectionWithAction(const char* label, Icon actionIcon, const char* actionTooltip, bool& actionClicked,
+                                 ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen);
 void panelHeader(const char* title, const char* detail = nullptr);
 bool searchBox(const char* id, const char* hint, char* value, std::size_t capacity, float width = -1.0F);
 void emptyState(Icon icon, const char* title, const char* description);

@@ -47,6 +47,23 @@ enum class Icon : std::uint8_t {
     Error,
     Gear,
     Layers,
+    Back,
+    Refresh,
+    Folder,
+    Import,
+    Archive,
+    Grid,
+    List,
+    Sidebar,
+    Trash,
+    Image,
+    Code,
+    Audio,
+    File,
+    ChevronRight,
+    Save,
+    Brush,
+    Leaf,
 };
 
 /** Draws @p icon centred on @p center inside a @p size x @p size box. */

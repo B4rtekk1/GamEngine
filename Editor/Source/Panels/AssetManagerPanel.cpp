@@ -3,7 +3,9 @@
 #include "Editor/AssetImporter.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/Panels/ConsolePanel.h"
+#include "Editor/UI/EditorIcons.h"
 #include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
 #include "Elements/NumericControl.h"
 #include "Engine/Assets/TextureCooker.h"
 #include "Engine/Core/TaskScheduler.h"
@@ -318,34 +320,47 @@ bool delete_asset_file(const Engine::ScenePreset& scene, const std::filesystem::
 
 void draw_folder_icon(const ImVec2 min, const float size, const bool selected) {
     auto* draw = ImGui::GetWindowDrawList();
-    const ImU32 back =
-        ImGui::GetColorU32(selected ? ImVec4{0.25F, 0.72F, 0.88F, 1.0F} : ImVec4{0.78F, 0.61F, 0.29F, 1.0F});
-    const ImU32 front =
-        ImGui::GetColorU32(selected ? ImVec4{0.38F, 0.82F, 0.95F, 1.0F} : ImVec4{0.94F, 0.76F, 0.38F, 1.0F});
+    const ImVec4 base = selected ? EditorUI::colors().accent : EditorUI::colors().warning;
+    const ImU32 back = ImGui::GetColorU32(ImVec4{base.x * 0.78F, base.y * 0.78F, base.z * 0.78F, 1.0F});
+    const ImU32 front = ImGui::GetColorU32(base);
     const float y = min.y + size * 0.16F;
     draw->AddRectFilled({min.x, y + size * 0.14F}, {min.x + size, y + size * 0.75F}, back, size * 0.08F);
     draw->AddRectFilled({min.x + size * 0.06F, y}, {min.x + size * 0.48F, y + size * 0.29F}, back, size * 0.06F);
     draw->AddRectFilled({min.x, y + size * 0.27F}, {min.x + size, y + size * 0.82F}, front, size * 0.08F);
 }
 
+EditorUI::Icon kind_icon(const AssetKind kind) {
+    switch (kind) {
+    case AssetKind::Model:
+        return EditorUI::Icon::Mesh;
+    case AssetKind::Texture:
+        return EditorUI::Icon::Image;
+    case AssetKind::Shader:
+        return EditorUI::Icon::Code;
+    case AssetKind::Scene:
+        return EditorUI::Icon::Layers;
+    case AssetKind::Audio:
+        return EditorUI::Icon::Audio;
+    case AssetKind::Other:
+        return EditorUI::Icon::File;
+    }
+    return EditorUI::Icon::File;
+}
+
 void draw_file_icon(const ImVec2 min, const float size, const AssetKind kind, const bool selected) {
     auto* draw = ImGui::GetWindowDrawList();
-    const ImVec4 accent = selected ? ImVec4{0.39F, 0.86F, 0.96F, 1.0F} : kind_color(kind);
+    const ImVec4 accent = selected ? EditorUI::colors().accentHover : kind_color(kind);
     const ImU32 color = ImGui::GetColorU32(accent);
-    const ImU32 fill = ImGui::GetColorU32(ImVec4{accent.x * 0.24F, accent.y * 0.24F, accent.z * 0.24F, 1.0F});
+    const ImU32 fill = ImGui::GetColorU32(ImVec4{accent.x * 0.2F, accent.y * 0.2F, accent.z * 0.2F, 1.0F});
     const float fold = size * 0.25F;
-    draw->AddRectFilled(min, {min.x + size, min.y + size}, fill, size * 0.08F);
-    draw->AddRect(min, {min.x + size, min.y + size}, color, size * 0.08F, 0, 1.5F);
+    // Page with a folded corner, the asset type icon in its centre.
+    const std::array page{min, ImVec2{min.x + size - fold, min.y}, ImVec2{min.x + size, min.y + fold},
+                          ImVec2{min.x + size, min.y + size}, ImVec2{min.x, min.y + size}};
+    draw->AddConvexPolyFilled(page.data(), static_cast<int>(page.size()), fill);
+    draw->AddPolyline(page.data(), static_cast<int>(page.size()), color, ImDrawFlags_Closed, 1.5F);
     draw->AddLine({min.x + size - fold, min.y}, {min.x + size - fold, min.y + fold}, color, 1.3F);
     draw->AddLine({min.x + size - fold, min.y + fold}, {min.x + size, min.y + fold}, color, 1.3F);
-    const char* mark = kind == AssetKind::Model     ? "3D"
-                       : kind == AssetKind::Texture ? "IMG"
-                       : kind == AssetKind::Shader  ? "<>"
-                       : kind == AssetKind::Scene   ? "SCN"
-                       : kind == AssetKind::Audio   ? "SND"
-                                                    : "FILE";
-    const auto textSize = ImGui::CalcTextSize(mark);
-    draw->AddText({min.x + (size - textSize.x) * 0.5F, min.y + size * 0.54F - textSize.y * 0.5F}, color, mark);
+    EditorUI::drawIcon(draw, kind_icon(kind), {min.x + size * 0.5F, min.y + size * 0.56F}, size * 0.44F, color);
 }
 
 bool matches_filter(const AssetEntry& asset, const std::string& filter) {
@@ -363,10 +378,30 @@ void draw_folder_tree(const std::filesystem::path& parent, const std::vector<std
             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
         if (selectedFolder == folder)
             flags |= ImGuiTreeNodeFlags_Selected;
-        const bool open = ImGui::TreeNodeEx(folder.filename().string().c_str(), flags);
-        if (ImGui::IsItemClicked()) {
+        // Leading spaces reserve room for the folder icon drawn after the arrow.
+        const std::string label = "     " + folder.filename().string();
+        bool hasChildren = false;
+        for (const auto& candidate : folders)
+            if (candidate.parent_path() == folder) {
+                hasChildren = true;
+                break;
+            }
+        if (!hasChildren)
+            flags |= ImGuiTreeNodeFlags_Leaf;
+        const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
             selectedFolder = folder;
             selectedAsset.clear();
+        }
+        {
+            const ImVec2 min = ImGui::GetItemRectMin();
+            const ImVec2 max = ImGui::GetItemRectMax();
+            const float iconSize = ImGui::GetFontSize() * 0.9F;
+            const float x = min.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 2.0F;
+            EditorUI::drawIcon(
+                ImGui::GetWindowDrawList(), EditorUI::Icon::Folder, {x + iconSize * 0.5F, (min.y + max.y) * 0.5F},
+                iconSize,
+                ImGui::GetColorU32(selectedFolder == folder ? EditorUI::colors().accent : EditorUI::colors().warning));
         }
         if (open) {
             draw_folder_tree(folder, folders, selectedFolder, selectedAsset);
@@ -388,9 +423,9 @@ void draw_breadcrumbs(std::filesystem::path& folder, std::filesystem::path& sele
     std::filesystem::path accumulated;
     for (const auto& part : displayedFolder) {
         accumulated /= part;
-        ImGui::SameLine(0.0F, 4.0F);
-        ImGui::TextDisabled(">");
-        ImGui::SameLine(0.0F, 4.0F);
+        ImGui::SameLine(0.0F, 2.0F);
+        EditorUI::iconLabel(EditorUI::Icon::ChevronRight, EditorUI::colors().textSecondary);
+        ImGui::SameLine(0.0F, 2.0F);
         ImGui::PushID(accumulated.generic_string().c_str());
         if (ImGui::SmallButton(part.string().c_str())) {
             folder = accumulated;
@@ -564,22 +599,51 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     }
 
     ImGui::Begin("Asset Manager", &isOpen);
+    // Toolbar: navigation | create & import | search | view options.
     ImGui::BeginDisabled(selectedFolder.empty());
-    if (ImGui::Button("<##asset-up")) {
+    if (EditorUI::iconButton("##asset-up", EditorUI::Icon::Back, "Go to parent folder")) {
         selectedFolder = selectedFolder.parent_path();
         selected.clear();
     }
     ImGui::EndDisabled();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Go to parent folder");
-    ImGui::SameLine();
-    if (ImGui::Button("R##asset-refresh"))
+    ImGui::SameLine(0.0F, 2.0F);
+    if (EditorUI::iconButton("##asset-refresh", EditorUI::Icon::Refresh, "Refresh assets"))
         refresh();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Refresh assets");
-    ImGui::SameLine();
+    EditorUI::toolbarSeparator();
+
+    ImGui::BeginDisabled(!projectIsOpen || importDialog || importJob);
+    if (EditorUI::iconButton("##asset-import", EditorUI::Icon::Import, "Import files, a folder or a ZIP archive"))
+        ImGui::OpenPopup("##asset-import-menu");
+    if (ImGui::BeginPopup("##asset-import-menu")) {
+        const auto requestImport = [&](const bool folder, const bool archiveOnly) {
+            importDialog = std::make_shared<ImportDialogState>();
+            importDialog->destination = root / selectedFolder;
+            importDialog->assetRoot = root;
+            showImportDialog(importDialog, folder, archiveOnly);
+        };
+        if (ImGui::MenuItem("File..."))
+            requestImport(false, false);
+        if (ImGui::MenuItem("Folder..."))
+            requestImport(true, false);
+        if (ImGui::MenuItem("ZIP archive..."))
+            requestImport(false, true);
+        ImGui::EndPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine(0.0F, 2.0F);
+    ImGui::BeginDisabled(!projectIsOpen);
+    if (EditorUI::iconButton("##asset-create", EditorUI::Icon::Plus, "Create a new asset"))
+        ImGui::OpenPopup("##asset-create-menu");
+    if (ImGui::BeginPopup("##asset-create-menu")) {
+        if (ImGui::MenuItem("Shader Graph"))
+            createShaderGraph();
+        ImGui::EndPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine(0.0F, 2.0F);
     ImGui::BeginDisabled(!projectIsOpen || cookJob.running.load(std::memory_order_acquire));
-    if (ImGui::Button("Compress all textures##asset-compress"))
+    if (EditorUI::iconButton("##asset-compress", EditorUI::Icon::Archive,
+                             "Compress all textures and cook models (.gtex / .gmesh)"))
         ImGui::OpenPopup("##asset-compress-confirm");
     if (ImGui::BeginPopupModal("##asset-compress-confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextWrapped("Generate .gtex files for source images and .gmesh files for every GLB/glTF in Assets? "
@@ -628,63 +692,56 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
+    EditorUI::toolbarSeparator();
+
+    // View options are right-aligned; the search box takes the space between.
+    const float viewOptionsWidth = ImGui::GetFrameHeight() * 3.0F + 82.0F + ImGui::GetStyle().ItemSpacing.x * 3.0F;
+    char filterBuffer[256]{};
+    std::snprintf(filterBuffer, sizeof(filterBuffer), "%s", filter.c_str());
+    if (EditorUI::searchBox("##asset-filter", "Search all assets...", filterBuffer, sizeof(filterBuffer),
+                            std::max(120.0F, ImGui::GetContentRegionAvail().x - viewOptionsWidth)))
+        filter = filterBuffer;
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!gridView);
+    ImGui::SetNextItemWidth(82.0F);
+    Editor::Controls::sliderFloat("##asset-size", &tileSize, 72.0F, 136.0F, "");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Tile size");
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (EditorUI::iconButton("##asset-grid-view", EditorUI::Icon::Grid, "Grid view", {.active = gridView}))
+        gridView = true;
+    ImGui::SameLine(0.0F, 2.0F);
+    if (EditorUI::iconButton("##asset-list-view", EditorUI::Icon::List, "List view", {.active = !gridView}))
+        gridView = false;
+    ImGui::SameLine(0.0F, 2.0F);
+    if (EditorUI::iconButton("##asset-details", EditorUI::Icon::Sidebar,
+                             showInspector ? "Hide asset details" : "Show asset details", {.active = showInspector}))
+        showInspector = !showInspector;
+
+    // Background work gets its own row so the toolbar layout never jumps.
     if (cookJob.running.load(std::memory_order_acquire)) {
         const auto discovered = cookJob.progress.discovered.load(std::memory_order_acquire);
         const auto completed = cookJob.progress.completed.load(std::memory_order_acquire);
-        ImGui::Text("%s textures: %u / %u",
-                    cookJob.progress.paused.load(std::memory_order_acquire) ? "Paused" : "Compressing", completed,
-                    discovered);
-        ImGui::ProgressBar(discovered == 0 ? 0.0F : static_cast<float>(completed) / discovered, {-1.0F, 0.0F});
-        ImGui::SameLine();
-        if (ImGui::Button(cookJob.progress.paused.load(std::memory_order_acquire) ? "Resume##asset-cook"
-                                                                                  : "Pause##asset-cook"))
+        const bool cookPaused = cookJob.progress.paused.load(std::memory_order_acquire);
+        if (EditorUI::iconButton("##asset-cook-pause", cookPaused ? EditorUI::Icon::Play : EditorUI::Icon::Pause,
+                                 cookPaused ? "Resume compression" : "Pause compression"))
             cookJob.progress.paused.store(!cookJob.progress.paused.load(std::memory_order_relaxed),
                                           std::memory_order_release);
-    }
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!projectIsOpen || importDialog || importJob);
-    if (ImGui::Button("Import...##asset-import"))
-        ImGui::OpenPopup("##asset-import-menu");
-    if (ImGui::BeginPopup("##asset-import-menu")) {
-        const auto requestImport = [&](const bool folder, const bool archiveOnly) {
-            importDialog = std::make_shared<ImportDialogState>();
-            importDialog->destination = root / selectedFolder;
-            importDialog->assetRoot = root;
-            showImportDialog(importDialog, folder, archiveOnly);
-        };
-        if (ImGui::MenuItem("File..."))
-            requestImport(false, false);
-        if (ImGui::MenuItem("Folder..."))
-            requestImport(true, false);
-        if (ImGui::MenuItem("ZIP archive..."))
-            requestImport(false, true);
-        ImGui::EndPopup();
-    }
-    ImGui::EndDisabled();
-    if (importDialog || importJob) {
         ImGui::SameLine();
-        ImGui::TextDisabled(importDialog ? "Selecting assets..." : "Importing assets...");
+        char overlay[64]{};
+        std::snprintf(overlay, sizeof(overlay), "%s textures  %u / %u", cookPaused ? "Paused" : "Compressing",
+                      completed, discovered);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
+                              cookPaused ? EditorUI::colors().warning : EditorUI::colors().accent);
+        ImGui::ProgressBar(discovered == 0 ? 0.0F : static_cast<float>(completed) / static_cast<float>(discovered),
+                           {-1.0F, ImGui::GetFrameHeight()}, overlay);
+        ImGui::PopStyleColor();
     }
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!projectIsOpen);
-    if (ImGui::Button("New Shader Graph"))
-        createShaderGraph();
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    char filterBuffer[256]{};
-    std::snprintf(filterBuffer, sizeof(filterBuffer), "%s", filter.c_str());
-    ImGui::SetNextItemWidth(std::max(140.0F, ImGui::GetContentRegionAvail().x - 232.0F));
-    if (ImGui::InputTextWithHint("##asset-filter", "Search all assets...", filterBuffer, sizeof(filterBuffer)))
-        filter = filterBuffer;
-    ImGui::SameLine();
-    if (ImGui::SmallButton(gridView ? "Grid" : "List"))
-        gridView = !gridView;
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(82.0F);
-    Editor::Controls::sliderFloat("##asset-size", &tileSize, 72.0F, 136.0F, "");
-    ImGui::SameLine();
-    if (ImGui::SmallButton(showInspector ? "Info on" : "Info off"))
-        showInspector = !showInspector;
+    if (importDialog || importJob) {
+        ImGui::ProgressBar(-static_cast<float>(ImGui::GetTime()) * 0.6F, {-1.0F, ImGui::GetFrameHeight()},
+                           importDialog ? "Selecting assets..." : "Importing assets...");
+    }
 
     const std::string filterLower = lower(filter);
     const auto visibleFiles = std::ranges::count_if(catalog.files, [&](const AssetEntry& a) {
@@ -832,11 +889,18 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushID(folder.generic_string().c_str());
-                if (ImGui::Selectable(("[Folder]  " + folder.filename().string()).c_str(), false,
+                if (ImGui::Selectable(("      " + folder.filename().string()).c_str(), false,
                                       ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
                     ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     selectedFolder = folder;
                     selected.clear();
+                }
+                {
+                    const ImVec2 min = ImGui::GetItemRectMin();
+                    const float iconSize = ImGui::GetFontSize() * 0.9F;
+                    EditorUI::drawIcon(ImGui::GetWindowDrawList(), EditorUI::Icon::Folder,
+                                       {min.x + iconSize * 0.5F + 2.0F, min.y + ImGui::GetTextLineHeight() * 0.5F},
+                                       iconSize, ImGui::GetColorU32(EditorUI::colors().warning));
                 }
                 ImGui::PopID();
                 ImGui::TableSetColumnIndex(1);
@@ -849,7 +913,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::PushID(asset.relative.generic_string().c_str());
-            if (ImGui::Selectable(asset.relative.filename().string().c_str(), selected == asset.relative,
+            if (ImGui::Selectable(("      " + asset.relative.filename().string()).c_str(), selected == asset.relative,
                                   ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
                 selected = asset.relative;
                 error.clear();
@@ -859,6 +923,13 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     else if (is_shader_graph(asset.relative))
                         openShaderGraph(asset.relative);
                 }
+            }
+            {
+                const ImVec2 min = ImGui::GetItemRectMin();
+                const float iconSize = ImGui::GetFontSize() * 0.9F;
+                EditorUI::drawIcon(ImGui::GetWindowDrawList(), kind_icon(asset.kind),
+                                   {min.x + iconSize * 0.5F + 2.0F, min.y + ImGui::GetTextLineHeight() * 0.5F},
+                                   iconSize, ImGui::GetColorU32(kind_color(asset.kind)));
             }
             const bool isEnvironment = lower(asset.relative.extension().string()) == ".hdr" ||
                                        lower(asset.relative.extension().string()) == ".exr";
@@ -899,22 +970,25 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     }
 
     if (visibleFiles == 0 && visibleFolders == 0) {
-        const auto available = ImGui::GetContentRegionAvail();
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(12.0F, available.y * 0.24F));
-        const char* message = filter.empty() ? "This folder is empty" : "No assets match your search";
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                             std::max(0.0F, (available.x - ImGui::CalcTextSize(message).x) * 0.5F));
-        ImGui::TextDisabled("%s", message);
+        ImGui::Dummy({0.0F, std::max(8.0F, ImGui::GetContentRegionAvail().y * 0.12F)});
+        if (filter.empty())
+            EditorUI::emptyState(EditorUI::Icon::Folder, "This folder is empty",
+                                 "Drop files here with Import, or create a Shader Graph with the + button.");
+        else
+            EditorUI::emptyState(EditorUI::Icon::Search, "No assets match your search",
+                                 "Try a different name, file extension or asset type.");
     }
     ImGui::EndChild();
 
     if (openDeletePopup)
         ImGui::OpenPopup("##confirm-delete-asset");
     if (ImGui::BeginPopupModal("##confirm-delete-asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        EditorUI::iconLabel(EditorUI::Icon::Warning, EditorUI::colors().warning);
+        ImGui::SameLine(0.0F, 6.0F);
         ImGui::TextWrapped("Delete asset '%s'?", deleteCandidate.filename().string().c_str());
         ImGui::TextDisabled("This removes the file from the project.");
         ImGui::Separator();
-        if (ImGui::Button("Delete", {120.0F, 0.0F})) {
+        if (EditorUI::dangerButton("Delete", {120.0F, 0.0F})) {
             if (delete_asset_file(scene, root, deleteCandidate, error)) {
                 Editor::ConsolePanel::info("Deleted asset: " + deleteCandidate.generic_string());
                 if (deleteCandidate.extension() == ".scene")
@@ -944,11 +1018,13 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
             draw_file_icon(ImGui::GetCursorScreenPos(), preview, it->kind, true);
             ImGui::Dummy({preview, preview + 5.0F});
             ImGui::TextWrapped("%s", selected.stem().string().c_str());
-            ImGui::TextDisabled("%s", kind_name(it->kind));
-            ImGui::Separator();
-            ImGui::TextDisabled("PATH");
+            EditorUI::badge(kind_name(it->kind), EditorUI::withAlpha(kind_color(it->kind), 0.16F),
+                            kind_color(it->kind));
+            ImGui::SeparatorText("Details");
+            ImGui::TextDisabled("Path");
             ImGui::TextWrapped("Assets/%s", selected.generic_string().c_str());
-            ImGui::TextDisabled("SIZE");
+            ImGui::TextDisabled("Size");
+            ImGui::SameLine(80.0F);
             ImGui::TextUnformatted(format_size(it->size).c_str());
             if (is_model(selected)) {
                 const auto dependencies = gltf_dependencies(root / selected);
@@ -959,19 +1035,27 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     for (const auto& dependency : dependencies) {
                         std::error_code dependencyError;
                         const bool exists = std::filesystem::is_regular_file(dependency, dependencyError);
-                        ImGui::TextColored(exists ? EditorUI::colors().success : EditorUI::colors().error, "%s %s",
-                                           exists ? "OK" : "!", dependency.filename().string().c_str());
+                        EditorUI::iconLabel(exists ? EditorUI::Icon::Info : EditorUI::Icon::Error,
+                                            exists ? EditorUI::colors().success : EditorUI::colors().error);
+                        ImGui::SameLine(0.0F, 6.0F);
+                        ImGui::TextUnformatted(dependency.filename().string().c_str());
+                        if (!exists && ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Missing dependency");
                     }
                     ImGui::TreePop();
                 }
-                if (ImGui::Button("Add to scene", {-1.0F, 0.0F}))
+                ImGui::Spacing();
+                if (EditorUI::primaryButton("Add to scene", {-1.0F, 0.0F}))
                     instantiate();
             } else {
                 ImGui::Spacing();
                 ImGui::TextDisabled("Preview/import settings are not available for this asset type yet.");
             }
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorUI::withAlpha(EditorUI::colors().error, 0.35F));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorUI::withAlpha(EditorUI::colors().error, 0.55F));
             if (ImGui::Button("Delete asset...", {-1.0F, 0.0F}))
                 requestDelete(selected);
+            ImGui::PopStyleColor(2);
         }
         ImGui::EndChild();
     }
@@ -980,19 +1064,19 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     ImGui::TextDisabled("%zu item%s", visibleFiles + visibleFolders, visibleFiles + visibleFolders == 1 ? "" : "s");
     if (!selected.empty()) {
         ImGui::SameLine();
-        ImGui::TextDisabled("  |  %s", selected.filename().string().c_str());
+        ImGui::TextDisabled("  ·  %s", selected.filename().string().c_str());
     }
     if (!error.empty()) {
         ImGui::SameLine();
-        ImGui::TextColored(EditorUI::colors().error, "  |  %s", error.c_str());
+        ImGui::TextColored(EditorUI::colors().error, "  ·  %s", error.c_str());
     }
     if (disabled) {
         ImGui::SameLine();
-        ImGui::TextColored(EditorUI::colors().warning, "  |  Play Mode: additions are temporary");
+        ImGui::TextColored(EditorUI::colors().warning, "  ·  Play Mode: additions are temporary");
     }
     if (!projectIsOpen) {
         ImGui::SameLine();
-        ImGui::TextColored(EditorUI::colors().warning, "  |  Open or create a project before importing assets");
+        ImGui::TextColored(EditorUI::colors().warning, "  ·  Open or create a project before importing assets");
     }
     ImGui::End();
     return created;

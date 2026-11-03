@@ -189,14 +189,23 @@ void EditorStyle::apply() {
 /**
  * @brief Creates the default editor docking layout once.
  */
+namespace {
+bool dockLayoutConfigured = false;
+bool dockLayoutResetRequested = false;
+} // namespace
+
+void EditorStyle::requestDockLayoutReset() {
+    dockLayoutResetRequested = true;
+}
+
 void EditorStyle::configureDockLayout(const ImVec2 dockSize, const bool restorePersistedLayout) {
-    static bool configured = false;
-    if (configured) {
+    bool& configured = dockLayoutConfigured;
+    if (configured && !dockLayoutResetRequested) {
         return;
     }
     // ImGui applies IniFilename on its first frame. Do not subsequently erase
     // the restored dock nodes with the engine's first-run default layout.
-    if (restorePersistedLayout) {
+    if (restorePersistedLayout && !dockLayoutResetRequested) {
         configured = true;
         return;
     }
@@ -229,6 +238,7 @@ void EditorStyle::configureDockLayout(const ImVec2 dockSize, const bool restoreP
     ImGui::DockBuilderDockWindow("Terrain Tools", inspector);
     ImGui::DockBuilderFinish(root);
     configured = true;
+    dockLayoutResetRequested = false;
 }
 
 // NOLINTEND(readability-magic-numbers)

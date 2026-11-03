@@ -1,5 +1,8 @@
 #include "Editor/Panels/ProfilerPanel.h"
 
+#include "Editor/UI/EditorIcons.h"
+#include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
 #include "Engine/Core/Profiler.h"
 #include "Engine/Renderer/Renderer.h"
 #include "imgui.h"
@@ -7,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <string>
 #include <vector>
@@ -33,8 +37,6 @@ void drawMemoryInsights(const Engine::Renderer& renderer) {
     const auto categories = renderer.gpuMemoryCategories();
     const auto heaps = renderer.gpuMemoryHeaps();
     const auto gpuScene = renderer.gpuSceneMemory();
-    ImGui::Separator();
-    ImGui::TextUnformatted("MEMORY INSIGHTS");
     if (heaps.empty()) {
         ImGui::TextDisabled("GPU memory budget is unavailable before Vulkan initialization.");
         return;
@@ -60,9 +62,18 @@ void drawMemoryInsights(const Engine::Renderer& renderer) {
             ImGui::TableSetColumnIndex(3);
             ImGui::Text("%u", category.allocationCount);
             ImGui::TableSetColumnIndex(4);
-            ImGui::Text("%.1f%%", category.budget ? 100.0 * static_cast<double>(category.usage) /
-                                                        static_cast<double>(category.budget)
-                                                  : 0.0);
+            const float pressure =
+                category.budget
+                    ? static_cast<float>(static_cast<double>(category.usage) / static_cast<double>(category.budget))
+                    : 0.0F;
+            const EditorUI::Palette& palette = EditorUI::colors();
+            char pressureText[16]{};
+            std::snprintf(pressureText, sizeof(pressureText), "%.1f%%", pressure * 100.0F);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, pressure > 0.9F   ? palette.error
+                                                          : pressure > 0.7F ? palette.warning
+                                                                            : palette.accent);
+            ImGui::ProgressBar(std::min(pressure, 1.0F), {-1.0F, ImGui::GetTextLineHeight()}, pressureText);
+            ImGui::PopStyleColor();
         }
         ImGui::EndTable();
     }
@@ -167,14 +178,16 @@ ImU32 zoneColor(const Engine::ProfileNameId name) {
 }
 
 void drawTimeline(const char* label, const Engine::ProfileFrame& frame, const bool gpu) {
-    ImGui::TextUnformatted(label);
+    ImGui::TextDisabled("%s", label);
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
     constexpr float rowHeight = 20.0F;
     constexpr float labelWidth = 105.0F;
     constexpr float height = 104.0F;
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(origin, {origin.x + width, origin.y + height}, IM_COL32(20, 23, 30, 255), 3.0F);
+    draw->AddRectFilled(origin, {origin.x + width, origin.y + height},
+                        ImGui::GetColorU32(EditorUI::colors().appBackground), 4.0F);
+    draw->AddRect(origin, {origin.x + width, origin.y + height}, ImGui::GetColorU32(EditorUI::colors().border), 4.0F);
     const double frameLength = gpu ? std::max(frame.gpuFrameMs, 0.001) : std::max(frame.cpuFrameMs, 0.001);
     const auto drawEvent = [&](const auto& event, const double start, const double end, const std::uint16_t depth) {
         const float y = origin.y + 4.0F + std::min<float>(depth, 4.0F) * rowHeight;
@@ -209,12 +222,16 @@ void drawFrameGraph(const std::uint32_t count, std::uint64_t& selected, bool& fo
             std::max(maximum, static_cast<float>(std::max(frame.cpuFrameMs, frame.gpuReady ? frame.gpuFrameMs : 0.0)));
     }
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(origin, {origin.x + width, origin.y + height}, IM_COL32(20, 23, 30, 255), 3.0F);
+    const EditorUI::Palette& palette = EditorUI::colors();
+    const ImU32 cpuColor = ImGui::GetColorU32(palette.iconCamera);
+    const ImU32 gpuColor = ImGui::GetColorU32(palette.warning);
+    draw->AddRectFilled(origin, {origin.x + width, origin.y + height}, ImGui::GetColorU32(palette.appBackground), 4.0F);
+    draw->AddRect(origin, {origin.x + width, origin.y + height}, ImGui::GetColorU32(palette.border), 4.0F);
     for (const auto [time, name] : std::array<std::pair<float, const char*>, 3>{
              {{8.333F, "120 FPS"}, {16.667F, "60 FPS"}, {33.333F, "30 FPS"}}}) {
         const float y = origin.y + height - time / maximum * height;
-        draw->AddLine({origin.x, y}, {origin.x + width, y}, IM_COL32(130, 130, 145, 95));
-        draw->AddText({origin.x + 4.0F, y - 15.0F}, IM_COL32(180, 180, 190, 190), name);
+        draw->AddLine({origin.x, y}, {origin.x + width, y}, ImGui::GetColorU32(palette.border));
+        draw->AddText({origin.x + 4.0F, y - 15.0F}, ImGui::GetColorU32(palette.textSecondary), name);
     }
     const float step = width / std::max(1U, count - 1U);
     for (std::uint32_t i = 1; i < count; ++i) {
@@ -223,12 +240,19 @@ void drawFrameGraph(const std::uint32_t count, std::uint64_t& selected, bool& fo
         const float x0 = origin.x + step * (i - 1);
         const float x1 = origin.x + step * i;
         draw->AddLine({x0, origin.y + height - static_cast<float>(a.cpuFrameMs) / maximum * height},
-                      {x1, origin.y + height - static_cast<float>(b.cpuFrameMs) / maximum * height},
-                      IM_COL32(80, 190, 255, 255), 2.0F);
+                      {x1, origin.y + height - static_cast<float>(b.cpuFrameMs) / maximum * height}, cpuColor, 2.0F);
         if (a.gpuReady && b.gpuReady)
             draw->AddLine({x0, origin.y + height - static_cast<float>(a.gpuFrameMs) / maximum * height},
-                          {x1, origin.y + height - static_cast<float>(b.gpuFrameMs) / maximum * height},
-                          IM_COL32(255, 170, 65, 255), 2.0F);
+                          {x1, origin.y + height - static_cast<float>(b.gpuFrameMs) / maximum * height}, gpuColor,
+                          2.0F);
+    }
+    // Mark the frame shown in the timelines below.
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (Engine::Profiler::historyFrame(i).frameNumber != selected)
+            continue;
+        const float x = origin.x + step * static_cast<float>(i);
+        draw->AddLine({x, origin.y}, {x, origin.y + height}, ImGui::GetColorU32(palette.accent), 1.5F);
+        break;
     }
     ImGui::InvisibleButton("##frame-history", {width, height});
     const ImVec2 mouse = ImGui::GetIO().MousePos;
@@ -244,13 +268,37 @@ void drawFrameGraph(const std::uint32_t count, std::uint64_t& selected, bool& fo
             followLatest = false;
         }
     }
-    ImGui::TextDisabled("CPU");
-    ImGui::SameLine();
-    ImGui::TextColored({0.31F, .75F, 1.0F, 1.0F}, "—");
-    ImGui::SameLine();
-    ImGui::TextDisabled("GPU");
-    ImGui::SameLine();
-    ImGui::TextColored({1.0F, .65F, .25F, 1.0F}, "—");
+    const auto legend = [&](const char* name, const ImU32 color) {
+        const ImVec2 position = ImGui::GetCursorScreenPos();
+        const float y = position.y + ImGui::GetTextLineHeight() * 0.5F;
+        draw->AddLine({position.x, y}, {position.x + 16.0F, y}, color, 2.5F);
+        ImGui::Dummy({20.0F, ImGui::GetTextLineHeight()});
+        ImGui::SameLine(0.0F, 2.0F);
+        ImGui::TextDisabled("%s", name);
+    };
+    legend("CPU", cpuColor);
+    ImGui::SameLine(0.0F, 16.0F);
+    legend("GPU", gpuColor);
+    ImGui::SameLine(0.0F, 16.0F);
+    ImGui::TextDisabled("Click the graph to inspect a frame.");
+}
+void statCard(const char* label, const char* value, const ImVec4 color, const float width) {
+    const EditorUI::Palette& palette = EditorUI::colors();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float height = ImGui::GetTextLineHeight() * 2.0F + 14.0F;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(origin, {origin.x + width, origin.y + height}, ImGui::GetColorU32(palette.surface), 5.0F);
+    draw->AddRectFilled(origin, {origin.x + 3.0F, origin.y + height}, ImGui::GetColorU32(color), 5.0F,
+                        ImDrawFlags_RoundCornersLeft);
+    draw->AddText({origin.x + 12.0F, origin.y + 6.0F}, ImGui::GetColorU32(palette.textSecondary), label);
+    draw->AddText(nullptr, ImGui::GetFontSize() * 1.15F,
+                  {origin.x + 12.0F, origin.y + 8.0F + ImGui::GetTextLineHeight()}, ImGui::GetColorU32(color), value);
+    ImGui::Dummy({width, height});
+}
+
+ImVec4 frameTimeColor(const double milliseconds) {
+    const EditorUI::Palette& palette = EditorUI::colors();
+    return milliseconds <= 16.7 ? palette.success : milliseconds <= 33.4 ? palette.warning : palette.error;
 }
 } // namespace
 
@@ -267,17 +315,22 @@ void drawProfilerPanel(const Engine::Renderer& renderer, bool& isOpen) {
     static bool followLatest = true;
     static std::uint64_t selectedFrame{};
     static int aggregationFrames = 300;
-    if (ImGui::Button(followLatest ? "Lock frame" : "Follow latest"))
+    if (EditorUI::iconButton("##profiler-follow", followLatest ? EditorUI::Icon::Pause : EditorUI::Icon::Play,
+                             followLatest ? "Lock the current frame" : "Follow the latest frame",
+                             {.active = !followLatest}))
         followLatest = !followLatest;
-    ImGui::SameLine();
-    if (ImGui::Button("Clear")) {
+    ImGui::SameLine(0.0F, 2.0F);
+    if (EditorUI::iconButton("##profiler-clear", EditorUI::Icon::Trash, "Clear history")) {
         Engine::Profiler::clear();
         selectedFrame = 0;
     }
     const std::uint32_t count = Engine::Profiler::historySize();
-    drawMemoryInsights(renderer);
     if (!count) {
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("Waiting for profiled frames...");
+        if (EditorUI::collapsingSection("Memory", ImGuiTreeNodeFlags_None))
+            drawMemoryInsights(renderer);
         ImGui::End();
         return;
     }
@@ -287,20 +340,52 @@ void drawProfilerPanel(const Engine::Renderer& renderer, bool& isOpen) {
     for (std::uint32_t i = 0; i < count; ++i)
         if (Engine::Profiler::historyFrame(i).frameNumber == selectedFrame)
             selected = &Engine::Profiler::historyFrame(i);
-    ImGui::Text("CPU %.3f ms   GPU %s   %.1f FPS", selected->cpuFrameMs,
-                selected->gpuReady ? (std::to_string(selected->gpuFrameMs) + " ms").c_str() : "pending",
-                selected->cpuFrameMs > 0.0 ? 1000.0 / selected->cpuFrameMs : 0.0);
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled(followLatest ? "Live  ·  frame #%llu" : "Locked  ·  frame #%llu",
+                        static_cast<unsigned long long>(selected->frameNumber));
+
+    // Summary cards for the selected frame.
+    {
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float cardWidth = std::max(90.0F, (ImGui::GetContentRegionAvail().x - spacing * 2.0F) / 3.0F);
+        char value[32]{};
+        std::snprintf(value, sizeof(value), "%.2f ms", selected->cpuFrameMs);
+        statCard("CPU frame", value, frameTimeColor(selected->cpuFrameMs), cardWidth);
+        ImGui::SameLine();
+        if (selected->gpuReady)
+            std::snprintf(value, sizeof(value), "%.2f ms", selected->gpuFrameMs);
+        else
+            std::snprintf(value, sizeof(value), "pending");
+        statCard("GPU frame", value,
+                 selected->gpuReady ? frameTimeColor(selected->gpuFrameMs) : EditorUI::colors().textSecondary,
+                 cardWidth);
+        ImGui::SameLine();
+        const double fps = selected->cpuFrameMs > 0.0 ? 1000.0 / selected->cpuFrameMs : 0.0;
+        std::snprintf(value, sizeof(value), "%.0f", fps);
+        statCard("FPS", value, frameTimeColor(selected->cpuFrameMs), cardWidth);
+    }
+    ImGui::Spacing();
+
+    if (EditorUI::collapsingSection("Frame time")) {
+        drawFrameGraph(count, selectedFrame, followLatest);
+        ImGui::Spacing();
+    }
+    if (EditorUI::collapsingSection("Timeline")) {
+        drawTimeline("CPU", *selected, false);
+        if (selected->gpuReady)
+            drawTimeline("GPU", *selected, true);
+        ImGui::Spacing();
+    }
     const auto& graph = selected->renderGraph;
-    if (graph.passes != 0) {
-        ImGui::Separator();
-        ImGui::TextUnformatted("RENDER GRAPH");
+    if (graph.passes != 0 && EditorUI::collapsingSection("Render graph", ImGuiTreeNodeFlags_None)) {
         if (ImGui::BeginTable("##render-graph-stats", 2,
                               ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV |
                                   ImGuiTableFlags_RowBg)) {
             const auto row = [](const char* label, const std::uint32_t value) {
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(label);
+                ImGui::TextDisabled("%s", label);
                 ImGui::TableSetColumnIndex(1);
                 ImGui::Text("%u", value);
             };
@@ -316,18 +401,17 @@ void drawProfilerPanel(const Engine::Renderer& renderer, bool& isOpen) {
             ImGui::EndTable();
         }
     }
-    ImGui::Separator();
-    ImGui::TextUnformatted("FRAME TIME");
-    drawFrameGraph(count, selectedFrame, followLatest);
-    ImGui::Separator();
-    drawTimeline("CPU TIMELINE", *selected, false);
-    if (selected->gpuReady)
-        drawTimeline("GPU TIMELINE", *selected, true);
-    ImGui::Separator();
-    ImGui::TextUnformatted("HOTSPOTS");
+    if (EditorUI::collapsingSection("Memory", ImGuiTreeNodeFlags_None))
+        drawMemoryInsights(renderer);
+    if (!EditorUI::collapsingSection("Hotspots")) {
+        ImGui::End();
+        return;
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("Averaged over");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(100.0F);
-    ImGui::SliderInt("frames", &aggregationFrames, 1, static_cast<int>(count));
+    ImGui::SetNextItemWidth(120.0F);
+    ImGui::SliderInt("##hotspot-frames", &aggregationFrames, 1, static_cast<int>(count), "%d frames");
     const std::uint32_t first = count - std::min<std::uint32_t>(count, aggregationFrames);
     std::map<Engine::ProfileNameId, Hotspot> hotspots;
     for (std::uint32_t f = first; f < count; ++f) {
@@ -363,6 +447,16 @@ void drawProfilerPanel(const Engine::Renderer& renderer, bool& isOpen) {
                                                    static_cast<std::size_t>(std::ceil(h->samples.size() * .95) - 1))];
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
+            {
+                // Share of the hottest zone, drawn behind the name.
+                const double hottest = ordered.front().second->self;
+                const float share = hottest > 0.0 ? static_cast<float>(h->self / hottest) : 0.0F;
+                const ImVec2 cell = ImGui::GetCursorScreenPos();
+                const float cellWidth = ImGui::GetContentRegionAvail().x;
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    {cell.x - 2.0F, cell.y}, {cell.x - 2.0F + cellWidth * share, cell.y + ImGui::GetTextLineHeight()},
+                    ImGui::GetColorU32(EditorUI::withAlpha(EditorUI::colors().accent, 0.16F)), 2.0F);
+            }
             ImGui::TextUnformatted(Engine::Profiler::name(name).data());
             ImGui::TableSetColumnIndex(1);
             ImGui::Text("%.3f", h->self / divisor);
