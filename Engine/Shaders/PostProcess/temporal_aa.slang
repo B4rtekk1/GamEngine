@@ -8,8 +8,9 @@
 [[vk::binding(6, 0)]] Sampler2D waterMetaFrame;
 [[vk::binding(7, 0)]] Sampler2D waterSurfaceFrame;
 [[vk::binding(8, 0)]] RWTexture2D<float4> resolvedFrame;
+// Linear view depth of the resolved frame. Its sign carries the
+// glass-reactive flag, so the resolved colour doubles as the next history.
 [[vk::binding(9, 0)]] RWTexture2D<float> resolvedDepthFrame;
-[[vk::binding(10, 0)]] RWTexture2D<float4> resolvedHistoryFrame;
 struct Settings {
     float currentJitterX, currentJitterY, previousJitterX, previousJitterY;
     float historyWeight, inverseWidth, inverseHeight, padding;
@@ -177,15 +178,16 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     // Keep history depth linear before quantizing it to R16F. Device depth
     // loses too much precision near the far plane in a half-float image.
     const float currentViewDepth = viewDepth(currentDepth);
-    const float historyViewDepth = historyDepthFrame.SampleLevel(historyUv, 0.0).r;
+    const float resolvedDepth = glassReactive > 0.0 ? -currentViewDepth : currentViewDepth;
+    const float historyDepthSample = historyDepthFrame.SampleLevel(historyUv, 0.0).r;
+    const float historyViewDepth = abs(historyDepthSample);
     // Soft disocclusion: full weight inside the tolerance, fading to zero at
     // twice the tolerance instead of a hard cut that flickers on edges.
     const float depthTolerance = 0.02 * max(max(currentViewDepth, historyViewDepth), 1e-4);
     const float depthWeight = saturate(2.0 - abs(currentViewDepth - historyViewDepth) / depthTolerance);
     if (!historyInBounds || depthWeight <= 0.0 || settings.historyWeight <= 0.0) {
         resolvedFrame[dispatchId.xy] = float4(min(reinhardInverse(currentTm), MaxHdr), 1.0);
-        resolvedDepthFrame[dispatchId.xy] = currentViewDepth;
-        resolvedHistoryFrame[dispatchId.xy] = float4(min(reinhardInverse(currentTm), MaxHdr), glassReactive > 0.0 ? -1.0 : 1.0);
+        resolvedDepthFrame[dispatchId.xy] = resolvedDepth;
         return;
     }
 
@@ -196,7 +198,7 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     float3 history = sampleHistoryCatmullRom(historyUv, resolution);
     history = clipAabb(mean - deviation, mean + deviation, mean, history);
 
-    const float previousGlassReactive = saturate(-historyFrame.SampleLevel(historyUv, 0.0).a);
+    const float previousGlassReactive = historyDepthSample < 0.0 ? 1.0 : 0.0;
     // Constant feedback keeps the accumulation long enough to resolve sub-pixel
     // edges; only glass/water and soft disocclusions shorten it.
     float historyWeight = settings.historyWeight;
@@ -205,6 +207,5 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const float3 resolvedTm = lerp(currentTm, history, historyWeight);
     const float3 resolvedLinear = min(reinhardInverse(resolvedTm), MaxHdr);
     resolvedFrame[dispatchId.xy] = float4(resolvedLinear, 1.0);
-    resolvedDepthFrame[dispatchId.xy] = currentViewDepth;
-    resolvedHistoryFrame[dispatchId.xy] = float4(resolvedLinear, glassReactive > 0.0 ? -1.0 : 1.0);
+    resolvedDepthFrame[dispatchId.xy] = resolvedDepth;
 }

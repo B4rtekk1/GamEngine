@@ -37,14 +37,14 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
     destroy();
     device_ = device;
     try {
-        VkDescriptorSetLayoutBinding bindings[11]{};
+        VkDescriptorSetLayoutBinding bindings[10]{};
         for (std::uint32_t i = 0; i < 8; ++i) {
             bindings[i].binding = i;
             bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[i].descriptorCount = 1;
             bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
-        for (std::uint32_t i = 8; i < 11; ++i) {
+        for (std::uint32_t i = 8; i < 10; ++i) {
             bindings[i].binding = i;
             bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[i].descriptorCount = 1;
@@ -57,9 +57,6 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
             throw std::runtime_error("Could not create temporal AA descriptor layout");
         }
         for (HdrBuffer& image : history_) {
-            image.create(physicalDevice, device_, extent, allocator, VK_FILTER_LINEAR, HdrBuffer::Format, true);
-        }
-        for (HdrBuffer& image : historyColor_) {
             image.create(physicalDevice, device_, extent, allocator, VK_FILTER_LINEAR, HdrBuffer::Format, true);
         }
         for (HdrBuffer& image : historyDepth_) {
@@ -89,7 +86,7 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
             throw std::runtime_error("Could not create temporal AA compute pipeline");
         }
         const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32},
-                                              {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 12}};
+                                              {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8}};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = 4;
         poolInfo.poolSizeCount = std::size(sizes);
@@ -108,7 +105,7 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
         for (std::uint32_t i = 0; i < 2; ++i) {
             VkDescriptorImageInfo images[8] = {
                 {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                {historyColor_[i].sampler(), historyColor_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                {history_[i].sampler(), history_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                 {velocitySampler, velocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                 {currentDepthSampler, currentDepthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
                 {historyDepth_[i].sampler(), historyDepth_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
@@ -132,10 +129,9 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
             const std::uint32_t output = 1U - i;
             const VkDescriptorImageInfo outputs[] = {
                 {VK_NULL_HANDLE, history_[output].imageView(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, historyDepth_[output].imageView(), VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, historyColor_[output].imageView(), VK_IMAGE_LAYOUT_GENERAL}};
-            VkWriteDescriptorSet outputWrites[3]{};
-            for (std::uint32_t binding = 0; binding < 3; ++binding) {
+                {VK_NULL_HANDLE, historyDepth_[output].imageView(), VK_IMAGE_LAYOUT_GENERAL}};
+            VkWriteDescriptorSet outputWrites[2]{};
+            for (std::uint32_t binding = 0; binding < 2; ++binding) {
                 outputWrites[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                 outputWrites[binding].dstSet = sets_[i];
                 outputWrites[binding].dstBinding = 8 + binding;
@@ -143,7 +139,7 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
                 outputWrites[binding].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 outputWrites[binding].pImageInfo = &outputs[binding];
             }
-            vkUpdateDescriptorSets(device_, 3, outputWrites, 0, nullptr);
+            vkUpdateDescriptorSets(device_, 2, outputWrites, 0, nullptr);
 
             constexpr std::uint32_t WaterSetOffset = 2;
             images[5] = {waterVelocitySampler, waterVelocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -155,7 +151,7 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
             vkUpdateDescriptorSets(device_, 8, writes, 0, nullptr);
             for (auto& write : outputWrites)
                 write.dstSet = sets_[i + WaterSetOffset];
-            vkUpdateDescriptorSets(device_, 3, outputWrites, 0, nullptr);
+            vkUpdateDescriptorSets(device_, 2, outputWrites, 0, nullptr);
         }
         reset();
     } catch (...) {
@@ -176,7 +172,7 @@ void TemporalAaPass::reset() noexcept {
 }
 
 void TemporalAaPass::initializeHistory(const VkCommandBuffer commandBuffer) {
-    VkImageMemoryBarrier2 barriers[6]{};
+    VkImageMemoryBarrier2 barriers[4]{};
     for (std::uint32_t i = 0; i < 2; ++i) {
         barriers[i] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -187,11 +183,9 @@ void TemporalAaPass::initializeHistory(const VkCommandBuffer commandBuffer) {
         barriers[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         barriers[i + 2] = barriers[i];
         barriers[i + 2].image = historyDepth_[i].image();
-        barriers[i + 4] = barriers[i];
-        barriers[i + 4].image = historyColor_[i].image();
     }
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.imageMemoryBarrierCount = 6;
+    dependency.imageMemoryBarrierCount = 4;
     dependency.pImageMemoryBarriers = barriers;
     vkCmdPipelineBarrier2(commandBuffer, &dependency);
     VkClearColorValue clear{};
@@ -200,10 +194,6 @@ void TemporalAaPass::initializeHistory(const VkCommandBuffer commandBuffer) {
                              &barriers[0].subresourceRange);
     }
     for (const HdrBuffer& image : historyDepth_) {
-        vkCmdClearColorImage(commandBuffer, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1,
-                             &barriers[0].subresourceRange);
-    }
-    for (const HdrBuffer& image : historyColor_) {
         vkCmdClearColorImage(commandBuffer, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1,
                              &barriers[0].subresourceRange);
     }
@@ -228,24 +218,21 @@ void TemporalAaPass::prepareHistory(const VkCommandBuffer commandBuffer) {
 void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2D extent, const float currentJitterX,
                             const float currentJitterY, const float projectionA, const float projectionB) {
     const std::uint32_t output = 1U - historyIndex_;
-    // The render graph owns the HDR output. Depth and bounded-color history
-    // are internal storage images and need explicit layout transitions.
-    VkImageMemoryBarrier2 internalBarriers[2]{};
-    for (auto& barrier : internalBarriers) {
-        barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    }
-    internalBarriers[0].image = historyDepth_[output].image();
-    internalBarriers[1].image = historyColor_[output].image();
+    // The render graph owns the HDR output, which is also next frame's colour
+    // history. Depth history is an internal storage image and needs explicit
+    // layout transitions.
+    VkImageMemoryBarrier2 internalBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    internalBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    internalBarrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    internalBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    internalBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    internalBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    internalBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    internalBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    internalBarrier.image = historyDepth_[output].image();
     VkDependencyInfo internalDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    internalDependency.imageMemoryBarrierCount = 2;
-    internalDependency.pImageMemoryBarriers = internalBarriers;
+    internalDependency.imageMemoryBarrierCount = 1;
+    internalDependency.pImageMemoryBarriers = &internalBarrier;
     vkCmdPipelineBarrier2(commandBuffer, &internalDependency);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     constexpr std::uint32_t WaterSetOffset = 2;
@@ -266,14 +253,12 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
                             .projectionB = projectionB};
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(settings), &settings);
     vkCmdDispatch(commandBuffer, (extent.width + 15) / 16, (extent.height + 15) / 16, 1);
-    for (auto& barrier : internalBarriers) {
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    }
+    internalBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    internalBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    internalBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    internalBarrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    internalBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    internalBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     vkCmdPipelineBarrier2(commandBuffer, &internalDependency);
     historyIndex_ = output;
     historyValid_ = true;
@@ -302,9 +287,6 @@ void TemporalAaPass::destroy() noexcept {
     pipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     for (HdrBuffer& image : history_) {
-        image.destroy();
-    }
-    for (HdrBuffer& image : historyColor_) {
         image.destroy();
     }
     device_ = VK_NULL_HANDLE;

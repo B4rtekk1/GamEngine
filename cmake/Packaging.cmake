@@ -1,5 +1,10 @@
 option(GAMEENGINE_INSTALL_PORTABLE_EDITOR "Install a self-contained GamEngine Editor package" ON)
 
+# $<CONFIG> is empty for single-config generators when CMAKE_BUILD_TYPE is
+# unset.  cmake --install requires a value after --config, even though the
+# value is ignored by those generators.
+set(GAMEENGINE_INSTALL_CONFIG "$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,NoConfig>")
+
 function(gameengine_install_default_font destination component)
     install(FILES "${dearimgui_SOURCE_DIR}/misc/fonts/DroidSans.ttf"
         DESTINATION "${destination}/Fonts" COMPONENT ${component})
@@ -30,7 +35,7 @@ if(TARGET Player)
     install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION Licenses
         COMPONENT GamEngineRuntime RENAME LICENSE-GamEngine.txt)
     add_custom_target(PackageRuntime
-        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config $<CONFIG>
+        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config "${GAMEENGINE_INSTALL_CONFIG}"
             --component GamEngineRuntime --prefix "${CMAKE_BINARY_DIR}/GamEngineRuntime"
         DEPENDS Player EngineShaders
         COMMENT "Creating portable GamEngine runtime template")
@@ -131,10 +136,10 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR AND TARGET Editor)
     endif()
 
     add_custom_target(PackageEditor
-        COMMAND ${CMAKE_COMMAND} -DGE_CONFIG=$<CONFIG> -DGE_DISTRIBUTION_BUILD=${GE_DISTRIBUTION_BUILD}
+        COMMAND ${CMAKE_COMMAND} -DGE_CONFIG=${GAMEENGINE_INSTALL_CONFIG} -DGE_DISTRIBUTION_BUILD=${GE_DISTRIBUTION_BUILD}
             -P "${PROJECT_SOURCE_DIR}/cmake/ValidateEditorPackageConfiguration.cmake"
         COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/GamEngineEditor"
-        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config $<CONFIG> --component GamEngineEditor --prefix "${CMAKE_BINARY_DIR}/GamEngineEditor"
+        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config "${GAMEENGINE_INSTALL_CONFIG}" --component GamEngineEditor --prefix "${CMAKE_BINARY_DIR}/GamEngineEditor"
         DEPENDS ${GAMEENGINE_EDITOR_PACKAGE_DEPENDS}
         COMMENT "Creating portable GamEngine Editor package")
 endif()

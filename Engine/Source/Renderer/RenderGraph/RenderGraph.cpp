@@ -792,14 +792,18 @@ void RenderGraph::compile() {
                     ++indegree[target];
                 }
             }
-            std::queue<std::uint32_t> ready;
+            // Among ready passes, declaration order wins. A FIFO over the
+            // unordered edge sets let an independent graphics pass declared
+            // later (Hi-Z, VSM) slip ahead of an async consumer (GTAO), which
+            // then waited for the whole graphics batch instead of its producer.
+            std::priority_queue<std::uint32_t, std::vector<std::uint32_t>, std::greater<>> ready;
             for (std::uint32_t pass = 0; pass < count; ++pass) {
                 if (indegree[pass] == 0) {
                     ready.push(pass);
                 }
             }
             while (!ready.empty()) {
-                const auto pass = ready.front();
+                const auto pass = ready.top();
                 ready.pop();
                 order_.push_back(pass);
                 for (const auto target : edges[pass]) {

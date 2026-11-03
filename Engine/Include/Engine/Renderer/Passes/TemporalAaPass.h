@@ -66,12 +66,12 @@ class TemporalAaPass final {
     // Two history inputs times two source variants: ordinary scene data
     // uses current HDR as a valid fallback for the water-only bindings.
     std::array<VkDescriptorSet, 4> sets_{};
+    // Linear HDR output (FP16 keeps relative precision for bright pixels),
+    // consumed by bloom/tonemap and read back as next frame's colour history.
     std::array<HdrBuffer, 2> history_;
-    // Linear HDR feedback (FP16 keeps relative precision for bright pixels); separate from the image consumed by bloom and carries the glass-reactive flag in alpha.
-    std::array<HdrBuffer, 2> historyColor_;
     // A sampled copy of the depth that produced each HDR history image.
     // It is stored by the resolve itself, so the two ping-pong histories
-    // always refer to exactly the same frame.
+    // always refer to exactly the same frame. Negative depth marks glass.
     std::array<HdrBuffer, 2> historyDepth_;
     std::uint32_t historyIndex_ = 0;
     bool initialized_ = false;
