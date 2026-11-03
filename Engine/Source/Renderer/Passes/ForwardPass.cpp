@@ -67,6 +67,16 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
         {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
         {9, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, tangent)},
     };
+    // depth_velocity consumes position, UV0/UV1, normal and material index
+    // only. Supplying color/tangent causes Vulkan validation warnings at
+    // locations 1/9. Shader Graph and grass programs keep the full layout.
+    const auto stripDepthOnlyAttributes = [depthOnly](GraphicsPipelineOptions& pipelineOptions) {
+        if (!depthOnly)
+            return;
+        std::erase_if(pipelineOptions.vertexAttributes, [](const VkVertexInputAttributeDescription& attribute) {
+            return attribute.location == 1 || attribute.location == 9;
+        });
+    };
     std::array<std::filesystem::path, MaterialShaderCount> shaderPaths{};
     if (depthOnly) {
         shaderPaths.fill(options.shader);
@@ -91,6 +101,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
         }
         GraphicsPipelineOptions materialOptions = options;
         materialOptions.shader = shaderPaths[index];
+        stripDepthOnlyAttributes(materialOptions);
         if (preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT &&
             (index == materialShaderIndex(MaterialShader::StandardPBR) || index >= PbrNormalProgramSlot)) {
             const auto& path = materialOptions.shader;
@@ -131,7 +142,9 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     foliageOptions.alphaBlendEnable = VK_FALSE;
     // Preserve the base pass's depth mode: lighting reads the depth prepass,
     // while the regular forward pass writes depth.
-    foliagePipeline_.create(device, foliageOptions);
+    GraphicsPipelineOptions depthFoliageOptions = foliageOptions;
+    stripDepthOnlyAttributes(depthFoliageOptions);
+    foliagePipeline_.create(device, depthFoliageOptions);
     GraphicsPipelineOptions grassOptions = foliageOptions;
     grassOptions.shader =
         hasVelocityAttachment_ ? "shaders/grass_forward.spv" : "shaders/grass_forward_no_velocity.spv";

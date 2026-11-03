@@ -39,6 +39,11 @@ int main(int argc, char** argv) {
 
         std::optional<std::filesystem::path> projectPath;
         std::optional<std::filesystem::path> sceneOverride;
+        int windowWidth = 800;
+        int windowHeight = 600;
+        std::uint32_t benchmarkFrames = 0;
+        std::uint32_t benchmarkWarmup = 120;
+        std::filesystem::path benchmarkOutput;
         for (int index = 1; index < argc; ++index) {
             const std::string_view argument{argv[index]};
             if (argument == "--project") {
@@ -51,6 +56,23 @@ int main(int argc, char** argv) {
                 if (++index == argc)
                     throw std::runtime_error("--scene requires a file path");
                 sceneOverride = std::filesystem::path{argv[index]};
+                continue;
+            }
+            if (argument == "--width" || argument == "--height") {
+                if (++index == argc)
+                    throw std::runtime_error(std::string{argument} + " requires a value");
+                (argument == "--width" ? windowWidth : windowHeight) = std::stoi(argv[index]);
+                continue;
+            }
+            if (argument == "--benchmark" || argument == "--benchmark-warmup" || argument == "--benchmark-output") {
+                if (++index == argc)
+                    throw std::runtime_error(std::string{argument} + " requires a value");
+                if (argument == "--benchmark")
+                    benchmarkFrames = static_cast<std::uint32_t>(std::stoul(argv[index]));
+                else if (argument == "--benchmark-warmup")
+                    benchmarkWarmup = static_cast<std::uint32_t>(std::stoul(argv[index]));
+                else
+                    benchmarkOutput = argv[index];
             }
         }
         const Engine::Project project = projectPath ? Engine::Project::load(*projectPath)
@@ -75,11 +97,14 @@ int main(int argc, char** argv) {
             .iblQuality = Engine::IblQuality::High,
         };
         Engine::Application app{{.title = project.name(),
-                                 .width = 800,
-                                 .height = 600,
+                                 .width = windowWidth,
+                                 .height = windowHeight,
                                  .closeOnEscape = false,
                                  .assetRoot = project.assetRoot(),
-                                 .render = renderConfig}};
+                                 .render = renderConfig,
+                                 .benchmarkFrames = benchmarkFrames,
+                                 .benchmarkWarmupFrames = benchmarkWarmup,
+                                 .benchmarkOutput = benchmarkOutput}};
         if (!std::filesystem::is_regular_file(scenePath)) {
             throw std::runtime_error("Scene file does not exist: " + scenePath.string());
         }

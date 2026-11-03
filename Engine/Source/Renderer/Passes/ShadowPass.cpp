@@ -973,14 +973,23 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
             const glm::vec3 minimum{object.localAabbMin.x, object.localAabbMin.y, object.localAabbMin.z};
             const glm::vec3 maximum{object.localAabbMax.x, object.localAabbMax.y, object.localAabbMax.z};
             const glm::mat4 model = gpuMatrix(object.model);
+            const glm::vec3 extent = maximum - minimum;
             for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
                 if (requireCachedMatrix && !cachedClipMatricesValid_[level])
                     continue;
+                // The projection is linear in homogeneous coordinates, so the
+                // eight corners are the projected minimum corner plus sums of
+                // the three projected box edges. This replaces a mat4*mat4 per
+                // corner with one per level and four mat4*vec4 products.
+                const glm::mat4 levelModel = matrices[level].native() * model;
+                const glm::vec4 origin = levelModel * glm::vec4{minimum, 1.0F};
+                const glm::vec4 edgeX = levelModel[0] * extent.x;
+                const glm::vec4 edgeY = levelModel[1] * extent.y;
+                const glm::vec4 edgeZ = levelModel[2] * extent.z;
                 glm::vec2 minimumUv{std::numeric_limits<float>::max()};
                 glm::vec2 maximumUv{-std::numeric_limits<float>::max()};
                 for (const glm::vec3& corner : unitCorners) {
-                    const glm::vec3 local = glm::mix(minimum, maximum, corner);
-                    const glm::vec4 clip = matrices[level].native() * model * glm::vec4{local, 1.0F};
+                    const glm::vec4 clip = origin + edgeX * corner.x + edgeY * corner.y + edgeZ * corner.z;
                     const glm::vec2 uv = glm::vec2{clip} / clip.w * 0.5F + 0.5F;
                     minimumUv = glm::min(minimumUv, uv);
                     maximumUv = glm::max(maximumUv, uv);
@@ -1539,7 +1548,11 @@ void ShadowPass::record(
         }
         flushClears();
     }
-    for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+    // Per-page state is recorded once per pipeline group instead of switching
+    // pipelines and descriptor sets for every page. Depth-only output is order
+    // independent, so opaque, two-sided and grass streams can be drawn as
+    // separate sweeps over the pages.
+    const auto setPageState = [&](const std::size_t pageIndex) {
         const std::uint32_t physical = pagesToRender_[pageIndex];
         const PhysicalPage& page = physicalPages_[physical];
         vkCmdSetDepthBias(commandBuffer, DepthBiasConstant[page.level], 0.0F, DepthBiasSlope[page.level]);
@@ -1565,37 +1578,38 @@ void ShadowPass::record(
             static_cast<float>(ShadowMap::VirtualPagesPerAxis) - 2.0F * static_cast<float>(page.virtualY) - 1.0F;
         const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
         vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Mat4), &pageMatrix);
-        if (objectCount != 0 && indirectDraw.valid()) {
+    };
+    if (objectCount != 0 && indirectDraw.valid()) {
+        for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+            setPageState(pageIndex);
             indirectDraw.record(commandBuffer,
                                 sizeof(VkDrawIndexedIndirectCommand) * cullingPass.maxDrawCount() * pageIndex,
                                 sizeof(std::uint32_t) * pageIndex);
         }
-        if (objectCount != 0 && twoSidedIndirectDraw.valid()) {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, twoSidedPipeline_);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
-                                    &twoSidedSceneDescriptorSet, 0, nullptr);
+    }
+    if (objectCount != 0 && twoSidedIndirectDraw.valid()) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, twoSidedPipeline_);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
+                                &twoSidedSceneDescriptorSet, 0, nullptr);
+        for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+            setPageState(pageIndex);
             twoSidedIndirectDraw.record(
                 commandBuffer, sizeof(VkDrawIndexedIndirectCommand) * twoSidedCullingPass.maxDrawCount() * pageIndex,
                 sizeof(std::uint32_t) * pageIndex);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
-                                    &sceneDescriptorSet, 0, nullptr);
         }
-        if (grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr && grassIndirectDraw->valid()) {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grassPipeline_);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
-                                    &grassDescriptorSet, 0, nullptr);
-            vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Mat4),
-                               &pageMatrix);
+    }
+    if (grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr && grassIndirectDraw->valid()) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grassPipeline_);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
+                                &grassDescriptorSet, 0, nullptr);
+        for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+            setPageState(pageIndex);
             // Unlike the camera-wide stream, this buffer is partitioned by
             // VSM page. A page may therefore draw only clusters whose bounds
             // overlap its exact virtual-page projection.
             grassIndirectDraw->record(commandBuffer,
                                       sizeof(VkDrawIndexedIndirectCommand) * grassCommandsPerPage * pageIndex,
                                       sizeof(std::uint32_t) * pageIndex);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
-                                    &sceneDescriptorSet, 0, nullptr);
         }
     }
     vkCmdEndRendering(commandBuffer);

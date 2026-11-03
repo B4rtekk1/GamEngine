@@ -4,12 +4,18 @@
 [[vk::binding(3, 0)]] RWTexture2D<float> mip2;
 [[vk::binding(4, 0)]] RWTexture2D<float> mip3;
 [[vk::binding(5, 0)]] RWTexture2D<float> mip4;
+// Nearest (minimum) view depth of each 2x2 block. Only the half-resolution
+// path consumes it, as the bilateral upsample's guide.
+[[vk::binding(6, 0)]] RWTexture2D<float> baseDepth;
 
 struct Settings {
-    float4x4 inverseProjection;
+    // The only inverse-projection terms that reach view depth:
+    // view.z = z * x + y and view.w = z * z + w.
+    float4 depthToView;
     float effectRadius;
     float effectFalloffRange;
     uint mipCount;
+    uint writeBaseDepth;
 };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 
@@ -19,8 +25,9 @@ groupshared float scratchB[8][8];
 
 float linearizeDepth(float z) {
     if (z >= 0.999999) return 65500.0;
-    float4 view = mul(float4(0, 0, z, 1), settings.inverseProjection);
-    return max(-view.z / max(view.w, 1e-6), 1e-4);
+    float viewZ = z * settings.depthToView.x + settings.depthToView.y;
+    float viewW = z * settings.depthToView.z + settings.depthToView.w;
+    return max(-viewZ / max(viewW, 1e-6), 1e-4);
 }
 
 float depthMipFilter(float d0, float d1, float d2, float d3) {
@@ -56,10 +63,13 @@ void main(uint3 groupId : SV_GroupID, uint3 localId : SV_GroupThreadID) {
     hardwareDepth.GetDimensions(width, height);
     uint2 sourceBase = groupId.xy * 16u + localId.xy * 2u;
 
-    float d00 = linearizeDepth(hardwareDepth.Load(int3(min(sourceBase + uint2(0, 0), uint2(width, height) - 1u), 0)).r);
-    float d10 = linearizeDepth(hardwareDepth.Load(int3(min(sourceBase + uint2(1, 0), uint2(width, height) - 1u), 0)).r);
-    float d01 = linearizeDepth(hardwareDepth.Load(int3(min(sourceBase + uint2(0, 1), uint2(width, height) - 1u), 0)).r);
-    float d11 = linearizeDepth(hardwareDepth.Load(int3(min(sourceBase + uint2(1, 1), uint2(width, height) - 1u), 0)).r);
+    // One gather fetches the 2x2 footprint; the clamp-to-edge sampler
+    // reproduces the per-texel edge clamp at odd extents.
+    float4 quad = hardwareDepth.Gather(float2(sourceBase + 1u) / float2(width, height));
+    float d00 = linearizeDepth(quad.w);
+    float d10 = linearizeDepth(quad.z);
+    float d01 = linearizeDepth(quad.x);
+    float d11 = linearizeDepth(quad.y);
 
     uint2 mip0Coord = sourceBase;
     if (all(mip0Coord < uint2(width, height))) mip0[mip0Coord] = d00;
@@ -69,6 +79,11 @@ void main(uint3 groupId : SV_GroupID, uint3 localId : SV_GroupThreadID) {
 
     float mip1Value = depthMipFilter(d00, d10, d01, d11);
     uint2 mip1Coord = groupId.xy * 8u + localId.xy;
+    if (settings.writeBaseDepth != 0u) {
+        uint bw, bh;
+        baseDepth.GetDimensions(bw, bh);
+        if (all(mip1Coord < uint2(bw, bh))) baseDepth[mip1Coord] = min(min(d00, d10), min(d01, d11));
+    }
     if (settings.mipCount > 1u) {
         scratchA[localId.y][localId.x] = mip1Value;
         uint mw = (width + 1u) / 2u, mh = (height + 1u) / 2u;

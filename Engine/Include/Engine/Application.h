@@ -33,6 +33,11 @@ struct ApplicationConfig final {
     float maxFrameDeltaTime = 0.25F; // NOLINT
     std::filesystem::path assetRoot{};
     RenderConfig render{};
+    /** When non-zero the loop exits after this many measured frames and writes a profiler report. */
+    std::uint32_t benchmarkFrames = 0;
+    std::uint32_t benchmarkWarmupFrames = 120; // NOLINT
+    /** CSV destination for the benchmark report; the summary is always printed to stdout. */
+    std::filesystem::path benchmarkOutput{};
 };
 
 /** High-level application entry point. Owns the window and the render loop. */

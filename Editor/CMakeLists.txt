@@ -1,5 +1,5 @@
 add_executable(Editor
-        Source/main.cpp Source/App/EditorEntityHelpers.cpp Source/Build/GameBuildPipeline.cpp Source/ComponentDescriptor.cpp Source/EditorUi.cpp Source/UI/EditorTheme.cpp Source/UI/EditorWidgets.cpp Source/UI/PropertyGrid.cpp Source/UI/ComponentCard.cpp Source/EditorPreferences.cpp
+        Source/main.cpp Source/App/EditorEntityHelpers.cpp Source/Build/GameBuildPipeline.cpp Source/ComponentDescriptor.cpp Source/EditorUi.cpp Source/UI/EditorTheme.cpp Source/UI/EditorIcons.cpp Source/UI/EditorWidgets.cpp Source/UI/PropertyGrid.cpp Source/UI/ComponentCard.cpp Source/EditorPreferences.cpp
         Source/Panels/EditorStyle.cpp Source/Panels/EditorSceneSession.cpp Source/Panels/HierarchyPanel.cpp Source/Panels/ComponentsPanel.cpp Source/Panels/AssetManagerPanel.cpp Source/Panels/ShaderGraphPanel.cpp Source/Panels/ProfilerPanel.cpp Source/AssetImporter.cpp Source/Panels/ConsolePanel.cpp Source/Panels/TerminalPanel.cpp Source/Platform/WindowsTitleBar.cpp ${PROJECT_SOURCE_DIR}/Platform/Terminal/TerminalBuffer.cpp
         Include/Editor/EditorState.h)
 if (WIN32)

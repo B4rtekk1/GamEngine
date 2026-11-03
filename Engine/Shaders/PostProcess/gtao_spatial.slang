@@ -1,8 +1,0 @@
-struct VertexOutput { float4 position:SV_Position; [[vk::location(0)]] float2 uv; }; [shader("vertex")] VertexOutput vertexMain(uint i:SV_VertexID){VertexOutput o;float2 p=float2((i<<1)&2,i&2);o.uv=p;o.position=float4(p*2-1,0,1);return o;}
-[[vk::binding(0,0)]] Sampler2D inputAo; [[vk::binding(1,0)]] Sampler2D auxiliary;
-struct Settings { float inverseWidth,inverseHeight,depthSigma,normalSigma; float2 direction; }; [[vk::push_constant]] ConstantBuffer<Settings> settings; struct Input { [[vk::location(0)]] float2 uv; }; struct Output { [[vk::location(0)]] float4 value:SV_Target; };
-static const float BackgroundViewDepth = 60000.0;
-float3 decodeOctNormal(float2 e) { float2 f=e*2-1; float3 n=float3(f,1-abs(f.x)-abs(f.y)); if(n.z<0) n.xy=(1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1); return normalize(n); }
-// Exact x^32 without the costly general pow().
-float normalWeight(float n) { n*=n; n*=n; n*=n; n*=n; n*=n; return n; }
-[shader("fragment")] Output fragmentMain(Input i) { Output o; float c=inputAo.SampleLevel(i.uv,0).r; float4 center=auxiliary.SampleLevel(i.uv,0); if(center.x>BackgroundViewDepth){o.value=1;return o;} float3 cn=decodeOctNormal(center.yz); float sum=0,wSum=0; float2 texel=float2(settings.inverseWidth,settings.inverseHeight)*settings.direction; const float kernel[5]={0.0544887,0.244201,0.40262,0.244201,0.0544887}; [unroll] for(int tap=-2;tap<=2;++tap) { float2 uv=clamp(i.uv+texel*tap,0,1); float s=inputAo.SampleLevel(uv,0).r; float4 guide=auxiliary.SampleLevel(uv,0); float depthDelta=abs(guide.x-center.x)*settings.depthSigma/max(center.x,1e-3); float depthWeight=rcp(1.0+depthDelta); float w=kernel[tap+2]*depthWeight*normalWeight(saturate(dot(cn,decodeOctNormal(guide.yz)))); sum+=s*w; wSum+=w; } o.value=sum/max(wSum,1e-5); return o; }

@@ -1,31 +1,97 @@
-void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity selected, const bool playing,
-                   const bool paused) {
+struct StatusBarState final {
+    std::size_t selectionCount{};
+    bool playing{};
+    bool paused{};
+    bool unsavedChanges{};
+    bool gameBuildRunning{};
+};
+
+void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity selected, const StatusBarState& state) {
+    const EditorUI::Palette& palette = EditorUI::colors();
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float barHeight = static_cast<float>(EditorConstants::statusBarHeight);
     ImGui::SetNextWindowPos({viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - barHeight});
     ImGui::SetNextWindowSize({viewport->WorkSize.x, barHeight});
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorUI::colors().surface);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14.0F, 6.0F});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, palette.titleBar);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {10.0F, 0.0F});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
     ImGui::Begin("##status-bar", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav);
-    const ImVec4 statusColor =
-        playing ? (paused ? EditorUI::colors().warning : EditorUI::colors().success) : EditorUI::colors().accent;
-    ImGui::TextColored(statusColor, "●");
-    ImGui::SameLine(0.0F, 8.0F);
-    ImGui::TextUnformatted(playing ? (paused ? "Paused" : "Playing") : "Ready");
-    ImGui::SameLine(0.0F, 12.0F);
-    ImGui::TextDisabled("Scene editor");
-    ImGui::SameLine(0.0F, 10.0F);
-    ImGui::TextDisabled("·");
-    ImGui::SameLine(0.0F, 10.0F);
-    ImGui::TextDisabled("%zu entities", scene.view().size());
-    ImGui::SameLine(0.0F, 10.0F);
-    ImGui::TextDisabled("·");
-    ImGui::SameLine(0.0F, 10.0F);
-    ImGui::TextDisabled("Selected: %s", selected == Engine::NullEntity ? "None" : entityName(scene, selected));
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 windowPos = ImGui::GetWindowPos();
+    drawList->AddLine(windowPos, {windowPos.x + ImGui::GetWindowWidth(), windowPos.y},
+                      ImGui::GetColorU32(palette.border));
+    const float textY = std::round((barHeight - ImGui::GetTextLineHeight()) * 0.5F);
+    const auto separator = [&] {
+        ImGui::SameLine(0.0F, 12.0F);
+        const ImVec2 position = ImGui::GetCursorScreenPos();
+        drawList->AddLine({position.x, windowPos.y + barHeight * 0.28F}, {position.x, windowPos.y + barHeight * 0.72F},
+                          ImGui::GetColorU32(palette.border));
+        ImGui::Dummy({1.0F, 1.0F});
+        ImGui::SameLine(0.0F, 12.0F);
+        ImGui::SetCursorPosY(textY);
+    };
+
+    // Mode pill: Ready / Playing / Paused.
+    const ImVec4 statusColor = state.playing ? (state.paused ? palette.warning : palette.success) : palette.accent;
+    const char* statusText = state.playing ? (state.paused ? "Paused" : "Playing") : "Ready";
+    ImGui::SetCursorPosY(textY - 1.0F);
+    EditorUI::badge(statusText, EditorUI::withAlpha(statusColor, 0.16F), statusColor);
+
+    separator();
+    const std::filesystem::path scenePath = EditorSceneSession::scenePath();
+    const std::string sceneName = scenePath.empty() ? std::string{"Untitled scene"} : scenePath.filename().string();
+    ImGui::TextUnformatted(sceneName.c_str());
+    if (state.unsavedChanges) {
+        ImGui::SameLine(0.0F, 6.0F);
+        ImGui::TextColored(palette.warning, "(unsaved)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Changes are auto-saved every 30 seconds, or press Ctrl+S.");
+    }
+
+    separator();
+    ImGui::TextDisabled("%zu objects", scene.view().size());
+    separator();
+    if (selected == Engine::NullEntity || state.selectionCount == 0) {
+        ImGui::TextDisabled("No selection");
+    } else if (state.selectionCount > 1) {
+        ImGui::TextDisabled("%zu selected", state.selectionCount);
+    } else {
+        ImGui::TextDisabled("Selected:");
+        ImGui::SameLine(0.0F, 4.0F);
+        ImGui::TextUnformatted(entityName(scene, selected));
+    }
+
+    // Right-aligned: background work and frame timing.
+    const ImGuiIO& io = ImGui::GetIO();
+    char timing[64]{};
+    std::snprintf(timing, sizeof(timing), "%.0f FPS  %.2f ms", io.Framerate,
+                  io.Framerate > 0.0F ? 1000.0F / io.Framerate : 0.0F);
+    const float timingWidth = ImGui::CalcTextSize(timing).x;
+    const char* buildText = "Building game...";
+    const float buildWidth = state.gameBuildRunning ? ImGui::CalcTextSize(buildText).x + 40.0F : 0.0F;
+    const float rightX = ImGui::GetWindowContentRegionMax().x - timingWidth - buildWidth;
+    ImGui::SameLine();
+    if (rightX > ImGui::GetCursorPosX() + 16.0F) {
+        ImGui::SetCursorPosX(rightX);
+        if (state.gameBuildRunning) {
+            const ImVec2 position = ImGui::GetCursorScreenPos();
+            const ImVec2 center{position.x + 7.0F, windowPos.y + barHeight * 0.5F};
+            const float time = static_cast<float>(ImGui::GetTime());
+            drawList->PathArcTo(center, 6.0F, time * 6.0F, time * 6.0F + 4.2F, 14);
+            drawList->PathStroke(ImGui::GetColorU32(palette.accent), ImDrawFlags_None, 2.0F);
+            ImGui::Dummy({18.0F, 1.0F});
+            ImGui::SameLine(0.0F, 4.0F);
+            ImGui::SetCursorPosY(textY);
+            ImGui::TextColored(palette.accent, "%s", buildText);
+            ImGui::SameLine(0.0F, 18.0F);
+            ImGui::SetCursorPosY(textY);
+        }
+        ImGui::TextDisabled("%s", timing);
+    }
     ImGui::End();
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 }
 
@@ -244,8 +310,8 @@ bool beginTopMenu(const char* label, const char* tooltip, Editor::WindowsTitleBa
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {11.0F, ImGui::GetStyle().FramePadding.y});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3.0F, 0.0F});
     ImGui::PushStyleColor(ImGuiCol_Header, {0.0F, 0.0F, 0.0F, 0.0F});
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, {0.10F, 0.36F, 0.48F, 0.88F});
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, {0.08F, 0.52F, 0.66F, 1.0F});
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorUI::colors().controlHover);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorUI::colors().accentMuted);
 
     const bool open = ImGui::BeginMenu(label);
     const ImVec2 itemMin = ImGui::GetItemRectMin();
@@ -290,17 +356,16 @@ void drawRestoreGlyph(ImDrawList* const drawList, const ImVec2 center, const flo
 
 } // namespace
 
-Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer,
-                                 Engine::Assets::Content& content, Engine::Project& project,
-                                 const std::filesystem::path& editorRoot, Editor::WindowsTitleBar& titleBar,
-                                 bool& antialiasingChanged, bool& sceneLoaded, bool& sceneSaved, bool& sceneDeleted,
-                                 const bool playing, const bool paused, bool& playToggleRequested,
-                                 bool& pauseToggleRequested, const bool canUndo, const bool canRedo,
-                                 const bool canPaste, bool& undoRequested, bool& redoRequested, bool& copyRequested,
-                                 bool& pasteRequested, bool& duplicateRequested, bool& resetHistoryRequested,
-                                 bool& showHierarchy, bool& showViewport, bool& showInspector, bool& showAssetManager,
-                                 bool& showTerrainTools, bool& showConsole, bool& showTerminal, bool& showShaderGraph,
-                                 bool& showGpuProfile, bool& gameBuildRequested) {
+Engine::Entity
+drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine::Assets::Content& content,
+                  Engine::Project& project, const std::filesystem::path& editorRoot, Editor::WindowsTitleBar& titleBar,
+                  bool& antialiasingChanged, bool& sceneLoaded, bool& sceneSaved, bool& sceneDeleted,
+                  const bool playing, const bool paused, bool& playToggleRequested, bool& pauseToggleRequested,
+                  bool& restartRequested, const bool canUndo, const bool canRedo, const bool canPaste,
+                  bool& undoRequested, bool& redoRequested, bool& copyRequested, bool& pasteRequested,
+                  bool& duplicateRequested, bool& resetHistoryRequested, bool& showHierarchy, bool& showViewport,
+                  bool& showInspector, bool& showAssetManager, bool& showTerrainTools, bool& showConsole,
+                  bool& showTerminal, bool& showShaderGraph, bool& showGpuProfile, bool& gameBuildRequested) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -444,8 +509,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     }
 
     titleBar.clearHitRegions();
-    const float titleHeight = static_cast<float>(titleBar.nativeHeight());
     const float fontHeight = ImGui::GetFontSize();
+    // Without a native caption (Linux) give the bar the same breathing room
+    // as the Windows title bar, so menus and play controls are not cramped.
+    const float titleHeight = std::max(static_cast<float>(titleBar.nativeHeight()), std::round(fontHeight + 14.0F));
     const float paddingY = std::max(0.0F, (titleHeight - fontHeight) * 0.5F);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.0F, paddingY});
     if (!ImGui::BeginMainMenuBar()) {
@@ -819,6 +886,60 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
         endTopMenu();
     }
 
+    // Play controls are centred in the title bar, where they stay reachable
+    // whatever the dock layout is, instead of living inside one panel.
+    {
+        const EditorUI::Palette& palette = EditorUI::colors();
+        const float barHeight = ImGui::GetFrameHeight();
+        const float buttonHeight = std::round(barHeight * 0.76F);
+        const ImVec2 buttonSize{std::round(buttonHeight * 1.35F), buttonHeight};
+        constexpr float gap = 2.0F;
+        const float groupWidth = buttonSize.x * 3.0F + gap * 2.0F;
+        const float windowWidth = ImGui::GetWindowWidth();
+        const float rightLimit =
+            captionButtonsStart > 0.0F ? captionButtonsStart - ImGui::GetWindowPos().x - 8.0F : windowWidth - 8.0F;
+        const float groupX = std::max(std::round((windowWidth - groupWidth) * 0.5F), ImGui::GetCursorPosX() + 16.0F);
+        if (groupX + groupWidth <= rightLimit) {
+            const float groupY = std::round((barHeight - buttonHeight) * 0.5F);
+            const ImVec2 groupMin{ImGui::GetWindowPos().x + groupX - 3.0F, ImGui::GetWindowPos().y + groupY - 3.0F};
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                groupMin, {groupMin.x + groupWidth + 6.0F, groupMin.y + buttonHeight + 6.0F},
+                ImGui::GetColorU32(playing ? EditorUI::withAlpha(palette.success, 0.12F) : palette.surface),
+                ImGui::GetStyle().FrameRounding + 2.0F);
+            const auto registerHitRegion = [&] {
+                const ImVec2 min = ImGui::GetItemRectMin();
+                const ImVec2 max = ImGui::GetItemRectMax();
+                titleBar.addHitRegion(min.x, min.y, max.x, max.y, Editor::WindowsTitleBar::clientHitTestResult);
+            };
+            ImGui::SetCursorPos({groupX, groupY});
+            if (EditorUI::iconButton(
+                    "##title-play", playing ? EditorUI::Icon::Stop : EditorUI::Icon::Play,
+                    playing ? "Stop Play Mode and restore the editor scene (F5)" : "Enter Play Mode (F5)",
+                    {.active = playing, .size = buttonSize, .tint = playing ? palette.error : palette.success})) {
+                playToggleRequested = true;
+            }
+            registerHitRegion();
+            ImGui::SameLine(0.0F, gap);
+            ImGui::SetCursorPosY(groupY);
+            ImGui::BeginDisabled(!playing);
+            if (EditorUI::iconButton("##title-pause", EditorUI::Icon::Pause, paused ? "Resume (F6)" : "Pause (F6)",
+                                     {.active = paused,
+                                      .size = buttonSize,
+                                      .tint = paused ? std::optional{palette.warning} : std::nullopt})) {
+                pauseToggleRequested = true;
+            }
+            registerHitRegion();
+            ImGui::SameLine(0.0F, gap);
+            ImGui::SetCursorPosY(groupY);
+            if (EditorUI::iconButton("##title-restart", EditorUI::Icon::Restart,
+                                     "Restart Play Mode from the editor scene", {.size = buttonSize})) {
+                restartRequested = true;
+            }
+            registerHitRegion();
+            ImGui::EndDisabled();
+        }
+    }
+
     if (captionButtonsStart > 0.0F)
         ImGui::PopClipRect();
 
@@ -993,27 +1114,69 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     }
 
     if (showShortcuts) {
-        ImGui::Begin("Keyboard Shortcuts", &showShortcuts);
-        ImGui::TextUnformatted("Editor shortcuts");
-        ImGui::Separator();
-        ImGui::BulletText("Scene View: hold RMB to look; RMB + WASD moves");
-        ImGui::BulletText("Scene View: Q / E down/up, Shift speeds up, MMB pans, wheel zooms");
-        ImGui::BulletText("Gizmos: W move, E rotate, R scale");
-        ImGui::BulletText("Hold Ctrl while transforming: position 0.25, rotation 15°, scale 0.1");
-        ImGui::BulletText("Ctrl + move also snaps nearby mesh faces and vertices together");
-        ImGui::BulletText("Delete: remove selected object");
-        ImGui::BulletText("Ctrl+C / Ctrl+V: copy and paste selected object");
-        ImGui::BulletText("Ctrl+D: duplicate selected object");
-        ImGui::BulletText("Ctrl+Z / Ctrl+Y: undo / redo scene edits");
+        ImGui::SetNextWindowSize({560.0F, 0.0F}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Keyboard Shortcuts", &showShortcuts, ImGuiWindowFlags_NoDocking)) {
+            struct Shortcut final {
+                const char* keys;
+                const char* action;
+            };
+            static constexpr Shortcut sceneView[]{
+                {"RMB", "Look around"}, {"RMB+W A S D", "Fly"}, {"Q / E", "Move down / up"},   {"Shift", "Move faster"},
+                {"MMB", "Pan"},         {"Wheel", "Zoom"},      {"F", "Focus selected object"}};
+            static constexpr Shortcut gizmos[]{{"W", "Move"},
+                                               {"E", "Rotate"},
+                                               {"R", "Scale"},
+                                               {"Ctrl", "Snap: 0.25 m, 15 deg, 0.1 scale; snaps to nearby meshes"}};
+            static constexpr Shortcut editing[]{{"Ctrl+Z", "Undo"},
+                                                {"Ctrl+Y", "Redo"},
+                                                {"Ctrl+C", "Copy object"},
+                                                {"Ctrl+V", "Paste object"},
+                                                {"Ctrl+D", "Duplicate object"},
+                                                {"Delete", "Delete object"},
+                                                {"Ctrl+Shift+N", "Create empty object"}};
+            static constexpr Shortcut playMode[]{
+                {"F5", "Play / Stop"}, {"F6", "Pause / Resume"}, {"Esc", "Release mouse"}};
+            struct ShortcutGroup final {
+                const char* title;
+                std::span<const Shortcut> shortcuts;
+            };
+            const std::array groups{ShortcutGroup{"Scene View", sceneView}, ShortcutGroup{"Gizmos", gizmos},
+                                    ShortcutGroup{"Editing", editing}, ShortcutGroup{"Play Mode", playMode}};
+            for (const ShortcutGroup& group : groups) {
+                ImGui::SeparatorText(group.title);
+                if (ImGui::BeginTable(group.title, 2, ImGuiTableFlags_SizingFixedFit)) {
+                    ImGui::TableSetupColumn("keys", ImGuiTableColumnFlags_WidthFixed, 150.0F);
+                    ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthStretch);
+                    for (const Shortcut& shortcut : group.shortcuts) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        EditorUI::keyChip(shortcut.keys);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted(shortcut.action);
+                    }
+                    ImGui::EndTable();
+                }
+            }
+        }
         ImGui::End();
     }
 
     if (showAbout) {
-        ImGui::Begin("About GamEngine Editor", &showAbout);
-        ImGui::TextUnformatted("GamEngine Editor");
-        ImGui::TextUnformatted("A lightweight scene and particle editor.");
-        ImGui::Separator();
-        ImGui::TextUnformatted("Unity-inspired workspace");
+        ImGui::SetNextWindowSize({420.0F, 0.0F}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("About GamEngine Editor", &showAbout, ImGuiWindowFlags_NoDocking)) {
+            EditorUI::iconLabel(EditorUI::Icon::Mesh, EditorUI::colors().accent, ImGui::GetFontSize() * 1.4F);
+            ImGui::SameLine();
+            ImGui::TextUnformatted("GamEngine Editor");
+            ImGui::TextDisabled("Experimental GPU-driven 3D engine built on Vulkan 1.4 and SDL3.");
+            ImGui::Separator();
+            ImGui::TextDisabled("Project");
+            ImGui::SameLine(90.0F);
+            ImGui::TextUnformatted(project.name().c_str());
+            ImGui::TextDisabled("ImGui");
+            ImGui::SameLine(90.0F);
+            ImGui::TextUnformatted(IMGUI_VERSION);
+        }
         ImGui::End();
     }
 

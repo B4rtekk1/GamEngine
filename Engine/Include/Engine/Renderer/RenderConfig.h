@@ -88,10 +88,6 @@ struct GtaoQualitySettings final {
     std::uint32_t stepsPerDirection;
     std::uint32_t depthMipCount;
     std::uint32_t denoisePassCount;
-    bool temporal;
-    float historyWeight;
-    bool specularOcclusion;
-    bool bentNormals;
 };
 
 constexpr GtaoQualitySettings gtaoQualitySettings(const GtaoQuality quality) noexcept {
@@ -101,61 +97,37 @@ constexpr GtaoQualitySettings gtaoQualitySettings(const GtaoQuality quality) noe
                 .directions = 1,
                 .stepsPerDirection = 2,
                 .depthMipCount = 2,
-                .denoisePassCount = 1,
-                .temporal = false,
-                .historyWeight = 0.F,
-                .specularOcclusion = false,
-                .bentNormals = false};
+                .denoisePassCount = 1};
     case GtaoQuality::Medium:
         return {.resolutionScale = 1.F,
                 .directions = 2,
                 .stepsPerDirection = 2,
                 .depthMipCount = 3,
-                .denoisePassCount = 1,
-                .temporal = false,
-                .historyWeight = 0.F,
-                .specularOcclusion = false,
-                .bentNormals = false};
+                .denoisePassCount = 1};
     case GtaoQuality::High:
         return {.resolutionScale = 1.F,
                 .directions = 3,
                 .stepsPerDirection = 3,
                 .depthMipCount = 5,
-                .denoisePassCount = 1,
-                .temporal = false,
-                .historyWeight = 0.F,
-                .specularOcclusion = false,
-                .bentNormals = false};
+                .denoisePassCount = 1};
     case GtaoQuality::Ultra:
         return {.resolutionScale = 1.F,
                 .directions = 9,
                 .stepsPerDirection = 3,
                 .depthMipCount = 5,
-                .denoisePassCount = 1,
-                .temporal = false,
-                .historyWeight = 0.F,
-                .specularOcclusion = false,
-                .bentNormals = false};
+                .denoisePassCount = 1};
     case GtaoQuality::PerformanceHalf:
         return {.resolutionScale = .5F,
                 .directions = 3,
                 .stepsPerDirection = 2,
                 .depthMipCount = 2,
-                .denoisePassCount = 1,
-                .temporal = false,
-                .historyWeight = 0.F,
-                .specularOcclusion = false,
-                .bentNormals = false};
+                .denoisePassCount = 1};
     case GtaoQuality::BalancedHalf:
         return {.resolutionScale = .5F,
                 .directions = 4,
                 .stepsPerDirection = 3,
                 .depthMipCount = 3,
-                .denoisePassCount = 1,
-                .temporal = false,
-                .historyWeight = 0.F,
-                .specularOcclusion = false,
-                .bentNormals = false};
+                .denoisePassCount = 1};
     }
     return gtaoQualitySettings(GtaoQuality::High);
 }

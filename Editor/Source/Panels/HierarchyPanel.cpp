@@ -4,6 +4,7 @@
 #include "Editor/EditorUi.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/Panels/ConsolePanel.h"
+#include "Editor/UI/EditorIcons.h"
 #include "Editor/UI/EditorTheme.h"
 #include "Editor/UI/EditorWidgets.h"
 #include "Engine/Assets/Content.h"
@@ -13,6 +14,8 @@
 #include "imgui_internal.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <exception>
 #include <string>
 #include <unordered_set>
@@ -109,16 +112,14 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
     };
     ImGui::Begin("Hierarchy", &isOpen);
     static char filter[64] = {};
-    const float addButtonWidth = 28.0F;
+    const float addButtonWidth = ImGui::GetFrameHeight();
     EditorUI::searchBox("##hierarchy-filter", "Search objects...", filter, sizeof(filter),
                         ImGui::GetContentRegionAvail().x - addButtonWidth - ImGui::GetStyle().ItemSpacing.x);
     ImGui::SameLine();
     ImGui::BeginDisabled(disabled);
-    if (ImGui::SmallButton("+##hierarchy-create")) {
+    if (EditorUI::iconButton("##hierarchy-create", EditorUI::Icon::Plus, "Create an object in the scene",
+                             {.size = {addButtonWidth, ImGui::GetFrameHeight()}})) {
         ImGui::OpenPopup("Create Object");
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Create an object in the scene");
     }
     if (ImGui::BeginPopup("Create Object")) {
         createObjectMenu();
@@ -126,15 +127,19 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
     }
     ImGui::EndDisabled();
     if (!scene.hasUsablePrimaryCamera()) {
-        ImGui::TextColored(EditorUI::colors().warning, "! No usable primary camera — fallback camera is active");
+        EditorUI::iconLabel(EditorUI::Icon::Warning, EditorUI::colors().warning);
+        ImGui::SameLine(0.0F, 6.0F);
+        ImGui::TextColored(EditorUI::colors().warning, "No usable primary camera; using fallback");
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Add a perspective CameraComponent with Transform and mark it Primary.");
         }
     }
     ImGui::Spacing();
 
+    char sceneLabel[64]{};
+    std::snprintf(sceneLabel, sizeof(sceneLabel), "Scene  (%zu)###hierarchy-scene-root", scene.editor().size());
     const bool sceneOpen =
-        ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth);
+        ImGui::TreeNodeEx(sceneLabel, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth);
     if (ImGui::BeginDragDropTarget()) {
         acceptModelDrop();
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_ENTITY")) {
@@ -201,28 +206,49 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
         const auto drawRowControls = [&](const Engine::Entity entity) {
             const bool hidden = hiddenEntities.contains(entity);
             const bool locked = lockedEntities.contains(entity);
+            const EditorUI::Palette& palette = EditorUI::colors();
+            const ImVec2 toggleSize{ImGui::GetFontSize() + 2.0F, ImGui::GetFontSize()};
             ImGui::PushID(static_cast<int>(entity));
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  hidden ? EditorUI::colors().textSecondary : EditorUI::colors().textPrimary);
-            if (ImGui::SmallButton(hidden ? "-##visibility" : "o##visibility")) {
+            if (EditorUI::iconButton(
+                    "##visibility", hidden ? EditorUI::Icon::EyeOff : EditorUI::Icon::Eye,
+                    hidden ? "Show in Scene View" : "Hide in Scene View",
+                    {.size = toggleSize,
+                     .tint = hidden ? EditorUI::withAlpha(palette.textSecondary, 0.55F) : palette.textSecondary})) {
                 if (hidden)
                     hiddenEntities.erase(entity);
                 else
                     hiddenEntities.insert(entity);
             }
-            ImGui::PopStyleColor();
-            ImGui::SameLine(0.0F, 2.0F);
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  locked ? EditorUI::colors().warning : EditorUI::colors().textSecondary);
-            if (ImGui::SmallButton(locked ? "L##lock" : "l##lock")) {
+            ImGui::SameLine(0.0F, 0.0F);
+            if (EditorUI::iconButton(
+                    "##lock", locked ? EditorUI::Icon::Lock : EditorUI::Icon::Unlock,
+                    locked ? "Unlock editing" : "Lock editing",
+                    {.size = toggleSize,
+                     .tint = locked ? palette.warning : EditorUI::withAlpha(palette.textSecondary, 0.35F)})) {
                 if (locked)
                     lockedEntities.erase(entity);
                 else
                     lockedEntities.insert(entity);
             }
-            ImGui::PopStyleColor();
-            ImGui::SameLine(0.0F, 5.0F);
+            ImGui::SameLine(0.0F, 4.0F);
             ImGui::PopID();
+        };
+        // Tree node text starts after the disclosure arrow. Reserve room for
+        // the type icon with leading spaces and draw the icon into that gap.
+        const float iconSize = ImGui::GetFontSize() * 0.92F;
+        const float spaceWidth = std::max(1.0F, ImGui::CalcTextSize(" ").x);
+        const int iconSpaces = static_cast<int>(std::ceil((iconSize + 5.0F) / spaceWidth));
+        const auto drawTypeIcon = [&](const Engine::Entity entity) {
+            const ImVec2 min = ImGui::GetItemRectMin();
+            const ImVec2 max = ImGui::GetItemRectMax();
+            const float textX = min.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 2.0F;
+            const EditorUI::Icon icon = EditorUI::entityIcon(scene, entity);
+            ImVec4 color = EditorUI::entityIconColor(icon);
+            if (hiddenEntities.contains(entity))
+                color.w *= 0.45F;
+            EditorUI::drawIcon(ImGui::GetWindowDrawList(), icon,
+                               {std::round(textX + iconSize * 0.5F), std::round((min.y + max.y) * 0.5F)}, iconSize,
+                               ImGui::GetColorU32(color));
         };
         const auto drawNode = [&](auto&& self, const Engine::Entity entity) -> void {
             if (!visited.insert(entity).second) {
@@ -238,7 +264,8 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
             // Use the complete ECS handle for ImGui's hidden ID. The index
             // alone is not a stable identity because Registry recycles slots
             // and distinguishes them by generation.
-            std::snprintf(label, sizeof(label), "%s##%llu", name, static_cast<unsigned long long>(entity));
+            std::snprintf(label, sizeof(label), "%*s%s##%llu", iconSpaces, "", name,
+                          static_cast<unsigned long long>(entity));
             const auto drawContextMenu = [&] {
                 if (!ImGui::BeginPopupContextItem()) {
                     return;
@@ -272,12 +299,16 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
                 ImGui::EndPopup();
             };
             if (!hasChildren) {
+                // Leaves are leaf tree nodes, so their icons and names line
+                // up with expandable siblings instead of shifting left.
                 drawRowControls(entity);
-                ImGui::TextDisabled("▣");
-                ImGui::SameLine(0.0F, 4.0F);
-                if (ImGui::Selectable(label, selected(entity))) {
+                ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                                             ImGuiTreeNodeFlags_SpanAvailWidth |
+                                             (selected(entity) ? ImGuiTreeNodeFlags_Selected : 0));
+                if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
                     clicked = entity;
                 }
+                drawTypeIcon(entity);
                 if (ImGui::BeginDragDropSource()) {
                     ImGui::SetDragDropPayload("HIERARCHY_ENTITY", &entity, sizeof(entity));
                     ImGui::TextUnformatted(name);
@@ -297,11 +328,11 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
             const ImGuiTreeNodeFlags flags =
                 ImGuiTreeNodeFlags_SpanAvailWidth | (selected(entity) ? ImGuiTreeNodeFlags_Selected : 0);
             drawRowControls(entity);
-            ImGui::SameLine(0.0F, 4.0F);
-            const bool open = ImGui::TreeNodeEx(label, flags);
-            if (ImGui::IsItemClicked()) {
+            const bool open = ImGui::TreeNodeEx(label, flags | ImGuiTreeNodeFlags_OpenOnArrow);
+            if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
                 clicked = entity;
             }
+            drawTypeIcon(entity);
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload("HIERARCHY_ENTITY", &entity, sizeof(entity));
                 ImGui::TextUnformatted(name);

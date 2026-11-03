@@ -844,6 +844,8 @@ void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
 }
 
 void createSkyPass() const {
+    // The sky is drawn inside the lighting forward pass, which has no velocity
+    // attachment (velocity is written once, by the depth prepass).
     std::vector<VkBuffer> buffers;
     buffers.reserve(uniformBuffers.size());
     for (const Buffer& buffer : uniformBuffers) {
@@ -851,8 +853,7 @@ void createSkyPass() const {
     }
     skyPass.create(vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(), HdrBuffer::Format,
                    depthBuffer.format(), msaa.sampleCount(), buffers, sizeof(UniformBufferObject), assetManager,
-                   vulkanDevice.allocator(),
-                   antialiasingLevel == AntialiasingLevel::TAA ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED);
+                   vulkanDevice.allocator());
     skyPass.setEnvironment(imageBasedLighting.environmentDescriptor());
 }
 

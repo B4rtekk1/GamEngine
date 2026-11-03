@@ -16,17 +16,30 @@ struct Settings {
     float projectionA, projectionB;
 };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
-// A 16x16 output tile and a one-pixel halo share the filtered current
-// samples used by the clipping statistics. Store channels separately so
-// adjacent lanes access adjacent shared-memory words.
+// A 16x16 output tile and a one-pixel halo share the current-frame samples
+// (colour, effective depth and water metadata) used by the reconstruction
+// filter, clipping statistics and the nearest-depth motion search. Store
+// channels separately so adjacent lanes access adjacent shared-memory words.
 groupshared float tileRed[18 * 18];
 groupshared float tileGreen[18 * 18];
 groupshared float tileBlue[18 * 18];
+groupshared float tileAlpha[18 * 18];
+groupshared float tileDepth[18 * 18];
+groupshared uint tileQuality[18 * 18];
+// Largest finite FP16 value; keeps linear history from overflowing to inf.
+static const float MaxHdr = 65000.0;
 float3 reinhard(float3 color) { return color / (color + 1.0); }
-float3 reinhardInverse(float3 color) { return color / max(1.0 - color, 1e-5); }
+float3 reinhardInverse(float3 color) { return color / max(1.0 - color, 1e-6); }
 float viewDepth(float deviceDepth) {
     // Perspective RH_ZO: deviceDepth = -projectionA + projectionB / distance.
     return settings.projectionB / min(deviceDepth + settings.projectionA, -1e-6);
+}
+
+// History is stored as linear HDR (FP16 keeps relative precision for very
+// bright pixels, unlike a Reinhard-compressed value close to 1). Tonemap
+// each tap so clipping still happens in the compressed domain.
+float3 historyTap(float2 uv) {
+    return reinhard(min(max(historyFrame.SampleLevel(uv, 0.0).rgb, 0.0), MaxHdr));
 }
 
 // Nine bilinear taps reconstruct the 4x4 Catmull-Rom footprint.
@@ -43,15 +56,15 @@ float3 sampleHistoryCatmullRom(float2 uv, float2 resolution) {
     const float2 uv12 = (texPos1 + w2 / w12) / resolution;
     const float2 uv3 = (texPos1 + 2.0) / resolution;
     float3 cubic = 0.0;
-    cubic += historyFrame.SampleLevel(float2(uv0.x, uv0.y), 0.0).rgb * w0.x * w0.y;
-    cubic += historyFrame.SampleLevel(float2(uv12.x, uv0.y), 0.0).rgb * w12.x * w0.y;
-    cubic += historyFrame.SampleLevel(float2(uv3.x, uv0.y), 0.0).rgb * w3.x * w0.y;
-    cubic += historyFrame.SampleLevel(float2(uv0.x, uv12.y), 0.0).rgb * w0.x * w12.y;
-    cubic += historyFrame.SampleLevel(float2(uv12.x, uv12.y), 0.0).rgb * w12.x * w12.y;
-    cubic += historyFrame.SampleLevel(float2(uv3.x, uv12.y), 0.0).rgb * w3.x * w12.y;
-    cubic += historyFrame.SampleLevel(float2(uv0.x, uv3.y), 0.0).rgb * w0.x * w3.y;
-    cubic += historyFrame.SampleLevel(float2(uv12.x, uv3.y), 0.0).rgb * w12.x * w3.y;
-    cubic += historyFrame.SampleLevel(float2(uv3.x, uv3.y), 0.0).rgb * w3.x * w3.y;
+    cubic += historyTap(float2(uv0.x, uv0.y)) * w0.x * w0.y;
+    cubic += historyTap(float2(uv12.x, uv0.y)) * w12.x * w0.y;
+    cubic += historyTap(float2(uv3.x, uv0.y)) * w3.x * w0.y;
+    cubic += historyTap(float2(uv0.x, uv12.y)) * w0.x * w12.y;
+    cubic += historyTap(float2(uv12.x, uv12.y)) * w12.x * w12.y;
+    cubic += historyTap(float2(uv3.x, uv12.y)) * w3.x * w12.y;
+    cubic += historyTap(float2(uv0.x, uv3.y)) * w0.x * w3.y;
+    cubic += historyTap(float2(uv12.x, uv3.y)) * w12.x * w3.y;
+    cubic += historyTap(float2(uv3.x, uv3.y)) * w3.x * w3.y;
     return max(cubic, 0.0);
 }
 
@@ -88,48 +101,69 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const uint lane = threadId.y * 16u + threadId.x;
     for (uint index = lane; index < 18u * 18u; index += 256u) {
         const int2 tilePixel = int2(groupId.xy) * 16 + int2(index % 18u, index / 18u) - 1;
-        const float2 sampleUv = clamp((float2(tilePixel) + 0.5) * texel - currentJitter,
-                                     texel * 0.5, 1.0 - texel * 0.5);
-        const float3 sample = reinhard(max(currentFrame.SampleLevel(sampleUv, 0.0).rgb, 0.0));
+        // Exact texel centres: no bilinear blur of the current frame.
+        const int2 clampedPixel = clamp(tilePixel, int2(0, 0), extent - 1);
+        const float2 sampleUv = (float2(clampedPixel) + 0.5) * texel;
+        const float4 raw = currentFrame.SampleLevel(sampleUv, 0.0);
+        const float3 sample = reinhard(min(max(raw.rgb, 0.0), MaxHdr));
+        const uint quality = settings.padding > 0.5 ? asuint(waterMetaFrame.SampleLevel(sampleUv, 0.0).y) : 0u;
         tileRed[index] = sample.r;
         tileGreen[index] = sample.g;
         tileBlue[index] = sample.b;
+        tileAlpha[index] = raw.a;
+        tileQuality[index] = quality;
+        tileDepth[index] = (quality & 0x80000000u) != 0 ? waterSurfaceFrame.SampleLevel(sampleUv, 0.0).z
+                                                        : currentDepthFrame.SampleLevel(sampleUv, 0.0).r;
     }
     // Partial workgroups must populate the halo and reach the barrier too.
     GroupMemoryBarrierWithGroupSync();
     if (any(dispatchId.xy >= uint2(extent))) return;
-    const float2 currentUv = clamp(outputUv - currentJitter, texel * 0.5, 1.0 - texel * 0.5);
     const uint centerIndex = (threadId.y + 1u) * 18u + threadId.x + 1u;
-    const float3 currentTm = float3(tileRed[centerIndex], tileGreen[centerIndex], tileBlue[centerIndex]);
-    const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.SampleLevel(currentUv, 0.0).y) : 0u;
-    const bool waterPixel = (waterQuality & 0x80000000u) != 0;
-    const float currentDepth = waterPixel ? waterSurfaceFrame.SampleLevel(currentUv, 0.0).z
-                                          : currentDepthFrame.SampleLevel(currentUv, 0.0).r;
-    const float glassReactive = saturate(-currentFrame.SampleLevel(currentUv, 0.0).a);
+    const uint waterQuality = tileQuality[centerIndex];
+    const float currentDepth = tileDepth[centerIndex];
+    const float glassReactive = saturate(-tileAlpha[centerIndex]);
     const float reactive = max(glassReactive, (waterQuality & 0x40000000u) != 0 ? 1.0 : 0.0);
-    // At a silhouette, bilinear velocity may contain the background's motion
-    // even though the current pixel belongs to the foreground.  Vulkan's
-    // depth convention is near=0, so select the velocity at the nearest depth
-    // in a compact 3x3 footprint before reprojection.
+
+    // Reconstruct the current colour with a Gaussian (Blackman-Harris-like)
+    // weight around the jittered sample positions, and gather the neighbourhood
+    // statistics used for clipping, and the nearest-depth sample used for motion
+    // (at a silhouette bilinear velocity may belong to the background; Vulkan
+    // depth convention is near=0).
+    const float2 jitterPixels = currentJitter * resolution;
+    float3 mean = 0.0;
+    float3 meanSquared = 0.0;
+    float totalWeight = 0.0;
+    float3 filtered = 0.0;
+    float filterWeight = 0.0;
     float nearestDepth = currentDepth;
-    float2 nearestUv = currentUv;
-    bool nearestWater = waterPixel;
+    int2 nearestOffset = int2(0, 0);
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
-            const float2 sampleUv = clamp(currentUv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
-            const uint sampleWaterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.SampleLevel(sampleUv, 0.0).y) : 0u;
-            const bool sampleWater = (sampleWaterQuality & 0x80000000u) != 0;
-            const float sampleDepth = sampleWater ? waterSurfaceFrame.SampleLevel(sampleUv, 0.0).z
-                                                  : currentDepthFrame.SampleLevel(sampleUv, 0.0).r;
+            const uint index = uint(int(centerIndex) + y * 18 + x);
+            const float3 sample = float3(tileRed[index], tileGreen[index], tileBlue[index]);
+            const float weight = exp(-3.0 * float(x * x + y * y) / 4.0);
+            mean += sample * weight;
+            meanSquared += sample * sample * weight;
+            totalWeight += weight;
+            const float2 d = float2(x, y) + jitterPixels;
+            const float reconstruction = exp(-3.2 * dot(d, d));
+            filtered += sample * reconstruction;
+            filterWeight += reconstruction;
+            const float sampleDepth = tileDepth[index];
             if (sampleDepth < nearestDepth) {
                 nearestDepth = sampleDepth;
-                nearestUv = sampleUv;
-                nearestWater = sampleWater;
+                nearestOffset = int2(x, y);
             }
         }
     }
-    // Fetch motion only for the winning depth sample, rather than on every
-    // intermediate improvement while scanning the neighbourhood.
+    mean /= totalWeight;
+    meanSquared /= totalWeight;
+    const float3 currentTm = filtered / filterWeight;
+    const uint nearestIndex = uint(int(centerIndex) + nearestOffset.y * 18 + nearestOffset.x);
+    const bool nearestWater = (tileQuality[nearestIndex] & 0x80000000u) != 0;
+    const int2 nearestPixel = clamp(int2(dispatchId.xy) + nearestOffset, int2(0, 0), extent - 1);
+    const float2 nearestUv = (float2(nearestPixel) + 0.5) * texel;
+    // Fetch motion only for the winning depth sample.
     const float2 velocitySample = nearestWater ? waterVelocityFrame.SampleLevel(nearestUv, 0.0).xy
                                                : velocityFrame.SampleLevel(nearestUv, 0.0).xy;
 
@@ -144,37 +178,17 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     // loses too much precision near the far plane in a half-float image.
     const float currentViewDepth = viewDepth(currentDepth);
     const float historyViewDepth = historyDepthFrame.SampleLevel(historyUv, 0.0).r;
-    const bool depthMatches = abs(currentViewDepth - historyViewDepth) <=
-        0.02 * max(currentViewDepth, historyViewDepth);
-    if (!historyInBounds || !depthMatches || settings.historyWeight <= 0.0) {
-        resolvedFrame[dispatchId.xy] = float4(reinhardInverse(currentTm), 1.0);
+    // Soft disocclusion: full weight inside the tolerance, fading to zero at
+    // twice the tolerance instead of a hard cut that flickers on edges.
+    const float depthTolerance = 0.02 * max(max(currentViewDepth, historyViewDepth), 1e-4);
+    const float depthWeight = saturate(2.0 - abs(currentViewDepth - historyViewDepth) / depthTolerance);
+    if (!historyInBounds || depthWeight <= 0.0 || settings.historyWeight <= 0.0) {
+        resolvedFrame[dispatchId.xy] = float4(min(reinhardInverse(currentTm), MaxHdr), 1.0);
         resolvedDepthFrame[dispatchId.xy] = currentViewDepth;
-        resolvedHistoryFrame[dispatchId.xy] = float4(currentTm, glassReactive > 0.0 ? -1.0 : 1.0);
+        resolvedHistoryFrame[dispatchId.xy] = float4(min(reinhardInverse(currentTm), MaxHdr), glassReactive > 0.0 ? -1.0 : 1.0);
         return;
     }
 
-    // Compute clipping statistics around the reconstructed current sample.
-    float3 mean = 0.0;
-    float3 meanSquared = 0.0;
-    float totalWeight = 0.0;
-    // At viewport edges the original shader clamps the centre before adding
-    // offsets. Preserve that footprint; interior pixels use the shared tile.
-    const bool clampedCenter = any(currentUv != outputUv - currentJitter);
-    [unroll] for (int y = -1; y <= 1; ++y) {
-        [unroll] for (int x = -1; x <= 1; ++x) {
-            const float2 sampleUv = clamp(currentUv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
-            const uint index = uint(int(centerIndex) + y * 18 + x);
-            const float3 sample = clampedCenter
-                ? reinhard(max(currentFrame.SampleLevel(sampleUv, 0.0).rgb, 0.0))
-                : float3(tileRed[index], tileGreen[index], tileBlue[index]);
-            const float weight = exp(-3.0 * float(x * x + y * y) / 4.0);
-            mean += sample * weight;
-            meanSquared += sample * sample * weight;
-            totalWeight += weight;
-        }
-    }
-    mean /= totalWeight;
-    meanSquared /= totalWeight;
     const float motionPixels = length(physicalVelocity * resolution);
     const float motionT = saturate(motionPixels / 32.0);
     const float boxSize = lerp(2.5, 0.5, motionT * motionT * (3.0 - 2.0 * motionT));
@@ -183,10 +197,14 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     history = clipAabb(mean - deviation, mean + deviation, mean, history);
 
     const float previousGlassReactive = saturate(-historyFrame.SampleLevel(historyUv, 0.0).a);
-    const float historyWeight = settings.historyWeight * lerp(1.0, 0.12, max(reactive, previousGlassReactive));
-    const float3 resolvedTm = lerp(currentTm, history,
-        (historyInBounds && depthMatches) ? historyWeight : 0.0);
-    resolvedFrame[dispatchId.xy] = float4(reinhardInverse(resolvedTm), 1.0);
+    // Constant feedback keeps the accumulation long enough to resolve sub-pixel
+    // edges; only glass/water and soft disocclusions shorten it.
+    float historyWeight = settings.historyWeight;
+    historyWeight *= lerp(1.0, 0.12, max(reactive, previousGlassReactive));
+    historyWeight *= depthWeight;
+    const float3 resolvedTm = lerp(currentTm, history, historyWeight);
+    const float3 resolvedLinear = min(reinhardInverse(resolvedTm), MaxHdr);
+    resolvedFrame[dispatchId.xy] = float4(resolvedLinear, 1.0);
     resolvedDepthFrame[dispatchId.xy] = currentViewDepth;
-    resolvedHistoryFrame[dispatchId.xy] = float4(resolvedTm, glassReactive > 0.0 ? -1.0 : 1.0);
+    resolvedHistoryFrame[dispatchId.xy] = float4(resolvedLinear, glassReactive > 0.0 ? -1.0 : 1.0);
 }

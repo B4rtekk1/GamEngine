@@ -46,7 +46,7 @@
 #include <utility>
 
 static bool drawRemovableComponentHeader(const char* label, const char* id, bool& remove) {
-    const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+    const bool open = EditorUI::collapsingSection(label);
     // SameLine(pos_x) is relative to the content origin.  Using
     // GetWindowContentRegionMax() here placed the button outside the active
     // item/clip region in the editor after the ImGui backend became shared.
@@ -68,17 +68,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
                            std::vector<Engine::Entity>& deferredWaterBodyRemovals, bool& isOpen) {
     const Engine::Entity selected = active;
     ImGui::Begin("Inspector", &isOpen);
-    EditorUI::panelHeader("Inspector");
-    if (selected != Engine::NullEntity && scene.editor().valid(selected)) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("/ %s", entityName(scene, selected));
-    }
     if (selected == Engine::NullEntity || selection.empty()) {
-        ImGui::Spacing();
-        ImGui::Spacing();
-        ImGui::Spacing();
+        ImGui::Dummy({0.0F, ImGui::GetContentRegionAvail().y * 0.18F});
         EditorUI::emptyState(
-            EditorUI::Icons::empty, "Nothing selected",
+            EditorUI::Icon::Layers, "Nothing selected",
             "Pick an object in the Hierarchy or click it in the Scene View to edit its properties here.");
         if (!scene.hasUsablePrimaryCamera()) {
             ImGui::Spacing();
@@ -96,28 +89,57 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
     // source object is reused when a duplicate becomes selected in the same
     // panel, making the inspector appear to keep editing the original.
     ImGui::PushID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(selected)));
-    ImGui::TextColored(EditorUI::colors().textPrimary, "%s", entityName(scene, selected));
-    ImGui::SameLine();
-    ImGui::TextDisabled("· Entity %u", Engine::entityIndex(selected));
+    // Identity row: type icon, editable name and the ECS index. The name field
+    // doubles as the title, so the object name is not repeated above it.
     const bool multiSelection = selection.size() > 1;
-    if (multiSelection)
-        ImGui::TextDisabled("%zu objects selected · editing common Transform", selection.size());
-    if (!multiSelection && scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
-        const auto readScene = scene.editor();
-        const auto& name = readScene.read<Engine::NameComponent>(selected).value;
-        char editableName[260]{};
-        std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
-        ImGui::SetNextItemWidth(-1.0F);
-        if (ImGui::InputTextWithHint("##object-name", "Object name", editableName, sizeof(editableName)) &&
-            editableName[0] != '\0') {
-            try {
-                scene.editor().rename(selected, editableName);
-            } catch (const std::invalid_argument&) {
-                // Keep the previous name until a unique, non-empty value is entered.
+    {
+        const EditorUI::Icon icon = EditorUI::entityIcon(scene, selected);
+        const float frameHeight = ImGui::GetFrameHeight();
+        ImGui::Dummy({frameHeight, frameHeight});
+        const ImVec2 iconMin = ImGui::GetItemRectMin();
+        ImGui::GetWindowDrawList()->AddRectFilled(iconMin, {iconMin.x + frameHeight, iconMin.y + frameHeight},
+                                                  ImGui::GetColorU32(EditorUI::colors().surfaceRaised),
+                                                  ImGui::GetStyle().FrameRounding);
+        EditorUI::drawIcon(ImGui::GetWindowDrawList(), icon,
+                           {iconMin.x + frameHeight * 0.5F, iconMin.y + frameHeight * 0.5F}, frameHeight * 0.58F,
+                           ImGui::GetColorU32(EditorUI::entityIconColor(icon)));
+        ImGui::SameLine(0.0F, 6.0F);
+        char idLabel[32]{};
+        std::snprintf(idLabel, sizeof(idLabel), "#%u", Engine::entityIndex(selected));
+        const float idWidth = ImGui::CalcTextSize(idLabel).x + 14.0F + ImGui::GetStyle().ItemSpacing.x;
+        if (!multiSelection && scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
+            const auto readScene = scene.editor();
+            const auto& name = readScene.read<Engine::NameComponent>(selected).value;
+            char editableName[260]{};
+            std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
+            ImGui::SetNextItemWidth(std::max(60.0F, ImGui::GetContentRegionAvail().x - idWidth));
+            if (ImGui::InputTextWithHint("##object-name", "Object name", editableName, sizeof(editableName)) &&
+                editableName[0] != '\0') {
+                try {
+                    scene.editor().rename(selected, editableName);
+                } catch (const std::invalid_argument&) {
+                    // Keep the previous name until a unique, non-empty value is entered.
+                }
             }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                ImGui::SetTooltip("Rename the object. Names must be unique in the scene.");
+        } else {
+            ImGui::AlignTextToFramePadding();
+            if (multiSelection)
+                ImGui::Text("%zu objects selected", selection.size());
+            else
+                ImGui::TextUnformatted(entityName(scene, selected));
         }
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - idWidth +
+                                                                  ImGui::GetStyle().ItemSpacing.x));
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (frameHeight - ImGui::GetTextLineHeight() - 2.0F) * 0.5F);
+        EditorUI::badge(idLabel, EditorUI::colors().surfaceRaised, EditorUI::colors().textSecondary);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("ECS entity index");
     }
-    ImGui::TextDisabled("Rename the object, then tweak its components below.");
+    if (multiSelection)
+        ImGui::TextDisabled("Editing the common Transform of every selected object.");
     if (!scene.hasUsablePrimaryCamera()) {
         ImGui::Spacing();
         ImGui::TextColored(EditorUI::colors().warning, "! Scene problem: no usable primary camera");

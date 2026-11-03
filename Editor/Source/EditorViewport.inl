@@ -50,8 +50,6 @@ int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax, cons
     }
     return -1;
 }
-enum class PlayModeAction { None, Start, Stop, Restart };
-
 struct ViewportInteraction final {
     bool cameraInput{};
     bool gameCameraInput{};
@@ -65,7 +63,6 @@ struct ViewportInteraction final {
     Engine::Entity createdEntity{Engine::NullEntity};
     std::vector<Engine::Entity> selectedEntities;
     bool selectionCommitted{};
-    PlayModeAction playModeAction{PlayModeAction::None};
     float normalizedX{};
     float normalizedY{};
 };
@@ -655,113 +652,55 @@ bool pointInLasso(const ImVec2 point, const std::vector<ImVec2>& polygon) {
     return inside;
 }
 
-void drawSelectionTools(const ImVec2 imageMin, const ImVec2 visibleMin, SelectionTool& tool) {
+bool drawSelectionTools(const ImVec2 imageMin, const ImVec2 visibleMin, SelectionTool& tool) {
     // The fixed-aspect image may extend above the child window when the
     // viewport is wider than its aspect ratio. Anchor overlays to the clipped,
     // visible image area so they remain available in a maximized viewport.
-    const ImVec2 start{std::max(imageMin.x + 132.0F, visibleMin.x + 132.0F),
+    constexpr float buttonSize = 30.0F;
+    const ImVec2 start{std::max(imageMin.x + 12.0F, visibleMin.x + 12.0F) + 3.0F * (buttonSize + 2.0F) + 10.0F,
                        std::max(imageMin.y + 12.0F, visibleMin.y + 12.0F)};
+    bool consumedClick = false;
     for (int index = 0; index < 2; ++index) {
-        ImGui::SetCursorScreenPos({start.x + index * 72.0F, start.y});
+        ImGui::SetCursorScreenPos({start.x + static_cast<float>(index) * (buttonSize + 2.0F), start.y});
         const bool active = (index == 0) == (tool == SelectionTool::Rectangle);
-        if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button, {0.06F, 0.48F, 0.59F, 0.96F});
-        if (ImGui::SmallButton(index == 0 ? "Box" : "Lasso"))
+        ImGui::PushID(index);
+        if (EditorUI::iconButton(
+                "##selection-tool", index == 0 ? EditorUI::Icon::BoxSelect : EditorUI::Icon::Lasso,
+                index == 0 ? "Rectangle select" : "Lasso select",
+                {.active = active, .size = {buttonSize, buttonSize}, .overlay = true, .noNavFocus = true})) {
             tool = index == 0 ? SelectionTool::Rectangle : SelectionTool::Lasso;
-        if (active)
-            ImGui::PopStyleColor();
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(index == 0 ? "Rectangle select" : "Lasso select");
+            consumedClick = true;
+        }
+        ImGui::PopID();
     }
+    return consumedClick;
 }
 
 bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, GizmoMode& gizmoMode) {
-    constexpr float buttonSize = 34.0F;
-    constexpr float gap = 6.0F;
+    constexpr float buttonSize = 30.0F;
+    constexpr float gap = 2.0F;
     const ImVec2 toolbarMin{std::max(imageMin.x + 12.0F, visibleMin.x + 12.0F),
                             std::max(imageMin.y + 12.0F, visibleMin.y + 12.0F)};
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    constexpr std::array modes{GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale};
+    constexpr std::array icons{EditorUI::Icon::Move, EditorUI::Icon::Rotate, EditorUI::Icon::Scale};
+    constexpr std::array tooltips{"Move gizmo (W)", "Rotate gizmo (E)", "Scale gizmo (R)"};
     bool consumedClick = false;
 
-    for (int index = 0; index < 3; ++index) {
-        const bool active = (index == 0 && gizmoMode == GizmoMode::Translate) ||
-                            (index == 1 && gizmoMode == GizmoMode::Rotate) ||
-                            (index == 2 && gizmoMode == GizmoMode::Scale);
-        const ImVec2 min{toolbarMin.x + static_cast<float>(index) * (buttonSize + gap), toolbarMin.y};
-        const ImVec2 max{min.x + buttonSize, min.y + buttonSize};
-
-        ImGui::SetCursorScreenPos(min);
-        ImGui::PushID(index);
+    for (std::size_t index = 0; index < modes.size(); ++index) {
+        ImGui::SetCursorScreenPos({toolbarMin.x + static_cast<float>(index) * (buttonSize + gap), toolbarMin.y});
+        ImGui::PushID(static_cast<int>(index));
         // These are viewport overlays, not editor controls.  In particular,
         // do not let a tool switch take ImGui navigation focus away from the
         // selected object in the Scene View.
-        const bool clicked =
-            ImGui::InvisibleButton("##gizmo-tool", {buttonSize, buttonSize}, ImGuiButtonFlags_NoNavFocus);
-        const bool hovered = ImGui::IsItemHovered();
-        ImGui::PopID();
-
-        const ImU32 background = ImGui::GetColorU32(active    ? ImVec4{0.06F, 0.48F, 0.59F, 0.96F}
-                                                    : hovered ? ImVec4{0.12F, 0.20F, 0.25F, 0.96F}
-                                                              : ImVec4{0.07F, 0.11F, 0.15F, 0.92F});
-        const ImU32 border =
-            ImGui::GetColorU32(active ? ImVec4{0.20F, 0.86F, 0.84F, 1.0F} : ImVec4{0.25F, 0.34F, 0.40F, 1.0F});
-        const ImU32 icon = ImGui::GetColorU32(ImVec4{0.93F, 0.97F, 0.99F, 1.0F});
-        drawList->AddRectFilled(min, max, background, 6.0F);
-        drawList->AddRect(min, max, border, 6.0F, 0, 1.0F);
-
-        const ImVec2 center{(min.x + max.x) * 0.5F, (min.y + max.y) * 0.5F};
-        if (index == 0) {
-            constexpr float arm = 9.0F;
-            constexpr float head = 4.0F;
-            drawList->AddRectFilled({center.x - 3.0F, center.y - 3.0F}, {center.x + 3.0F, center.y + 3.0F}, icon, 1.5F);
-            drawList->AddLine({center.x - arm, center.y}, {center.x + arm, center.y}, icon, 2.0F);
-            drawList->AddLine({center.x, center.y - arm}, {center.x, center.y + arm}, icon, 2.0F);
-            drawList->AddTriangleFilled({center.x - arm - head, center.y}, {center.x - arm + 1.0F, center.y - head},
-                                        {center.x - arm + 1.0F, center.y + head}, icon);
-            drawList->AddTriangleFilled({center.x + arm + head, center.y}, {center.x + arm - 1.0F, center.y - head},
-                                        {center.x + arm - 1.0F, center.y + head}, icon);
-            drawList->AddTriangleFilled({center.x, center.y - arm - head}, {center.x - head, center.y - arm + 1.0F},
-                                        {center.x + head, center.y - arm + 1.0F}, icon);
-            drawList->AddTriangleFilled({center.x, center.y + arm + head}, {center.x - head, center.y + arm - 1.0F},
-                                        {center.x + head, center.y + arm - 1.0F}, icon);
-        } else if (index == 1) {
-            constexpr float arcStart = 0.55F;
-            constexpr float arcEnd = 5.55F;
-            constexpr int arcSegments = 20;
-            ImVec2 arcPoints[arcSegments + 1];
-            for (int point = 0; point <= arcSegments; ++point) {
-                const float angle =
-                    arcStart + (arcEnd - arcStart) * static_cast<float>(point) / static_cast<float>(arcSegments);
-                arcPoints[point] = {center.x + std::cos(angle) * 9.0F, center.y + std::sin(angle) * 9.0F};
-            }
-            drawList->AddPolyline(arcPoints, arcSegments + 1, icon, ImDrawFlags_None, 2.0F);
-
-            const ImVec2 tip = arcPoints[arcSegments];
-            const float tangentX = -std::sin(arcEnd);
-            const float tangentY = std::cos(arcEnd);
-            const float normalX = std::cos(arcEnd);
-            const float normalY = std::sin(arcEnd);
-            drawList->AddTriangleFilled(
-                {tip.x + tangentX * 3.5F, tip.y + tangentY * 3.5F},
-                {tip.x - tangentX * 2.0F + normalX * 3.5F, tip.y - tangentY * 2.0F + normalY * 3.5F},
-                {tip.x - tangentX * 2.0F - normalX * 3.5F, tip.y - tangentY * 2.0F - normalY * 3.5F}, icon);
-        } else {
-            constexpr float extent = 8.0F;
-            drawList->AddRect({center.x - extent, center.y - extent}, {center.x + extent, center.y + extent}, icon,
-                              1.5F, 0, 2.0F);
-            drawList->AddLine({center.x - 4.0F, center.y - 4.0F}, {center.x + 4.0F, center.y + 4.0F}, icon, 1.5F);
-            drawList->AddLine({center.x + 4.0F, center.y - 4.0F}, {center.x - 4.0F, center.y + 4.0F}, icon, 1.5F);
-        }
-
-        if (hovered)
-            ImGui::SetTooltip(index == 0 ? "Move gizmo (W)" : index == 1 ? "Rotate gizmo (E)" : "Scale gizmo (R)");
-        if (clicked) {
-            const GizmoMode requestedMode = index == 0   ? GizmoMode::Translate
-                                            : index == 1 ? GizmoMode::Rotate
-                                                         : GizmoMode::Scale;
-            gizmoMode = requestedMode;
+        if (EditorUI::iconButton("##gizmo-tool", icons[index], tooltips[index],
+                                 {.active = gizmoMode == modes[index],
+                                  .size = {buttonSize, buttonSize},
+                                  .overlay = true,
+                                  .noNavFocus = true})) {
+            gizmoMode = modes[index];
             consumedClick = true;
         }
+        ImGui::PopID();
     }
     return consumedClick;
 }
@@ -1756,7 +1695,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
                                  Engine::ViewportHandle sceneDescriptor, const float sceneCameraYaw,
                                  const float sceneCameraPitch, bool& showGameView, GizmoMode& gizmoMode,
                                  SelectionTool& selectionTool, TerrainSculptState& terrainSculpt, const bool playing,
-                                 bool& isOpen) {
+                                 const bool paused, bool& isOpen) {
     static std::string assetDropError;
     static SceneViewSettings settings;
     static bool showBulletImpacts = true;
@@ -1767,65 +1706,33 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
 
     ImGui::Begin("Viewport", &isOpen, ImGuiWindowFlags_NoScrollbar);
     ViewportInteraction interaction{};
-    if (!playing) {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.12F, 0.40F, 0.28F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.20F, 0.56F, 0.38F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.10F, 0.30F, 0.22F, 1.0F});
-        if (EditorButton(" Play Mode ").draw())
-            interaction.playModeAction = PlayModeAction::Start;
-        ImGui::PopStyleColor(3);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Start Play Mode (F5)");
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.58F, 0.20F, 0.22F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.74F, 0.28F, 0.30F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.45F, 0.14F, 0.16F, 1.0F});
-        if (EditorButton(" Stop ").draw())
-            interaction.playModeAction = PlayModeAction::Stop;
-        ImGui::PopStyleColor(3);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Stop Play Mode and restore the editor scene (F5)");
-        ImGui::SameLine(0.0F, 6.0F);
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.16F, 0.34F, 0.56F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.24F, 0.46F, 0.72F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.11F, 0.25F, 0.42F, 1.0F});
-        if (EditorButton(" Restart ").draw())
-            interaction.playModeAction = PlayModeAction::Restart;
-        ImGui::PopStyleColor(3);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Restart Play Mode from the editor scene");
-    }
-    ImGui::SameLine(0.0F, 10.0F);
-    ImGui::Checkbox("Bullet impacts", &showBulletImpacts);
-    ImGui::SameLine(0.0F, 10.0F);
-    if (ImGui::Button("Debug View"))
-        ImGui::OpenPopup("Viewport debug view");
-    if (ImGui::BeginPopup("Viewport debug view")) {
-        ImGui::Checkbox("Bullet impacts", &showBulletImpacts);
-        if (ImGui::Button("Clear impacts"))
-            scene.physics().clearBulletImpacts();
-        ImGui::TextDisabled("LMB: fire with PlayerShooter; Escape: release mouse");
-        ImGui::EndPopup();
-    }
-    ImGui::SameLine(0.0F, 10.0F);
-    if (!playing) {
-        ImGui::TextDisabled(showGameView ? "Game camera: RMB + WASD/QE  |  Shift: faster  |  Wheel: zoom"
-                                         : "Navigate: RMB + WASD/QE  |  Shift: faster  |  MMB: pan  |  Wheel: zoom");
-        const bool terrainSelected = selected != Engine::NullEntity && scene.editor().valid(selected) &&
-                                     scene.editor().has<Engine::TerrainComponent>(selected);
-        if (!terrainSelected) {
-            if (terrainSculpt.strokeActive)
-                finishTerrainStroke(scene, terrainSculpt);
-            terrainSculpt.enabled = false;
-            terrainSculpt.paintEnabled = false;
-            terrainSculpt.grassEnabled = false;
+    // Toolbar: view switch, then view options. Play controls live in the
+    // title bar; navigation hints are in the help tooltip on the right.
+    {
+        const EditorUI::Palette& palette = EditorUI::colors();
+        constexpr std::array<const char*, 2> viewLabels{"Scene", "Game"};
+        int viewIndex = showGameView ? 1 : 0;
+        ImGui::BeginDisabled(playing);
+        if (EditorUI::segmentedControl("##viewport-view", viewLabels, viewIndex))
+            showGameView = viewIndex == 1;
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip(playing ? "Play Mode always shows the Game View"
+                                      : "Switch between the editor camera "
+                                        "and the game's primary camera");
+        if (!playing) {
+            const bool terrainSelected = selected != Engine::NullEntity && scene.editor().valid(selected) &&
+                                         scene.editor().has<Engine::TerrainComponent>(selected);
+            if (!terrainSelected) {
+                if (terrainSculpt.strokeActive)
+                    finishTerrainStroke(scene, terrainSculpt);
+                terrainSculpt.enabled = false;
+                terrainSculpt.paintEnabled = false;
+                terrainSculpt.grassEnabled = false;
+            }
         }
-        ImGui::SameLine(0.0F, 8.0F);
-        if (EditorButton(showGameView ? " Scene View " : " Game View ").drawSmall()) {
-            showGameView = !showGameView;
-        }
-        if (!showGameView) {
-            ImGui::SameLine();
+        if (!playing && !showGameView) {
+            EditorUI::toolbarSeparator();
             ImGui::SetNextItemWidth(130.0F);
             if (ImGui::BeginCombo("##scene-view-mode", sceneViewModeName(settings.mode))) {
                 for (int mode = 0; mode <= static_cast<int>(SceneViewMode::Overdraw); ++mode) {
@@ -1835,6 +1742,8 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
                 }
                 ImGui::EndCombo();
             }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Scene View draw mode");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(132.0F);
             if (ImGui::BeginCombo("##scene-render-resolution", sceneRenderResolutionName(settings.renderResolution))) {
@@ -1847,24 +1756,69 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
                 }
                 ImGui::EndCombo();
             }
-            if (ImGui::IsItemHovered()) {
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
                 ImGui::SetTooltip("Scene View render resolution; the result is scaled to fit the panel");
             }
             ImGui::SameLine();
-            if (ImGui::Button("Visibility##scene"))
+            if (EditorUI::iconButton("##scene-visibility", EditorUI::Icon::Layers, "Gizmo visibility"))
                 ImGui::OpenPopup("Scene visibility");
             if (ImGui::BeginPopup("Scene visibility")) {
-                ImGui::TextDisabled("Gizmo categories");
+                ImGui::SeparatorText("Gizmo categories");
                 ImGui::Checkbox("Cameras", &settings.showCameraGizmos);
                 ImGui::Checkbox("Lights", &settings.showLightGizmos);
                 ImGui::Checkbox("Colliders", &settings.showColliders);
                 ImGui::Checkbox("Mesh diagnostics", &settings.showMeshDiagnostics);
                 ImGui::Separator();
-                ImGui::TextDisabled("Rendering categories remain visible; use a diagnostic mode to inspect them.");
+                ImGui::TextDisabled("Rendering categories remain visible; use a draw mode to inspect them.");
                 ImGui::EndPopup();
             }
         }
-        ImGui::Spacing();
+        ImGui::SameLine();
+        if (EditorUI::iconButton("##viewport-debug", EditorUI::Icon::Gear, "Debug overlays",
+                                 {.active = showBulletImpacts && playing}))
+            ImGui::OpenPopup("Viewport debug view");
+        if (ImGui::BeginPopup("Viewport debug view")) {
+            ImGui::SeparatorText("Debug overlays");
+            ImGui::Checkbox("Bullet impacts", &showBulletImpacts);
+            if (ImGui::Button("Clear impacts"))
+                scene.physics().clearBulletImpacts();
+            ImGui::TextDisabled("LMB: fire with PlayerShooter; Escape: release mouse");
+            ImGui::EndPopup();
+        }
+
+        // Help sits on the far right of the toolbar.
+        const float helpSize = ImGui::GetFrameHeight();
+        const float helpX = ImGui::GetWindowContentRegionMax().x - helpSize;
+        ImGui::SameLine();
+        if (playing) {
+            ImGui::AlignTextToFramePadding();
+            EditorUI::iconLabel(paused ? EditorUI::Icon::Pause : EditorUI::Icon::Play,
+                                paused ? palette.warning : palette.success);
+            ImGui::SameLine(0.0F, 6.0F);
+            ImGui::TextColored(paused ? palette.warning : palette.success, paused ? "Paused" : "Playing");
+            ImGui::SameLine(0.0F, 10.0F);
+            ImGui::TextDisabled("Click the view to capture the mouse");
+            ImGui::SameLine();
+        }
+        if (helpX > ImGui::GetCursorPosX()) {
+            ImGui::SetCursorPosX(helpX);
+            EditorUI::iconButton("##viewport-help", EditorUI::Icon::Info, nullptr);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNone)) {
+                ImGui::BeginTooltip();
+                ImGui::SeparatorText(showGameView ? "Game camera" : "Scene View navigation");
+                ImGui::TextUnformatted("RMB + mouse      Look around");
+                ImGui::TextUnformatted("RMB + WASD / QE  Fly");
+                ImGui::TextUnformatted("Shift            Faster");
+                if (!showGameView)
+                    ImGui::TextUnformatted("MMB              Pan");
+                ImGui::TextUnformatted("Wheel            Zoom");
+                if (!showGameView)
+                    ImGui::TextUnformatted("F                Focus selected");
+                ImGui::EndTooltip();
+            }
+        } else {
+            ImGui::NewLine();
+        }
     }
     bool viewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 size = ImGui::GetContentRegionAvail();
@@ -1941,7 +1895,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
         bool orientationGizmoConsumesClick = false;
         if (!showGameView && !playing) {
             gizmoToolsConsumeClick = drawViewportGizmoTools(imageMin, ImGui::GetWindowPos(), gizmoMode);
-            drawSelectionTools(imageMin, ImGui::GetWindowPos(), selectionTool);
+            gizmoToolsConsumeClick |= drawSelectionTools(imageMin, ImGui::GetWindowPos(), selectionTool);
             // A gizmo-tool button belongs to the currently selected object.
             // Reapply the renderer selection explicitly, so changing tools
             // cannot make its outline/focus disappear even if ImGui moves
@@ -2038,16 +1992,27 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
                 });
             }
 
-            ImGui::SetCursorScreenPos({imageMin.x + 10.0F, imageMax.y - 30.0F});
-            if (ImGui::Button("Focus selected (F)"))
+            // Camera helpers float in the bottom-left corner of the visible image.
+            const float overlayButton = 30.0F;
+            const float visibleBottom = std::min(imageMax.y, ImGui::GetWindowPos().y + ImGui::GetWindowSize().y);
+            const ImVec2 overlayStart{imageMin.x + 12.0F, visibleBottom - overlayButton - 12.0F};
+            const EditorUI::IconButtonOptions overlayOptions{
+                .size = {overlayButton, overlayButton}, .overlay = true, .noNavFocus = true};
+            ImGui::SetCursorScreenPos(overlayStart);
+            const bool hasSelection = selected != Engine::NullEntity && scene.editor().valid(selected);
+            ImGui::BeginDisabled(!hasSelection);
+            if (EditorUI::iconButton("##focus-selected", EditorUI::Icon::Focus, "Focus selected (F)", overlayOptions))
                 focusSceneView(scene, selected, renderer, imageMin, imageMax);
-            ImGui::SameLine();
-            if (ImGui::Button("Frame all"))
+            ImGui::EndDisabled();
+            ImGui::SameLine(0.0F, 2.0F);
+            if (EditorUI::iconButton("##frame-all", EditorUI::Icon::Frame, "Frame all", overlayOptions))
                 frameAllSceneView(scene, renderer, imageMin, imageMax);
-            ImGui::SameLine();
-            if (ImGui::Button("Bookmarks"))
+            ImGui::SameLine(0.0F, 2.0F);
+            if (EditorUI::iconButton("##camera-bookmarks", EditorUI::Icon::Bookmark, "Camera bookmarks",
+                                     overlayOptions))
                 ImGui::OpenPopup("Scene camera bookmarks");
             if (ImGui::BeginPopup("Scene camera bookmarks")) {
+                ImGui::SeparatorText("Camera bookmarks");
                 for (std::size_t slot = 0; slot < settings.bookmarks.size(); ++slot) {
                     const std::string label = "Slot " + std::to_string(slot + 1);
                     if (ImGui::MenuItem(("Save " + label).c_str()))
@@ -2061,31 +2026,39 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
                 }
                 ImGui::EndPopup();
             }
-            if (selected != Engine::NullEntity && scene.editor().valid(selected) &&
-                scene.editor().has<Engine::CameraComponent>(selected) &&
+            if (hasSelection && scene.editor().has<Engine::CameraComponent>(selected) &&
                 scene.editor().has<Engine::Transform>(selected)) {
-                ImGui::SameLine();
-                if (ImGui::Button("Align active camera to view")) {
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::PushStyleColor(ImGuiCol_Button, EditorUI::colors().overlay);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0F, (overlayButton - ImGui::GetFontSize()) * 0.5F});
+                if (ImGui::Button("Align camera to view")) {
                     scene.editor().patch<Engine::Transform>(selected, [&](Engine::Transform& transform) {
                         transform.position = renderer.editorCameraPosition();
                         transform.rotation.setX(renderer.editorCameraPitch());
                         transform.rotation.setY(renderer.editorCameraYaw());
                     });
                 }
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                    ImGui::SetTooltip("Move the selected camera to the Scene View camera");
             }
             if (imageHovered && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F)) {
                 focusSceneView(scene, selected, renderer, imageMin, imageMax);
             }
         }
+        // Overlay buttons sit on top of the image. Clicking one must not also
+        // start a terrain stroke or a box selection underneath it.
+        const bool sceneHovered = imageHovered && !ImGui::IsAnyItemHovered();
         const bool grassConsumesClick =
             gizmoAction < 0 && !showGameView && !playing &&
-            drawTerrainGrass(scene, selected, renderer, imageMin, imageMax, terrainSculpt, imageHovered, interaction);
+            drawTerrainGrass(scene, selected, renderer, imageMin, imageMax, terrainSculpt, sceneHovered, interaction);
         const bool sculptConsumesClick =
             !grassConsumesClick && gizmoAction < 0 && !showGameView && !playing &&
-            drawTerrainSculpt(scene, selected, renderer, imageMin, imageMax, terrainSculpt, imageHovered, interaction);
+            drawTerrainSculpt(scene, selected, renderer, imageMin, imageMax, terrainSculpt, sceneHovered, interaction);
         const bool paintConsumesClick =
             !grassConsumesClick && !sculptConsumesClick && gizmoAction < 0 && !showGameView && !playing &&
-            drawTerrainPaint(scene, selected, renderer, imageMin, imageMax, terrainSculpt, imageHovered, interaction);
+            drawTerrainPaint(scene, selected, renderer, imageMin, imageMax, terrainSculpt, sceneHovered, interaction);
         // Draw the active transform gizmo independently of the toolbar click.
         // Otherwise short-circuit evaluation below skips this call on the
         // exact frame in which the gizmo mode is changed.
@@ -2103,7 +2076,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
         static ImVec2 selectionStart{};
         static std::vector<ImVec2> lasso;
         const ImVec2 mouse = ImGui::GetIO().MousePos;
-        if (!showGameView && !playing && gizmoAction < 0 && !gizmoConsumesClick && imageHovered &&
+        if (!showGameView && !playing && gizmoAction < 0 && !gizmoConsumesClick && sceneHovered &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             selectionDrag = true;
             selectionStart = mouse;
@@ -2115,10 +2088,12 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
                 lasso.push_back(mouse);
             ImDrawList* drawList = ImGui::GetWindowDrawList();
             if (selectionTool == SelectionTool::Rectangle) {
-                drawList->AddRect(selectionStart, mouse, IM_COL32(70, 205, 235, 255), 0.0F, 0, 1.5F);
+                drawList->AddRectFilled(selectionStart, mouse,
+                                        ImGui::GetColorU32(EditorUI::withAlpha(EditorUI::colors().accent, 0.08F)));
+                drawList->AddRect(selectionStart, mouse, ImGui::GetColorU32(EditorUI::colors().accent), 0.0F, 0, 1.5F);
             } else if (lasso.size() > 1)
-                drawList->AddPolyline(lasso.data(), static_cast<int>(lasso.size()), IM_COL32(70, 205, 235, 255),
-                                      ImDrawFlags_None, 1.5F);
+                drawList->AddPolyline(lasso.data(), static_cast<int>(lasso.size()),
+                                      ImGui::GetColorU32(EditorUI::colors().accent), ImDrawFlags_None, 1.5F);
         }
         if (selectionDrag && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
             selectionDrag = false;
@@ -2151,9 +2126,18 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
     } else if (size.x > 1.0F && size.y > 1.0F) {
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + size.y * 0.45F);
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + size.x * 0.42F);
-        ImGui::TextDisabled("Loading scene...");
+        // Animated spinner while the startup scene is decoded in the background.
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        const ImVec2 center{origin.x + size.x * 0.5F, origin.y + size.y * 0.45F};
+        const float radius = 14.0F;
+        const float time = static_cast<float>(ImGui::GetTime());
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        drawList->AddCircle(center, radius, ImGui::GetColorU32(EditorUI::colors().border), 32, 3.0F);
+        drawList->PathArcTo(center, radius, time * 5.0F, time * 5.0F + 1.8F, 16);
+        drawList->PathStroke(ImGui::GetColorU32(EditorUI::colors().accent), ImDrawFlags_None, 3.0F);
+        const char* text = "Loading scene...";
+        drawList->AddText({center.x - ImGui::CalcTextSize(text).x * 0.5F, center.y + radius + 12.0F},
+                          ImGui::GetColorU32(EditorUI::colors().textSecondary), text);
     }
     ImGui::End();
     // Do not enable camera navigation just because a mouse button is held

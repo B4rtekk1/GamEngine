@@ -29,4 +29,16 @@ TEST(TaskScheduler, ParallelForRunsEveryIndexOnce) {
                               [](const int sum, const std::atomic<int>& visit) { return sum + visit.load(); }),
               static_cast<int>(visits.size()));
 }
+
+TEST(TaskScheduler, IsolatedTasksWakeIdleWorkers) {
+    // Each task is submitted while the workers are idle and nothing else is
+    // queued, so a lost wakeup would hang wait() instead of being masked by a
+    // later submission.
+    TaskScheduler scheduler{1};
+    for (int round = 0; round < 20000; ++round) {
+        std::atomic<bool> ran{};
+        scheduler.schedule([&] { ran.store(true); }).wait();
+        EXPECT_TRUE(ran.load());
+    }
+}
 } // namespace Engine

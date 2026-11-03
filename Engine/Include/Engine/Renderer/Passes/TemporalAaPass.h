@@ -67,7 +67,7 @@ class TemporalAaPass final {
     // uses current HDR as a valid fallback for the water-only bindings.
     std::array<VkDescriptorSet, 4> sets_{};
     std::array<HdrBuffer, 2> history_;
-    // Bounded-color feedback is separate from the HDR image consumed by bloom and presentation.
+    // Linear HDR feedback (FP16 keeps relative precision for bright pixels); separate from the image consumed by bloom and carries the glass-reactive flag in alpha.
     std::array<HdrBuffer, 2> historyColor_;
     // A sampled copy of the depth that produced each HDR history image.
     // It is stored by the resolve itself, so the two ping-pong histories

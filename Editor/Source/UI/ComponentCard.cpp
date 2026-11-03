@@ -1,6 +1,7 @@
 #include "Editor/UI/ComponentCard.h"
 
 #include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
 
 namespace EditorUI {
 
@@ -21,7 +22,7 @@ bool ComponentCard::begin() {
                                 ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0F);
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        open_ = ImGui::CollapsingHeader(name_, ImGuiTreeNodeFlags_DefaultOpen);
+        open_ = collapsingSection(name_);
         ImGui::TableSetColumnIndex(1);
         if (ImGui::SmallButton("..."))
             ImGui::OpenPopup("component-actions");
@@ -37,7 +38,7 @@ bool ComponentCard::begin() {
         }
         ImGui::EndTable();
     } else {
-        open_ = ImGui::CollapsingHeader(name_, ImGuiTreeNodeFlags_DefaultOpen);
+        open_ = collapsingSection(name_);
     }
     return open_;
 }

@@ -1426,17 +1426,18 @@ void RenderGraph::compile() {
         for (std::size_t batchIndex = 0; batchIndex < queueBatches_.size(); ++batchIndex) {
             auto& batch = queueBatches_[batchIndex];
             VkPipelineStageFlags2 stages = producerStages[batchIndex];
-            bool opaqueWork = false;
             for (const auto pass : batch.passes) {
-                opaqueWork |= passes_[pass].sideEffect;
                 const auto ordered = std::ranges::find(order_, pass) - order_.begin();
                 for (const auto& barrier : releaseBarriers_[ordered].images)
                     stages |= barrier.srcStageMask;
                 for (const auto& barrier : releaseBarriers_[ordered].buffers)
                     stages |= barrier.srcStageMask;
             }
-            batch.signalStage =
-                opaqueWork || stages == VK_PIPELINE_STAGE_2_NONE ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : stages;
+            // Only cross-queue consumers wait on a non-final batch, and the
+            // final batch of each queue is signalled at ALL_COMMANDS below.
+            // The recorded producer/release stages are therefore sufficient
+            // even for side-effect batches; fall back only when unknown.
+            batch.signalStage = stages == VK_PIPELINE_STAGE_2_NONE ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : stages;
         }
         compiledTemplates_.push_back({.signature = signature,
                                       .order = order_,

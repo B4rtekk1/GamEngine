@@ -119,7 +119,12 @@ TaskScheduler::TaskScheduler(const std::size_t worker_count) : impl_(std::make_u
 }
 
 TaskScheduler::~TaskScheduler() {
-    impl_->stopping.store(true, std::memory_order_release);
+    {
+        // Same lost-wakeup window as enqueue(): a missed notify here would
+        // leave a worker asleep and block join() forever.
+        std::scoped_lock lock(impl_->wait_mutex);
+        impl_->stopping.store(true, std::memory_order_release);
+    }
     impl_->available.notify_all();
     for (auto& worker : impl_->workers)
         worker.join();
@@ -146,6 +151,13 @@ void TaskScheduler::enqueue(Task task, const TaskPriority priority, const std::s
     if (rejected) {
         finish(state, std::make_exception_ptr(std::runtime_error("TaskScheduler is stopping")));
         return;
+    }
+    // A worker evaluates the wait predicate while holding wait_mutex. Without
+    // passing through that mutex here, the increment and notify could land
+    // between its predicate check and its sleep, and the wakeup would be lost
+    // until an unrelated task arrived.
+    {
+        std::scoped_lock lock(impl_->wait_mutex);
     }
     impl_->available.notify_one();
 }
@@ -196,7 +208,13 @@ std::size_t TaskScheduler::worker_count() const noexcept {
 
 std::size_t TaskScheduler::default_worker_count() noexcept {
     const std::size_t cores = std::thread::hardware_concurrency();
-    return cores > 2 ? cores - 2 : 1;
+    // Large machines can report hundreds of logical CPUs. Spawning a worker
+    // for every CPU except two adds substantial startup cost and can make
+    // asset loading compete with the render/driver threads. Keep the default
+    // pool useful for parallel work without allowing it to grow without bound.
+    constexpr std::size_t max_default_workers = 8;
+    const std::size_t available_workers = cores > 2 ? cores - 2 : 1;
+    return std::min(available_workers, max_default_workers);
 }
 
 TaskScheduler& TaskScheduler::global() {

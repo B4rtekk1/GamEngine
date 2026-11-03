@@ -17,7 +17,9 @@
 #include "Editor/Panels/TerminalPanel.h"
 #include "Editor/Platform/WindowsTitleBar.h"
 #include "Editor/TerrainSculptState.h"
+#include "Editor/UI/EditorIcons.h"
 #include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
 #include "Elements/EditorButton.h"
 #include "Elements/NumericControl.h"
 #include "Elements/TransformFields.h"
@@ -402,6 +404,13 @@ int main(int argc, char** argv) {
                                    ? imguiIo.Fonts->AddFontDefault(&terminalFontConfig)
                                    : imguiIo.Fonts->AddFontFromFileTTF(terminalFontPath.string().c_str(), 16.0F);
         EditorStyle::apply();
+        // Scale spacing and text on HiDPI displays. ImGui rasterises fonts at
+        // the scaled size, so text stays sharp instead of being stretched.
+        if (const float displayScale = SDL_GetWindowDisplayScale(window); displayScale > 1.0F) {
+            ImGuiStyle& style = ImGui::GetStyle();
+            style.ScaleAllSizes(displayScale);
+            style.FontScaleDpi = displayScale;
+        }
         auto shaderGraphPanel = std::make_unique<Editor::ShaderGraphPanel>();
         Engine::ShaderGraphAsset shaderGraph{.name = "Untitled Shader Graph"};
         Engine::ShaderPinId shaderGraphPinId = 1;
@@ -693,6 +702,7 @@ int main(int argc, char** argv) {
             bool sceneDeleted = false;
             bool playToggleRequested = false;
             bool pauseToggleRequested = false;
+            bool restartRequested = false;
             bool undoRequested = false;
             bool redoRequested = false;
             bool copyRequested = false;
@@ -703,10 +713,10 @@ int main(int argc, char** argv) {
             if (const Engine::Entity created = drawEditorMenuBar(
                     scene, renderer, content, project, editorRoot, titleBar, antialiasingChanged, sceneLoaded,
                     sceneSaved, sceneDeleted, playing, paused, playToggleRequested, pauseToggleRequested,
-                    history.canUndo(), history.canRedo(), clipboard.canPaste(scene), undoRequested, redoRequested,
-                    copyRequested, pasteRequested, duplicateRequested, resetHistoryRequested, showHierarchy,
-                    showViewport, showInspector, showAssetManager, showTerrainTools, showConsole, showTerminal,
-                    showShaderGraph, showProfiler, gameBuildRequested);
+                    restartRequested, history.canUndo(), history.canRedo(), clipboard.canPaste(scene), undoRequested,
+                    redoRequested, copyRequested, pasteRequested, duplicateRequested, resetHistoryRequested,
+                    showHierarchy, showViewport, showInspector, showAssetManager, showTerrainTools, showConsole,
+                    showTerminal, showShaderGraph, showProfiler, gameBuildRequested);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
@@ -810,6 +820,8 @@ int main(int argc, char** argv) {
                 paused = !paused;
                 physicsAccumulator = 0.0;
             }
+            if (restartRequested && playing && setPlayMode(false))
+                static_cast<void>(setPlayMode(true));
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
             const ImVec2 dockSize{
                 viewport->WorkSize.x,
@@ -887,14 +899,7 @@ int main(int argc, char** argv) {
                 viewportInteraction =
                     drawViewport(scene, content, selectedEntity, selectedEntities, renderer, renderer.gameViewport(),
                                  renderer.sceneViewport(), renderer.editorCameraYaw(), renderer.editorCameraPitch(),
-                                 showGameView, gizmoMode, selectionTool, terrainSculpt, playing, showViewport);
-            }
-            if (viewportInteraction.playModeAction == PlayModeAction::Start && !playing) {
-                static_cast<void>(setPlayMode(true));
-            } else if (viewportInteraction.playModeAction == PlayModeAction::Stop && playing) {
-                static_cast<void>(setPlayMode(false));
-            } else if (viewportInteraction.playModeAction == PlayModeAction::Restart && playing && setPlayMode(false)) {
-                static_cast<void>(setPlayMode(true));
+                                 showGameView, gizmoMode, selectionTool, terrainSculpt, playing, paused, showViewport);
             }
             if (playing && viewportInteraction.gameViewClicked)
                 static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Locked));
@@ -986,7 +991,13 @@ int main(int argc, char** argv) {
             if (showShaderGraph)
                 shaderGraphPanel->draw(showShaderGraph);
             Editor::drawProfilerPanel(renderer, showProfiler);
-            drawStatusBar(scene, selectedEntity, playing, paused);
+            drawStatusBar(scene, selectedEntity,
+                          {.selectionCount = selectedEntities.size(),
+                           .playing = playing,
+                           .paused = paused,
+                           .unsavedChanges = EditorSceneSession::hasSavedScene() &&
+                                             scene.editor().mutationRevision() != lastPersistedSceneRevision,
+                           .gameBuildRunning = gameBuildRunning});
             if (!playing && selectedEntity != Engine::NullEntity && scene.editor().valid(selectedEntity) &&
                 !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
                 deferEntityDestruction(selectedEntity);

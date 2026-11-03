@@ -28,6 +28,12 @@ import Common.Displacement;
 #ifndef FORWARD_RESOLVED_VSM
 #define FORWARD_RESOLVED_VSM 0
 #endif
+// Resolved variants are selected only for a lighting pass that reuses the
+// depth prepass with an EQUAL depth test. The prepass already rejected
+// cutout texels, so a discard here would only force late depth testing.
+#ifndef FORWARD_DEPTH_PREPASSED
+#define FORWARD_DEPTH_PREPASSED FORWARD_RESOLVED_VSM
+#endif
 #ifndef FORWARD_MESHLET_INDEXED
 #define FORWARD_MESHLET_INDEXED 0
 #endif
@@ -240,11 +246,16 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 
     // Cooker may pack this map into base-color alpha; retain the separate
     // path for uncooked glTF/Quixel assets.
+#if !FORWARD_DEPTH_PREPASSED
     if (material.auxiliaryTextureIndices.y >= 0)
         baseColor.a *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(materialTextureUv(material, 4, input.texCoord, input.texCoord1)).r;
+#endif
 
     const bool doubleSided = (material.textureIndices.w & 1) != 0;
     const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
+#if FORWARD_DEPTH_PREPASSED
+    if (alphaMode <= 2) baseColor.a = 1.0;
+#else
     // The current two-sided foliage stream is a depth-writing cutout stream.
     // Importers commonly mark vegetation cards as BLEND even though their
     // opacity map is binary. Treat those cards as cutouts until they are
@@ -262,6 +273,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         baseColor.a = 1.0;
     }
     else if (alphaMode == 0) baseColor.a = 1.0;
+#endif
 
 #if MATERIAL_VARIANT == 1
     // This return deliberately precedes metallic/roughness, normal mapping,
@@ -407,8 +419,9 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // the camera-facing normal make the entire card black.
     float nDotL = doubleSided ? abs(dot(normal, lightDirection))
                               : max(dot(normal, lightDirection), 0.0);
-    float geometry = geometrySchlickGGX(nDotV, roughness) *
-                     geometrySchlickGGX(nDotL, roughness);
+    // View-dependent geometry term is shared by the sun and every local light.
+    const float geometryView = geometrySchlickGGX(nDotV, roughness);
+    float geometry = geometryView * geometrySchlickGGX(nDotL, roughness);
     float3 specular = distributionGGX(normal, halfway, roughness) * geometry * fresnel /
                       max(4.0 * nDotV * nDotL, 0.0001);
     const bool disableDirectSpecular = frame.pbrDebugView == PBR_DEBUG_NO_DIRECT_SPECULAR;
@@ -492,13 +505,15 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         if (lightIndex >= frame.localLightCount) continue;
         LocalLightData local = frame.localLights[lightIndex];
         float3 toLight = local.positionRange.xyz - input.worldPosition;
-        float distanceToLight = length(toLight);
-        if (distanceToLight <= 1e-4 || distanceToLight >= local.positionRange.w)
+        const float distanceSquared = dot(toLight, toLight);
+        const float radius = local.positionRange.w;
+        if (distanceSquared <= 1e-8 || distanceSquared >= radius * radius)
             continue;
-        float3 localDirection = toLight / distanceToLight;
-        float rangeFactor = saturate(1.0 - distanceToLight / local.positionRange.w);
-        float attenuation = rangeFactor * rangeFactor /
-                            max(distanceToLight * distanceToLight, 0.01);
+        const float inverseDistance = rsqrt(distanceSquared);
+        const float distanceToLight = distanceSquared * inverseDistance;
+        float3 localDirection = toLight * inverseDistance;
+        float rangeFactor = saturate(1.0 - distanceToLight / radius);
+        float attenuation = rangeFactor * rangeFactor / max(distanceSquared, 0.01);
         if (local.parameters.y > 1.5) // Spot
         {
             float cone = dot(normalize(-local.directionOuterCos.xyz), localDirection);
@@ -508,8 +523,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                                        : max(dot(normal, localDirection), 0.0);
         float3 localHalfway = normalize(viewDirection + localDirection);
         float3 localFresnel = fresnelSchlick(max(dot(localHalfway, viewDirection), 0.0), f0);
-        float localGeometry = geometrySchlickGGX(nDotV, roughness) *
-                              geometrySchlickGGX(localNDotL, roughness);
+        float localGeometry = geometryView * geometrySchlickGGX(localNDotL, roughness);
         float3 localSpecular = distributionGGX(normal, localHalfway, roughness) * localGeometry *
                                localFresnel / max(4.0 * nDotV * localNDotL, 0.0001);
         if (disableDirectSpecular)

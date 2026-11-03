@@ -65,9 +65,11 @@ void EditorStyle::apply() {
     const ImVec4 kMenuBarBackground = palette.titleBar;
     const ImVec4 kTitleBackground = palette.titleBar;
     const ImVec4 kActiveTitleBackground = palette.surface;
-    const ImVec4 kHeader = palette.surfaceRaised;
+    // Selected rows (Selectable, tree nodes, open menus) use a translucent
+    // accent so selection reads at a glance without the flash of full teal.
+    const ImVec4 kHeader = palette.selection;
     const ImVec4 kHoveredHeader = palette.controlHover;
-    const ImVec4 kActiveHeader = palette.accent;
+    const ImVec4 kActiveHeader = palette.selectionHover;
     const ImVec4 kButton = palette.control;
     const ImVec4 kHoveredButton = palette.controlHover;
     const ImVec4 kActiveButton = palette.accent;
@@ -117,7 +119,11 @@ void EditorStyle::apply() {
     style.TabRounding = kTabRounding;
     style.TabBorderSize = 0.0F;
     style.TabBarBorderSize = 1.0F;
+    style.TabBarOverlineSize = 2.0F;
     style.WindowMenuButtonPosition = ImGuiDir_Right;
+    style.DockingSeparatorSize = 3.0F;
+    style.SeparatorTextBorderSize = 1.0F;
+    style.SeparatorTextPadding = {0.0F, 4.0F};
     style.WindowTitleAlign = {0.0F, 0.5F};
     style.ButtonTextAlign = {0.5F, 0.5F};
     style.SelectableTextAlign = {0.0F, 0.5F};
@@ -142,8 +148,6 @@ void EditorStyle::apply() {
     colors[ImGuiCol_Border] = kBorder;
     colors[ImGuiCol_BorderShadow] = {0.0F, 0.0F, 0.0F, 0.0F};
     colors[ImGuiCol_Separator] = kSeparator;
-    colors[ImGuiCol_SeparatorHovered] = kHoveredHeader;
-    colors[ImGuiCol_SeparatorActive] = kActiveHeader;
     colors[ImGuiCol_Text] = kText;
     colors[ImGuiCol_TextDisabled] = kDisabledText;
     colors[ImGuiCol_CheckMark] = kCheckMark;
@@ -165,7 +169,14 @@ void EditorStyle::apply() {
     colors[ImGuiCol_ScrollbarGrabActive] = kScrollbarGrabActive;
     colors[ImGuiCol_PlotHistogram] = kSliderGrab;
     colors[ImGuiCol_PlotLines] = kCheckMark;
-    colors[ImGuiCol_NavHighlight] = kActiveHeader;
+    colors[ImGuiCol_NavCursor] = palette.accent;
+    colors[ImGuiCol_TabSelectedOverline] = palette.accent;
+    colors[ImGuiCol_TabDimmedSelectedOverline] = EditorUI::withAlpha(palette.accent, 0.0F);
+    colors[ImGuiCol_DragDropTarget] = palette.accentHover;
+    colors[ImGuiCol_TextSelectedBg] = EditorUI::withAlpha(palette.accent, 0.32F);
+    colors[ImGuiCol_TextLink] = palette.accentHover;
+    colors[ImGuiCol_SeparatorHovered] = EditorUI::withAlpha(palette.accent, 0.55F);
+    colors[ImGuiCol_SeparatorActive] = palette.accent;
     colors[ImGuiCol_ModalWindowDimBg] = {palette.appBackground.x, palette.appBackground.y, palette.appBackground.z,
                                          0.55F};
     colors[ImGuiCol_TableHeaderBg] = palette.surfaceRaised;
