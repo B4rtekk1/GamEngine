@@ -80,6 +80,16 @@ TEST(VsmPagePolicyTests, LeavingRequestsAllowsNewPagesIntoTheWorkingSet) {
     EXPECT_FALSE(vsmRequestBefore(20, 20, true, true, false, false, 1024));
 }
 
+TEST(VsmPagePolicyTests, RecentlyUsedPagesSurviveOscillatingFeedback) {
+    EXPECT_FALSE(vsmPageEvictable(100, 100));
+    EXPECT_FALSE(vsmPageEvictable(100, 100 + VsmMinimumEvictionAge - 1));
+    EXPECT_TRUE(vsmPageEvictable(100, 100 + VsmMinimumEvictionAge));
+    // A never-used allocation (lastUsed 0) is evictable once the clock runs.
+    EXPECT_TRUE(vsmPageEvictable(0, VsmMinimumEvictionAge));
+    // A clock behind the stamp (cache reset) never selects a victim.
+    EXPECT_FALSE(vsmPageEvictable(5, 3));
+}
+
 TEST(VsmPagePolicyTests, ContinuousAnimationRefreshesEveryTileWithSmallBudget) {
     std::array<std::uint64_t, 256> rendered{};
     std::array<std::uint32_t, 256> pages{};

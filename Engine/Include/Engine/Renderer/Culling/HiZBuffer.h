@@ -6,6 +6,7 @@
  */
 
 #include <cstdint>
+#include <span>
 #include <vector>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
@@ -53,12 +54,19 @@ class HiZBuffer {
      * @param device Logical device used to create Vulkan resources.
      * @param width Base-level image width in pixels.
      * @param height Base-level image height in pixels.
+     * @param sharingFamilies Queue families that access the image concurrently;
+     *        two or more make it written on async compute and read on graphics.
      */
     void create(VkPhysicalDevice physicalDevice, VkDevice device, std::uint32_t width, std::uint32_t height,
-                VmaAllocator allocator);
+                VmaAllocator allocator, std::span<const std::uint32_t> sharingFamilies = {});
 
     /// Releases all owned Vulkan resources.
     void destroy();
+
+    /** @brief True when the image is shared concurrently by several queue families. */
+    [[nodiscard]] bool concurrentSharing() const noexcept {
+        return m_sharingFamilies.size() > 1;
+    }
 
     /** @brief Returns the complete Hi-Z image handle. */
     [[nodiscard]] VkImage image() const noexcept {
@@ -131,6 +139,7 @@ class HiZBuffer {
     VkImage m_image{VK_NULL_HANDLE};
     VmaAllocation m_allocation{VK_NULL_HANDLE};
     VmaAllocator m_allocator{VK_NULL_HANDLE};
+    std::vector<std::uint32_t> m_sharingFamilies;
     VkImageView m_fullView{VK_NULL_HANDLE};
     VkSampler m_sampler{VK_NULL_HANDLE};
 

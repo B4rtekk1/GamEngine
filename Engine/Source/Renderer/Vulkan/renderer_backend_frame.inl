@@ -840,9 +840,18 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
     {
         bool meshletForwardReady = meshletForwardPathActive && renderGameViewport &&
                                    vulkanDevice.supportsMeshShaders() && optimizationFeatures.gpuCulling &&
-                                   globalMeshletCount != 0 && meshletIndexBuffer.handle() != VK_NULL_HANDLE &&
+                                   globalMeshletCount != 0 &&
+                                   // Visible-meshlet entries pack the id into 24 bits.
+                                   globalMeshletCount <= 0x00ffffffU &&
+                                   meshletIndexBuffer.handle() != VK_NULL_HANDLE &&
                                    !instanceBatches.empty() && !sceneGpu.database.instances().empty() &&
                                    meshletCullSets[currentFrame] != VK_NULL_HANDLE;
+        // Foliage-pipeline batches (two-sided, masked or blended) already
+        // own a dedicated indexed stream. When one of them cannot use the
+        // meshlet commands, keep that whole stream indexed and route only
+        // the remaining opaque geometry through meshlet culling, instead of
+        // giving up cluster culling for the entire scene.
+        bool meshletSkipsFoliage = false;
         if (meshletForwardReady) {
             for (const InstanceBatch& batch : instanceBatches) {
                 if (batch.shaderSlot == materialShaderIndex(MaterialShader::Water) ||
@@ -850,14 +859,40 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     continue;
                 // Meshlet commands currently mix both face modes in one
                 // shader bin. Two-sided materials need the indexed lists.
-                if (batch.meshletCount == 0 || batch.shaderSlot >= MaterialShaderCount || batch.twoSided ||
-                    batch.lod1IndexCount != 0 || batch.lod2IndexCount != 0) {
-                    meshletForwardReady = false;
-                    break;
+                if (batch.meshletCount != 0 && batch.shaderSlot < MaterialShaderCount && !batch.twoSided &&
+                    batch.lod1IndexCount == 0 && batch.lod2IndexCount == 0)
+                    continue;
+                if (batch.foliagePipeline) {
+                    meshletSkipsFoliage = true;
+                    continue;
                 }
+                meshletForwardReady = false;
+                meshletSkipsFoliage = false;
+                break;
             }
         }
+        // Culling samples the previous frame's pyramid while this frame's
+        // depth is reduced into a different image.
+        // Empty scenes do not allocate culling/Hi-Z resources. Keep the
+        // frame path disabled for them so no barrier references the null
+        // image handle left by the intentionally skipped allocation.
+        const auto& hiZBuffer = hiZBuffers[currentFrame];
+        const auto previousHiZFrame = (currentFrame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+        const auto& previousHiZBuffer = hiZBuffers[previousHiZFrame];
+        const bool hasHiZResources = hiZBuffer.image() != VK_NULL_HANDLE;
+        const bool hadPreviousHiZ = hiZValid[previousHiZFrame];
+        const DirectionalLight& mainLight = sceneFrameDataCache.data.directionalLight;
+        const bool mainLightShadows =
+            mainLight.enabled && mainLight.castShadows && optimizationFeatures.shadows && hasShadowCasters;
+        // Shadows need receiver depth even when occlusion culling is off.
+        const bool hizEnabled =
+            hasHiZResources && (canUseHiZOcclusionCulling() || (mainLightShadows && renderGameViewport));
+
         if (meshletForwardReady) {
+            const std::uint32_t excludeFoliagePipeline = meshletSkipsFoliage ? 1U : 0U;
+            meshletCullingUniformBuffers[currentFrame].update(
+                &excludeFoliagePipeline, sizeof(excludeFoliagePipeline),
+                offsetof(Culling::MeshletCullUniforms, excludeFoliagePipeline));
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, meshletForwardProfileName);
             // Build an indirect command from the compact coarse-visible
             // list, so meshlet culling launches one group per visible
@@ -933,9 +968,6 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
         }
         const ForwardPass& sceneForwardPass = sceneViewportForwardPass;
-        const DirectionalLight& mainLight = sceneFrameDataCache.data.directionalLight;
-        const bool mainLightShadows =
-            mainLight.enabled && mainLight.castShadows && optimizationFeatures.shadows && hasShadowCasters;
         // ImGui owns a persistent descriptor for Scene View and may sample
         // it even before the viewport receives its first deferred redraw.
         // The first use may be a real Scene View render, so prepare the
@@ -1000,46 +1032,6 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             dependency.pImageMemoryBarriers = &colorToSampled;
             vkCmdPipelineBarrier2(commandBuffer, &dependency);
             sceneViewportImageInitialized = true;
-        }
-        // Culling samples the previous frame's pyramid while this frame's
-        // depth is reduced into a different image.
-        // Empty scenes do not allocate culling/Hi-Z resources. Keep the
-        // frame path disabled for them so no barrier references the null
-        // image handle left by the intentionally skipped allocation.
-        const auto& hiZBuffer = hiZBuffers[currentFrame];
-        const auto previousHiZFrame = (currentFrame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
-        const auto& previousHiZBuffer = hiZBuffers[previousHiZFrame];
-        const bool hasHiZResources = hiZBuffer.image() != VK_NULL_HANDLE;
-        // Shadows need receiver depth even when occlusion culling is off.
-        const bool hizEnabled =
-            hasHiZResources && (canUseHiZOcclusionCulling() || (mainLightShadows && renderGameViewport));
-        const bool hadPreviousHiZ = hiZValid[previousHiZFrame];
-        // Descriptors stay bound on the first frame and after a camera
-        // cut. Give both images a sampled layout before any shader can
-        // reference them; UNDEFINED discards stale history in those cases.
-        if (hasHiZResources) {
-            std::array<VkImageMemoryBarrier2, 2> initialBarriers{};
-            std::uint32_t barrierCount = 0;
-            for (const std::uint32_t slot : {previousHiZFrame, currentFrame}) {
-                if (hiZValid[slot])
-                    continue;
-                const auto& image = hiZBuffers[slot];
-                auto& barrier = initialBarriers[barrierCount++];
-                barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-                barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                barrier.image = image.image();
-                barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, image.mipCount(), 0, 1};
-            }
-            if (barrierCount != 0) {
-                VkDependencyInfo initialDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                initialDependency.imageMemoryBarrierCount = barrierCount;
-                initialDependency.pImageMemoryBarriers = initialBarriers.data();
-                vkCmdPipelineBarrier2(commandBuffer, &initialDependency);
-            }
         }
 
         if (particleSystem) {
@@ -1832,7 +1824,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                         .usage =
                                                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                         .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        .mipLevels = hiZBuffer.mipCount()};
+                                                        .mipLevels = hiZBuffer.mipCount(),
+                                                        .concurrentSharing = hiZBuffer.concurrentSharing()};
             const auto graphHiZ =
                 hizEnabled ? viewportFrameGraph.importTexture("Hi-Z pyramid", hiZBuffer.image(), graphHiZDesc,
                                                               {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1941,6 +1934,18 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     }
                     if (meshletForwardReady)
                         vkCmdBindIndexBuffer(buffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+                    if (meshletSkipsFoliage) {
+                        for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                            if (!activeShaderSlots.test(shader) || shader == materialShaderIndex(MaterialShader::Water) ||
+                                shader == GlassThinProgramSlot)
+                                continue;
+                            forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
+                                                     foliageIndirectDraws[currentFrame],
+                                                     static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
+                                                         sizeof(VkDrawIndexedIndirectCommand),
+                                                     static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t), true);
+                        }
+                    }
                     if (!sceneGpu.grassInstances.empty()) {
                         const auto& lists = grassRenderLists[currentFrame];
                         Culling::IndexedIndirectDrawCount grassDraw;
@@ -2016,26 +2021,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
-            // Submit GTAO as the first compute work after the depth prepass.
-            // Hi-Z does not feed AO and should not delay its critical path.
-            if (hizEnabled) {
-                viewportFrameGraph.addPass(
-                    "Hi-Z", RenderGraph::Queue::Graphics,
-                    [&](RenderGraph::PassBuilder& builder) {
-                        builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
-                        builder.write(graphHiZ, RenderGraph::TextureUsage::StorageWriteCompute);
-                        builder.setFinalTextureState(graphHiZ, {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                                .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                                                                .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                                .write = false});
-                    },
-                    [&](const VkCommandBuffer buffer) {
-                        gpuTimestampProfiler.beginZone(buffer, currentFrame, hiZProfileName);
-                        hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame], VK_NULL_HANDLE, false);
-                        gpuTimestampProfiler.endZone(buffer, currentFrame);
-                    });
-                viewportFrameGraph.exportTexture(graphHiZ);
-            } else
+            if (!hizEnabled)
                 viewportFrameGraph.exportTexture(graphDepth);
             RenderGraph::TextureHandle graphDirectionalVisibility{};
             if (!msaa.enabled() && directionalVisibilityPass.resultImage(currentFrame) != VK_NULL_HANDLE) {
@@ -2051,7 +2037,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     "Directional visibility", directionalVisibilityPass.resultImage(currentFrame), visibilityDesc,
                     {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
                 // This graphics-queue compute pass only needs prepass outputs.
-                // It can overlap GTAO on async compute; Hi-Z uses graphics.
+                // It overlaps GTAO on async compute.
                 viewportFrameGraph.addPass(
                     "Directional visibility", RenderGraph::Queue::Graphics,
                     [&](RenderGraph::PassBuilder& builder) {
@@ -2092,6 +2078,37 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     builder.setSideEffect();
                 },
                 {});
+            // This frame's pyramid is first read by the next frame (culling
+            // and VSM marking). Declared last, it becomes its own compute
+            // batch that overlaps the raster-bound forward pass instead of
+            // competing with GTAO and directional visibility for the SMs.
+            // The viewport join is deferred to presentation for this reason.
+            if (hizEnabled) {
+                viewportFrameGraph.addPass(
+                    "Hi-Z", gtaoQueue,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.startNewBatch();
+                        builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                        builder.write(graphHiZ, RenderGraph::TextureUsage::StorageWriteCompute);
+                        builder.setFinalTextureState(graphHiZ, {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                                                .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                                .write = false});
+                    },
+                    [&](const VkCommandBuffer buffer) {
+                        // Timestamps stay on graphics; async compute gets a label only.
+                        if (gtaoQueue == RenderGraph::Queue::Graphics)
+                            gpuTimestampProfiler.beginZone(buffer, currentFrame, hiZProfileName);
+                        else
+                            gpuTimestampProfiler.beginLabel(buffer, hiZProfileName);
+                        hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame], VK_NULL_HANDLE, false);
+                        if (gtaoQueue == RenderGraph::Queue::Graphics)
+                            gpuTimestampProfiler.endZone(buffer, currentFrame);
+                        else
+                            gpuTimestampProfiler.endLabel(buffer);
+                    });
+                viewportFrameGraph.exportTexture(graphHiZ);
+            }
             viewportFrameGraph.compile();
             profileRenderGraph(viewportFrameGraph, true);
             auto graphCommands =
@@ -2114,6 +2131,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             context.nextQueueTimelineValues[1] = &renderGraphComputeTimelineValue;
             context.nextQueueTimelineValues[2] = &renderGraphTransferTimelineValue;
             context.uploadTimeline = uploadContext.timeline();
+            context.deferredCompletion = &viewportGraphCompletion;
 
             const bool rtContactRequested = vulkanDevice.supportsRayQuery() && !msaa.enabled() && mainLightShadows &&
                                             rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
@@ -2310,6 +2328,18 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             }
             if (meshletForwardReady)
                 vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+            if (meshletSkipsFoliage) {
+                for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                    if (!activeShaderSlots.test(shader) || shader == materialShaderIndex(MaterialShader::Water) ||
+                        shader == GlassThinProgramSlot)
+                        continue;
+                    lightingForwardPass.drawMaterial(
+                        commandBuffer, shadowPass.descriptorSet(currentFrame), shader,
+                        foliageIndirectDraws[currentFrame],
+                        static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand),
+                        static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t), true);
+                }
+            }
             if (!sceneGpu.grassInstances.empty()) {
                 const auto& lists = grassRenderLists[currentFrame];
                 Culling::IndexedIndirectDrawCount grassDraw;
@@ -3053,6 +3083,16 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                      .value = 0,
                                                      .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
     presentationContext.completionFence = inFlightFences[currentFrame];
+    // Join the viewport graph's trailing async work (Hi-Z, GTAO) before the
+    // frame fence; the next frame reads the pyramid and rewrites depth.
+    const std::array<VkSemaphore, 3> viewportTimelines{renderGraphTimeline, renderGraphComputeTimeline,
+                                                      renderGraphTransferTimeline};
+    for (std::uint32_t queue = 0; queue < viewportTimelines.size(); ++queue)
+        if (viewportGraphCompletion[queue] != 0)
+            presentationContext.completionWaits.push_back({.semaphore = viewportTimelines[queue],
+                                                           .value = viewportGraphCompletion[queue],
+                                                           .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+    viewportGraphCompletion = {};
     if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
         throw std::runtime_error("Could not end graphics commands before presentation RenderGraph");
     const std::uint64_t prePresentationUploadCandidate = legacyUploadValue();

@@ -45,6 +45,17 @@ inline bool vsmRequestBefore(std::uint32_t left, std::uint32_t right, bool leftR
     return left < right;
 }
 
+// Receiver feedback oscillates with the temporal jitter sequence. When the
+// atlas is oversubscribed, a tile missing from one frame's admitted set is
+// otherwise evicted and re-rendered a few frames later, forever. Only tiles
+// unused for a short grace period may be replaced; the miss keeps sampling
+// its resident coarser level meanwhile.
+inline constexpr std::uint64_t VsmMinimumEvictionAge = 8;
+
+inline bool vsmPageEvictable(std::uint64_t lastUsed, std::uint64_t cacheClock) noexcept {
+    return cacheClock >= lastUsed && cacheClock - lastUsed >= VsmMinimumEvictionAge;
+}
+
 inline bool vsmRefreshBefore(std::uint32_t left, std::uint32_t right, std::uint64_t leftRendered,
                              std::uint64_t rightRendered, std::uint32_t leftLevel, std::uint32_t rightLevel) noexcept {
     if (leftRendered != rightRendered)

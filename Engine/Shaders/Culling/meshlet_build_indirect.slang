@@ -3,6 +3,8 @@
 // contains either zero or one command: material/pipeline binning expands this
 // into several commands later without changing the consumer contract.
 
+// meshlet_culling merges adjacent meshlets into runs (length in the high 8
+// bits of meshletId); a mesh-task consumer must expand them before use.
 struct VisibleMeshlet { uint instanceId; uint meshletId; };
 struct MeshTaskIndirectCommand { uint groupCountX; uint groupCountY; uint groupCountZ; };
 

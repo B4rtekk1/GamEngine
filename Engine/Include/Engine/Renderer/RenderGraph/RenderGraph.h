@@ -9,6 +9,7 @@
  * a persistent pool: reset() releases logical declarations, never GPU memory.
  */
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -201,6 +202,16 @@ struct SubmissionContext final {
     std::vector<ExternalSemaphoreWait> externalWaits;
     std::vector<ExternalSemaphoreSignal> completionSignals;
     VkFence completionFence{VK_NULL_HANDLE};
+    // Extra waits on the completion submission; their batch field is ignored.
+    // A later graph uses this to join work an earlier graph deferred.
+    std::vector<ExternalSemaphoreWait> completionWaits;
+    // When set, the completion submission joins only work on the graphics
+    // hardware queue. The final timeline value of every other used queue
+    // (zero otherwise) is stored here; the caller must join those before
+    // anything depends on the graph's completion. Graphics work recorded
+    // after the graph then waits only for the cross-queue producers it
+    // actually reads, not for unrelated trailing async compute.
+    std::array<std::uint64_t, 3>* deferredCompletion{};
 };
 
 class RenderGraph;

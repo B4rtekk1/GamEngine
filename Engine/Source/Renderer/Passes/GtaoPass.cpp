@@ -530,7 +530,8 @@ void GtaoPass::record(VkCommandBuffer cmd, uint32_t frame, uint32_t sampleIndex,
                                     useExternalNormals ? 1U : 0U,
                                     linearDepthMipCount_ - 1 - sourceMip};
         bindKernel(cmd, Kernel::Main, slot(Kernel::Main, frame), images, &settings, sizeof(settings));
-        vkCmdDispatch(cmd, (halfExtent_.width + 7) / 8, (halfExtent_.height + 7) / 8, 1);
+        // Matches gtao_main's 16x8 workgroup.
+        vkCmdDispatch(cmd, (halfExtent_.width + 15) / 16, (halfExtent_.height + 7) / 8, 1);
     }
     afterWrites();
     const HdrBuffer* denoised = &raw_;

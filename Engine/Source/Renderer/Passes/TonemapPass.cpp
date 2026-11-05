@@ -7,7 +7,15 @@ namespace {
 struct TonemapSettings {
     float exposure;
     float applyGamma;
+    float sharpness;
 };
+
+// TAA output is resampled history and grows soft in motion. Sharpen only
+// what is displayed, never the history itself, so the filter cannot feed
+// back into later frames. The shader applies it only to moving pixels: at
+// rest TAA converges sharp, and sharpening there amplified the residual
+// jitter at edges into visible flicker.
+constexpr float TemporalSharpness = 0.5F;
 
 bool isSrgbFormat(const VkFormat format) {
     return format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_B8G8R8A8_SRGB ||
@@ -22,7 +30,7 @@ TonemapPass::~TonemapPass() {
 void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat, const VkExtent2D extent,
                          const std::vector<VkImageView>& swapchainViews, const VkImageView hdrView,
                          const VkSampler hdrSampler, const VkImageView bloomView, Assets::AssetManager& assets,
-                         const std::array<VkImageView, 2> temporalViews) {
+                         const std::array<VkImageView, 2> temporalViews, const VkImageView velocityView) {
     if (device == VK_NULL_HANDLE || swapchainFormat == VK_FORMAT_UNDEFINED || swapchainViews.empty() ||
         hdrView == VK_NULL_HANDLE || hdrSampler == VK_NULL_HANDLE) {
         throw std::invalid_argument("Tonemap pass received incomplete resources");
@@ -31,6 +39,7 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat, 
     destroy();
     device_ = device;
     manualGamma_ = !isSrgbFormat(swapchainFormat);
+    hasVelocity_ = velocityView != VK_NULL_HANDLE;
     try {
         VkDescriptorSetLayoutBinding binding{};
         binding.binding = 0;
@@ -40,7 +49,9 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat, 
         VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         VkDescriptorSetLayoutBinding bloomBinding = binding;
         bloomBinding.binding = 1;
-        std::array bindings{binding, bloomBinding};
+        VkDescriptorSetLayoutBinding velocityBinding = binding;
+        velocityBinding.binding = 2;
+        std::array bindings{binding, bloomBinding, velocityBinding};
         layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
         layoutInfo.pBindings = bindings.data();
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &descriptorSetLayout_) != VK_SUCCESS) {
@@ -64,7 +75,7 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat, 
 
         targetViews_ = swapchainViews;
 
-        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 9};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = static_cast<std::uint32_t>(descriptorSets_.size());
         poolInfo.poolSizeCount = 1;
@@ -87,11 +98,14 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat, 
                                                  temporalViews[0] == VK_NULL_HANDLE ? hdrView : temporalViews[0],
                                                  temporalViews[1] == VK_NULL_HANDLE ? hdrView : temporalViews[1]};
         for (std::size_t index = 0; index < descriptorSets_.size(); ++index) {
-            const VkDescriptorImageInfo images[2]{
+            // Without a velocity target sharpening stays off; any view keeps
+            // the binding valid.
+            const VkDescriptorImageInfo images[3]{
                 {hdrSampler, sources[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                {hdrSampler, bloomView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-            VkWriteDescriptorSet writes[2]{};
-            for (std::uint32_t bindingIndex = 0; bindingIndex < 2; ++bindingIndex) {
+                {hdrSampler, bloomView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                {hdrSampler, hasVelocity_ ? velocityView : hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+            VkWriteDescriptorSet writes[3]{};
+            for (std::uint32_t bindingIndex = 0; bindingIndex < 3; ++bindingIndex) {
                 writes[bindingIndex] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                 writes[bindingIndex].dstSet = descriptorSets_[index];
                 writes[bindingIndex].dstBinding = bindingIndex;
@@ -99,7 +113,7 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat, 
                 writes[bindingIndex].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 writes[bindingIndex].pImageInfo = &images[bindingIndex];
             }
-            vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
         }
     } catch (...) {
         destroy();
@@ -142,7 +156,8 @@ void TonemapPass::record(const VkCommandBuffer commandBuffer, const std::uint32_
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1,
                             &descriptorSets_.at(sourceIndex), 0, nullptr);
-    const TonemapSettings settings{exposure, manualGamma_ ? 1.0F : 0.0F};
+    const TonemapSettings settings{exposure, manualGamma_ ? 1.0F : 0.0F,
+                                   sourceIndex != 0 && hasVelocity_ ? TemporalSharpness : 0.0F};
     vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(settings), &settings);
     const VkViewport viewport{0.0F, 0.0F, static_cast<float>(extent.width), static_cast<float>(extent.height),
                               0.0F, 1.0F};

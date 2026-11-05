@@ -20,6 +20,9 @@ class GpuTimestampProfiler final {
     [[nodiscard]] bool hasCompletedFrame() const noexcept;
     void beginZone(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, ProfileNameId name) const;
     void endZone(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
+    /** Debug-utils label only, for queues whose timestamps are not collected. */
+    void beginLabel(VkCommandBuffer commandBuffer, ProfileNameId name) const;
+    void endLabel(VkCommandBuffer commandBuffer) const;
     [[nodiscard]] std::optional<GpuProfileFrame> completedFrame(std::uint32_t frameIndex) const;
 
   private:
@@ -36,6 +39,10 @@ class GpuTimestampProfiler final {
 
     VkDevice device_{VK_NULL_HANDLE};
     VkQueryPool queryPool_{VK_NULL_HANDLE};
+    // Zones double as debug-utils labels so external GPU tools (Nsight,
+    // RenderDoc) group work by the same pass names as the profile panel.
+    PFN_vkCmdBeginDebugUtilsLabelEXT beginLabel_{};
+    PFN_vkCmdEndDebugUtilsLabelEXT endLabel_{};
     float timestampPeriodNs_{};
     std::array<bool, FramesInFlight> submitted_{};
     mutable std::array<std::vector<PendingEvent>, FramesInFlight> events_;

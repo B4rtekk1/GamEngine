@@ -336,11 +336,15 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
     colorAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     colorAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     colorAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    // The renderer does not enable independentBlend. Keep every MRT blend
-    // state identical; channel masks are not needed for float velocity or
-    // oct-normal attachments.
+    // Blending stays identical across MRT attachments, but each one keeps
+    // its own write mask (independentBlend is a required device feature).
+    // Copying the first mask silently disabled the depth prepass's velocity
+    // and view-normal outputs: TAA, GTAO and shadow sampling read cleared
+    // targets.
     VkPipelineColorBlendAttachmentState additionalColorAttachment = colorAttachment;
+    additionalColorAttachment.colorWriteMask = options.additionalColorWriteMask;
     VkPipelineColorBlendAttachmentState thirdColorAttachment = colorAttachment;
+    thirdColorAttachment.colorWriteMask = options.thirdColorWriteMask;
     std::array colorAttachments{colorAttachment, additionalColorAttachment, thirdColorAttachment};
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     blend.attachmentCount = options.colorFormat == VK_FORMAT_UNDEFINED

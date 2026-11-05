@@ -18,11 +18,17 @@ TonemapVertexOutput vertexMain(uint vertexIndex : SV_VertexID)
 Sampler2D hdrImage;
 [[vk::binding(1, 0)]]
 Sampler2D bloomImage;
+// Screen motion in UV, including the TAA jitter delta (under one pixel).
+[[vk::binding(2, 0)]]
+Sampler2D velocityImage;
 
 struct TonemapSettings
 {
     float exposure;
     float applyGamma;
+    // Contrast-adaptive sharpening strength in [0, 1] for moving pixels;
+    // zero disables it.
+    float sharpness;
 };
 
 [[vk::push_constant]]
@@ -63,6 +69,31 @@ float3 acesFilmLuminancePreserving(float3 color)
     return color * (mappedLuminance / luminance);
 }
 
+float3 compressHdr(float3 color) { return color / (1.0 + color); }
+float3 expandHdr(float3 color) { return color / max(1.0 - color, 1.0e-4); }
+
+// AMD CAS-style sharpening on the cross neighbourhood. The weight falls off
+// where the local range is already near black or white, so edges do not
+// ring and flat areas are left untouched. Runs in a Reinhard-compressed
+// space so bright HDR texels cannot dominate it.
+float3 sharpenedHdr(int2 pixel, float sharpness)
+{
+    uint width, height;
+    hdrImage.GetDimensions(width, height);
+    const int2 lastPixel = int2(width, height) - 1;
+    const float3 c = compressHdr(max(hdrImage.Load(int3(pixel, 0)).rgb, 0.0));
+    const float3 n = compressHdr(max(hdrImage.Load(int3(clamp(pixel + int2(0, -1), 0, lastPixel), 0)).rgb, 0.0));
+    const float3 s = compressHdr(max(hdrImage.Load(int3(clamp(pixel + int2(0, 1), 0, lastPixel), 0)).rgb, 0.0));
+    const float3 w = compressHdr(max(hdrImage.Load(int3(clamp(pixel + int2(-1, 0), 0, lastPixel), 0)).rgb, 0.0));
+    const float3 e = compressHdr(max(hdrImage.Load(int3(clamp(pixel + int2(1, 0), 0, lastPixel), 0)).rgb, 0.0));
+    const float3 minimum = min(c, min(min(n, s), min(w, e)));
+    const float3 maximum = max(c, max(max(n, s), max(w, e)));
+    const float3 amplitude = sqrt(saturate(min(minimum, 1.0 - maximum) / max(maximum, 1.0e-5)));
+    const float3 weight = -amplitude * lerp(0.125, 0.2, sharpness);
+    const float3 sharpened = (c + (n + s + w + e) * weight) / (1.0 + 4.0 * weight);
+    return expandHdr(saturate(sharpened));
+}
+
 float interleavedGradientNoise(float2 pixel)
 {
     return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
@@ -72,7 +103,20 @@ float interleavedGradientNoise(float2 pixel)
 TonemapFragmentOutput fragmentMain(TonemapFragmentInput input)
 {
     TonemapFragmentOutput output;
-    float3 color = (hdrImage.Sample(input.uv).rgb + bloomImage.Sample(input.uv).rgb * 0.12) * exp2(settings.exposure);
+    // Ramp in between one and two pixels of motion: the jitter delta alone
+    // stays below one pixel, so a static image is never sharpened.
+    float motionSharpness = 0.0;
+    if (settings.sharpness > 0.0)
+    {
+        uint width, height;
+        velocityImage.GetDimensions(width, height);
+        const float motionPixels = length(velocityImage.Load(int3(int2(input.position.xy), 0)).xy *
+                                          float2(width, height));
+        motionSharpness = settings.sharpness * saturate(motionPixels - 1.0);
+    }
+    const float3 scene = motionSharpness > 0.0 ? sharpenedHdr(int2(input.position.xy), motionSharpness)
+                                               : hdrImage.Sample(input.uv).rgb;
+    float3 color = (scene + bloomImage.Sample(input.uv).rgb * 0.12) * exp2(settings.exposure);
     color = acesFilmLuminancePreserving(color);
     // The display target is normalized; clipping now happens only after hue
     // preservation rather than as a side effect of per-channel tone mapping.

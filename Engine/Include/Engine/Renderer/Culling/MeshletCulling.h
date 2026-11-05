@@ -82,7 +82,9 @@ struct alignas(16) MeshletCullUniforms final {
     std::uint32_t hiZMipCount{};
     std::uint32_t enableOcclusionCulling{};
     std::uint32_t cameraCut{};
-    std::uint32_t reserved[2]{};
+    // Non-zero leaves foliage-pipeline instances to their indexed stream.
+    std::uint32_t excludeFoliagePipeline{};
+    std::uint32_t reserved{};
 };
 static_assert(sizeof(MeshletCullUniforms) == 272);
 

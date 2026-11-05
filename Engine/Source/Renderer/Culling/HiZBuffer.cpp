@@ -51,7 +51,8 @@ HiZBuffer& HiZBuffer::operator=(HiZBuffer&& other) noexcept {
 }
 
 void HiZBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice device, const std::uint32_t width,
-                       const std::uint32_t height, const VmaAllocator allocator) {
+                       const std::uint32_t height, const VmaAllocator allocator,
+                       const std::span<const std::uint32_t> sharingFamilies) {
     destroy();
 
     if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE) {
@@ -65,6 +66,7 @@ void HiZBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice dev
     m_physicalDevice = physicalDevice;
     m_device = device;
     m_allocator = allocator;
+    m_sharingFamilies.assign(sharingFamilies.begin(), sharingFamilies.end());
     m_width = width;
     m_height = height;
     m_mipCount = calculateMipCount(width, height);
@@ -143,7 +145,13 @@ void HiZBuffer::createImage() {
                                 .tiling = VK_IMAGE_TILING_OPTIMAL,
                                 .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
                                          VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                                .sharingMode = m_sharingFamilies.size() > 1 ? VK_SHARING_MODE_CONCURRENT
+                                                                            : VK_SHARING_MODE_EXCLUSIVE,
+                                .queueFamilyIndexCount = m_sharingFamilies.size() > 1
+                                                             ? static_cast<std::uint32_t>(m_sharingFamilies.size())
+                                                             : 0U,
+                                .pQueueFamilyIndices =
+                                    m_sharingFamilies.size() > 1 ? m_sharingFamilies.data() : nullptr,
                                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
 
     VmaAllocationCreateInfo allocationInfo{};

@@ -1754,14 +1754,35 @@ void RenderGraph::recordAndSubmit(const SubmissionContext& context) {
     if (context.queues[static_cast<std::uint32_t>(Queue::Graphics)] == VK_NULL_HANDLE) {
         throw std::invalid_argument("RenderGraph completion requires a graphics queue");
     }
+    const VkQueue graphicsQueue = context.queues[static_cast<std::uint32_t>(Queue::Graphics)];
+    if (context.deferredCompletion != nullptr) {
+        if (!context.completionSignals.empty() || context.completionFence != VK_NULL_HANDLE ||
+            !context.completionWaits.empty())
+            throw std::invalid_argument("A deferred RenderGraph completion cannot signal or wait");
+        context.deferredCompletion->fill(0);
+    }
     std::vector<VkSemaphoreSubmitInfo> completionWaits;
     for (std::uint32_t queue = 0; queue < lastQueueValues.size(); ++queue) {
         if (lastQueueValues[queue] == 0)
             continue;
+        // The join on the graphics queue itself still orders everything the
+        // caller records next; only other hardware queues are deferred.
+        if (context.deferredCompletion != nullptr && context.queues[queue] != graphicsQueue) {
+            (*context.deferredCompletion)[queue] = lastQueueValues[queue];
+            continue;
+        }
         completionWaits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                    .semaphore = context.queueTimelines[queue],
                                    .value = lastQueueValues[queue],
                                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+    }
+    for (const ExternalSemaphoreWait& wait : context.completionWaits) {
+        if (wait.semaphore == VK_NULL_HANDLE)
+            throw std::invalid_argument("RenderGraph completion wait is null");
+        completionWaits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                   .semaphore = wait.semaphore,
+                                   .value = wait.value,
+                                   .stageMask = wait.stage});
     }
     std::vector<VkSemaphoreSubmitInfo> completionSignals;
     for (const ExternalSemaphoreSignal& signal : context.completionSignals) {
@@ -1777,8 +1798,7 @@ void RenderGraph::recordAndSubmit(const SubmissionContext& context) {
                                    .pWaitSemaphoreInfos = completionWaits.data(),
                                    .signalSemaphoreInfoCount = static_cast<std::uint32_t>(completionSignals.size()),
                                    .pSignalSemaphoreInfos = completionSignals.data()};
-    if (vkQueueSubmit2(context.queues[static_cast<std::uint32_t>(Queue::Graphics)], 1, &completion,
-                       context.completionFence) != VK_SUCCESS) {
+    if (vkQueueSubmit2(graphicsQueue, 1, &completion, context.completionFence) != VK_SUCCESS) {
         throw std::runtime_error("Could not submit RenderGraph completion batch");
     }
 }

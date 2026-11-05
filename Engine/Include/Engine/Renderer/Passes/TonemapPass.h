@@ -24,7 +24,8 @@ class TonemapPass final {
 
     void create(VkDevice device, VkFormat swapchainFormat, VkExtent2D extent,
                 const std::vector<VkImageView>& swapchainViews, VkImageView hdrView, VkSampler hdrSampler,
-                VkImageView bloomView, Assets::AssetManager& assets, std::array<VkImageView, 2> temporalViews = {});
+                VkImageView bloomView, Assets::AssetManager& assets, std::array<VkImageView, 2> temporalViews = {},
+                VkImageView velocityView = VK_NULL_HANDLE);
 
     void destroy() noexcept;
 
@@ -33,6 +34,7 @@ class TonemapPass final {
 
   private:
     VkDevice device_ = VK_NULL_HANDLE;
+    bool hasVelocity_ = false;
     GraphicsPipeline pipeline_;
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;

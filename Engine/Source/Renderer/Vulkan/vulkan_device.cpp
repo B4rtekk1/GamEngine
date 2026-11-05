@@ -239,7 +239,7 @@ bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
         features12.timelineSemaphore != VK_TRUE || features12.drawIndirectCount != VK_TRUE ||
         features12.shaderFloat16 != VK_TRUE || features12.bufferDeviceAddress != VK_TRUE ||
         features11.shaderDrawParameters != VK_TRUE || features2.features.multiDrawIndirect != VK_TRUE ||
-        features2.features.shaderInt16 != VK_TRUE ||
+        features2.features.shaderInt16 != VK_TRUE || features2.features.independentBlend != VK_TRUE ||
         features2.features.shaderSampledImageArrayDynamicIndexing != VK_TRUE ||
         features2.features.textureCompressionBC != VK_TRUE) {
         return false;
@@ -437,6 +437,9 @@ void VulkanDevice::createLogicalDevice() {
     vkGetPhysicalDeviceFeatures(physicalDevice_, &availableCoreFeatures);
     features2.features.multiDrawIndirect = VK_TRUE;
     features2.features.shaderInt16 = VK_TRUE;
+    // MRT passes mask attachments differently; the depth prepass writes
+    // velocity and view normals while leaving HDR colour untouched.
+    features2.features.independentBlend = VK_TRUE;
     features2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
     features2.features.textureCompressionBC = VK_TRUE;
     // Anisotropic filtering is optional in Vulkan. Enable it when the

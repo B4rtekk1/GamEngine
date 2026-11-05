@@ -1299,7 +1299,8 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
                 for (std::uint32_t slot = 0; slot < physicalPages_.size(); ++slot) {
                     const PhysicalPage& page = physicalPages_[slot];
                     const std::uint32_t owner = virtualPageIndex(page.level, page.virtualX, page.virtualY);
-                    if (!scheduled[slot] && !requested[owner] && page.lastUsed < oldest) {
+                    if (!scheduled[slot] && !requested[owner] && vsmPageEvictable(page.lastUsed, cacheClock_) &&
+                        page.lastUsed < oldest) {
                         oldest = page.lastUsed;
                         physical = slot;
                     }

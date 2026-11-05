@@ -870,7 +870,8 @@ void createSceneSkyPass() {
 
 void createTonemapPass() const {
     tonemapPass.create(device, swapchain.format(), swapchain.extent(), swapchain.imageViews(), hdrBuffer.imageView(),
-                       hdrBuffer.sampler(), bloomPass.resultView(), assetManager, temporalAaPass.historyViews());
+                       hdrBuffer.sampler(), bloomPass.resultView(), assetManager, temporalAaPass.historyViews(),
+                       msaa.enabled() ? VK_NULL_HANDLE : velocityBuffer.imageView());
 }
 
 void createBloomPass() {

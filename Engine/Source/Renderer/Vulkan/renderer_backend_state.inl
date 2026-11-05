@@ -697,6 +697,8 @@ std::uint64_t renderGraphComputeTimelineValue{};
 VkSemaphore renderGraphTransferTimeline{};
 std::uint64_t renderGraphTransferTimelineValue{};
 bool presentationGraphSubmittedThisFrame{};
+// Final timeline values of the viewport graph, joined by the presentation submission.
+std::array<std::uint64_t, 3> viewportGraphCompletion{};
 
 std::vector<VkSemaphore> imageAvailableSemaphores;
 std::vector<VkSemaphore> renderFinishedSemaphores;

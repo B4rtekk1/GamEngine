@@ -24,6 +24,14 @@ void GpuTimestampProfiler::create(const VkPhysicalDevice physicalDevice, const V
         throw std::runtime_error("Could not create GPU timestamp query pool");
     }
     device_ = device;
+    beginLabel_ = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(device, "vkCmdBeginDebugUtilsLabelEXT"));
+    endLabel_ =
+        reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(vkGetDeviceProcAddr(device, "vkCmdEndDebugUtilsLabelEXT"));
+    if (beginLabel_ == nullptr || endLabel_ == nullptr) {
+        beginLabel_ = nullptr;
+        endLabel_ = nullptr;
+    }
     submitted_.fill(false);
     for (auto& events : events_) {
         events.reserve(MaxZonesPerFrame);
@@ -42,6 +50,8 @@ void GpuTimestampProfiler::destroy() noexcept {
     }
     device_ = VK_NULL_HANDLE;
     queryPool_ = VK_NULL_HANDLE;
+    beginLabel_ = nullptr;
+    endLabel_ = nullptr;
     timestampPeriodNs_ = 0.0F;
     submitted_.fill(false);
     for (auto& events : events_) {
@@ -95,6 +105,7 @@ bool GpuTimestampProfiler::hasCompletedFrame() const noexcept {
 
 void GpuTimestampProfiler::beginZone(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex,
                                      const ProfileNameId name) const {
+    beginLabel(commandBuffer, name);
     if (!timestampRecordingActive(queryPool_)) {
         return;
     }
@@ -109,7 +120,22 @@ void GpuTimestampProfiler::beginZone(const VkCommandBuffer commandBuffer, const 
                          query(frameIndex, 2 + eventIndex * 2));
 }
 
+void GpuTimestampProfiler::beginLabel(const VkCommandBuffer commandBuffer, const ProfileNameId name) const {
+    if (beginLabel_ == nullptr)
+        return;
+    // Profiler names are null-terminated std::string storage.
+    const VkDebugUtilsLabelEXT label{.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+                                     .pLabelName = Profiler::name(name).data()};
+    beginLabel_(commandBuffer, &label);
+}
+
+void GpuTimestampProfiler::endLabel(const VkCommandBuffer commandBuffer) const {
+    if (endLabel_ != nullptr)
+        endLabel_(commandBuffer);
+}
+
 void GpuTimestampProfiler::endZone(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
+    endLabel(commandBuffer);
     if (!timestampRecordingActive(queryPool_)) {
         return;
     }

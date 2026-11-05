@@ -20,7 +20,11 @@ struct Settings { float2 projectionScale; float radiusView, centerDepthScale; ui
 // The centre and its four neighbours feed edge detection and normal
 // reconstruction. Horizon taps reach far beyond any practical apron, so they
 // always go through the texture cache instead of shared memory.
-groupshared float depthTile[10][10];
+// 16x8 groups (four warps) rather than 8x8: with two-warp groups the
+// per-SM block limit caps occupancy at two thirds, and this latency-bound
+// kernel needs the extra warps to hide its horizon fetches.
+static const uint TileWidth=16, TileHeight=8;
+groupshared float depthTile[TileHeight+2][TileWidth+2];
 static const float BackgroundDepth=65500.0;
 static const float Pi=3.14159265359;
 float3 positionFromDepth(int2 pixel,float depth,float2 positionScale,float2 positionBias){
@@ -72,11 +76,11 @@ float3 loadViewNormal(int2 pixel,uint2 aoSize){
 }
 // `sinNormal` is sin(normalAngle), shared by both horizons of a slice.
 float integrateHorizon(float horizon,float normalAngle,float normalCos,float sinNormal){return(normalCos+2*horizon*sinNormal-cos(2*horizon-normalAngle))*.25;}
-[numthreads(8,8,1)] [shader("compute")]
+[numthreads(TileWidth,TileHeight,1)] [shader("compute")]
 void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_DispatchThreadID){
- uint w,h;rawAo.GetDimensions(w,h);int2 size=int2(w,h), base=int2(groupId.xy)*8-1;
+ uint w,h;rawAo.GetDimensions(w,h);int2 size=int2(w,h), base=int2(groupId.xy)*int2(TileWidth,TileHeight)-1;
 
- for(uint i=threadId.y*8u+threadId.x;i<100u;i+=64u){int2 t=int2(i%10u,i/10u);int2 q=clamp(base+t,int2(0,0),size-1);depthTile[t.y][t.x]=horizonDepth.Load(int3(q,GTAO_HALF_RES)).r;}
+ for(uint i=threadId.y*TileWidth+threadId.x;i<(TileWidth+2)*(TileHeight+2);i+=TileWidth*TileHeight){int2 t=int2(i%(TileWidth+2),i/(TileWidth+2));int2 q=clamp(base+t,int2(0,0),size-1);depthTile[t.y][t.x]=horizonDepth.Load(int3(q,GTAO_HALF_RES)).r;}
  GroupMemoryBarrierWithGroupSync(); if(any(id.xy>=uint2(w,h)))return;
  int2 local=int2(threadId.xy)+1,p=int2(id.xy);float depth=depthTile[local.y][local.x];
  if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=1;return;}

@@ -225,6 +225,58 @@ void refreshCullingBatchObjects() {
     return true;
 }
 
+// Hi-Z images stay SHADER_READ_ONLY_OPTIMAL for their whole life. Descriptors
+// reference both slots from the first frame, and an invalid pyramid is never
+// sampled (hiZValid gates every reader), so its contents need no discard.
+// Fixing the layout here keeps per-frame code free of UNDEFINED transitions
+// on images that async compute rewrites.
+void initializeHiZLayouts() {
+    std::array<VkImageMemoryBarrier2, MAX_FRAMES_IN_FLIGHT> barriers{};
+    std::uint32_t barrierCount = 0;
+    for (const auto& hiZBuffer : hiZBuffers) {
+        if (hiZBuffer.image() == VK_NULL_HANDLE)
+            continue;
+        auto& barrier = barriers[barrierCount++];
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = hiZBuffer.image();
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, hiZBuffer.mipCount(), 0, 1};
+    }
+    if (barrierCount == 0)
+        return;
+    const VkCommandBufferAllocateInfo allocate{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                                               .commandPool = commandPool,
+                                               .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                                               .commandBufferCount = 1};
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(device, &allocate, &commandBuffer) != VK_SUCCESS)
+        throw std::runtime_error("Could not allocate Hi-Z initialization commands");
+    const VkCommandBufferBeginInfo begin{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    vkBeginCommandBuffer(commandBuffer, &begin);
+    const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                      .imageMemoryBarrierCount = barrierCount,
+                                      .pImageMemoryBarriers = barriers.data()};
+    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    vkEndCommandBuffer(commandBuffer);
+    const VkCommandBufferSubmitInfo command{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                                            .commandBuffer = commandBuffer};
+    const VkSubmitInfo2 submit{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                               .commandBufferInfoCount = 1,
+                               .pCommandBufferInfos = &command};
+    const VkResult result = vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &submit, VK_NULL_HANDLE);
+    if (result == VK_SUCCESS)
+        vkQueueWaitIdle(vulkanDevice.graphicsQueue());
+    vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    if (result != VK_SUCCESS)
+        throw std::runtime_error("Could not initialize Hi-Z layouts");
+}
+
 void createCullingResources() {
     auto uploadBatch = uploadContext.beginBatch();
     constexpr std::size_t cullingDescriptorBindingCount = 15;
@@ -273,10 +325,17 @@ void createCullingResources() {
     // when object occlusion culling itself is disabled.
     const bool allocateHiZ = canUseHiZOcclusionCulling() || optimizationFeatures.shadows;
     if (allocateHiZ) {
+        // The game view builds the pyramid on async compute; graphics reads it.
+        const std::array hiZFamilies{vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+        const std::span<const std::uint32_t> sharingFamilies =
+            vulkanDevice.hasAsyncComputeQueue() && hiZFamilies[0] != hiZFamilies[1]
+                ? std::span<const std::uint32_t>(hiZFamilies)
+                : std::span<const std::uint32_t>{};
         for (auto& hiZBuffer : hiZBuffers) {
             hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height,
-                             vulkanDevice.allocator());
+                             vulkanDevice.allocator(), sharingFamilies);
         }
+        initializeHiZLayouts();
     }
 
     constexpr VkDescriptorSetLayoutBinding copyBindings[] = {

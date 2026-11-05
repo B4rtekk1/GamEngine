@@ -133,6 +133,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const float2 jitterPixels = currentJitter * resolution;
     float3 mean = 0.0;
     float3 meanSquared = 0.0;
+    float3 neighbourhoodMin = 1.0;
+    float3 neighbourhoodMax = 0.0;
     float totalWeight = 0.0;
     float3 filtered = 0.0;
     float filterWeight = 0.0;
@@ -145,6 +147,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
             const float weight = exp(-3.0 * float(x * x + y * y) / 4.0);
             mean += sample * weight;
             meanSquared += sample * sample * weight;
+            neighbourhoodMin = min(neighbourhoodMin, sample);
+            neighbourhoodMax = max(neighbourhoodMax, sample);
             totalWeight += weight;
             const float2 d = float2(x, y) + jitterPixels;
             const float reconstruction = exp(-3.2 * dot(d, d));
@@ -177,26 +181,53 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
     // Keep history depth linear before quantizing it to R16F. Device depth
     // loses too much precision near the far plane in a half-float image.
-    const float currentViewDepth = viewDepth(currentDepth);
+    // Compare the nearest depth of the 3x3 neighbourhood, not the centre
+    // sample. Jitter moves a silhouette pixel's centre between the object
+    // and its background every frame; testing that sample rejected the
+    // history along every edge, and the raw aliased sample flickered there.
+    // The neighbourhood minimum is the same whichever side the jitter hits.
+    const float currentViewDepth = viewDepth(nearestDepth);
     const float resolvedDepth = glassReactive > 0.0 ? -currentViewDepth : currentViewDepth;
     const float historyDepthSample = historyDepthFrame.SampleLevel(historyUv, 0.0).r;
     const float historyViewDepth = abs(historyDepthSample);
     // Soft disocclusion: full weight inside the tolerance, fading to zero at
     // twice the tolerance instead of a hard cut that flickers on edges.
     const float depthTolerance = 0.02 * max(max(currentViewDepth, historyViewDepth), 1e-4);
-    const float depthWeight = saturate(2.0 - abs(currentViewDepth - historyViewDepth) / depthTolerance);
+    // Motion is measured at the nearest-depth sample, so a pixel next to a
+    // moving object reads that object's velocity.
+    const float motionPixels = length(physicalVelocity * resolution);
+    const float motionT = saturate(motionPixels / 8.0);
+    const float clipT = saturate(motionPixels / 2.0);
+    const float clipBlend = clipT * clipT * (3.0 - 2.0 * clipT);
+    // A sub-pixel wire or leaf is missed by some jitter offsets and then
+    // vanishes from the whole 3x3 depth neighbourhood. To this test that is
+    // indistinguishable from a disocclusion, so a static thin feature lost
+    // its history every few frames and flickered strongly. Static pixels
+    // therefore rely on colour clipping alone; once anything moves (the
+    // camera, or an object whose velocity the nearest-depth sample picks up
+    // at its silhouette) the depth test applies in full.
+    const float depthWeight = lerp(1.0, saturate(2.0 - abs(currentViewDepth - historyViewDepth) / depthTolerance),
+                                   clipBlend);
     if (!historyInBounds || depthWeight <= 0.0 || settings.historyWeight <= 0.0) {
         resolvedFrame[dispatchId.xy] = float4(min(reinhardInverse(currentTm), MaxHdr), 1.0);
         resolvedDepthFrame[dispatchId.xy] = resolvedDepth;
         return;
     }
 
-    const float motionPixels = length(physicalVelocity * resolution);
-    const float motionT = saturate(motionPixels / 32.0);
-    const float boxSize = lerp(2.5, 0.5, motionT * motionT * (3.0 - 2.0 * motionT));
+    // Two failure modes pull the clip box in opposite directions. In motion,
+    // a wide variance box let stale history through, and the Catmull-Rom
+    // overshoot at edges accumulated into bright rims and smeared texture:
+    // there the box stays near one deviation and inside the neighbourhood's
+    // actual range. At rest, jitter alone decides whether a sub-pixel wire or
+    // leaf appears in this frame's 3x3 neighbourhood; a tight box (and the
+    // range limit in particular) then removed it from history every other
+    // frame and it flickered. Static pixels keep the original wide box.
+    const float boxSize = lerp(2.5, 0.75, clipBlend);
     const float3 deviation = sqrt(max(meanSquared - mean * mean, 0.0)) * boxSize;
+    const float3 boxMin = max(mean - deviation, lerp(mean - deviation, neighbourhoodMin, clipBlend));
+    const float3 boxMax = min(mean + deviation, lerp(mean + deviation, neighbourhoodMax, clipBlend));
     float3 history = sampleHistoryCatmullRom(historyUv, resolution);
-    history = clipAabb(mean - deviation, mean + deviation, mean, history);
+    history = clipAabb(boxMin, boxMax, clamp(mean, boxMin, boxMax), history);
 
     const float previousGlassReactive = historyDepthSample < 0.0 ? 1.0 : 0.0;
     // Constant feedback keeps the accumulation long enough to resolve sub-pixel
@@ -204,6 +235,9 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     float historyWeight = settings.historyWeight;
     historyWeight *= lerp(1.0, 0.12, max(reactive, previousGlassReactive));
     historyWeight *= depthWeight;
+    // Each resampled frame adds a little reprojection blur; let moving
+    // pixels refresh faster so it cannot build up.
+    historyWeight *= lerp(1.0, 0.92, motionT);
     const float3 resolvedTm = lerp(currentTm, history, historyWeight);
     const float3 resolvedLinear = min(reinhardInverse(resolvedTm), MaxHdr);
     resolvedFrame[dispatchId.xy] = float4(resolvedLinear, 1.0);

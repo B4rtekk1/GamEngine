@@ -1,5 +1,6 @@
 // Bins visible meshlets into indexed draws for the existing forward material
 // pipelines. Each command addresses one expanded meshlet in the index heap.
+// meshletId: first meshlet in the low 24 bits, run length minus one above.
 struct VisibleMeshlet { uint instanceId; uint meshletId; };
 struct GpuMeshlet { uint4 range; float4 bounds; float4 cone; uint4 material; };
 struct GPUSceneInstanceRecord {
@@ -46,7 +47,11 @@ void main(uint3 threadId : SV_DispatchThreadID) {
     InterlockedAdd(drawCounts[shaderSlot], 1u, destination);
     if (destination >= capacityPerSlot) return;
 
-    const GpuMeshlet meshlet = meshlets[visible.meshletId];
+    // Culling only merges meshlets whose triangle ranges are contiguous.
+    const uint firstMeshlet = visible.meshletId & 0x00ffffffu;
+    const uint lastMeshlet = firstMeshlet + (visible.meshletId >> 24u);
+    const uint firstTriangle = meshlets[firstMeshlet].range.z;
+    const GpuMeshlet last = meshlets[lastMeshlet];
     commands[shaderSlot * capacityPerSlot + destination] = IndexedDrawCommand(
-        meshlet.range.w * 3u, 1u, meshlet.range.z * 3u, 0, instance.idsAndFlags.z);
+        (last.range.z + last.range.w - firstTriangle) * 3u, 1u, firstTriangle * 3u, 0, instance.idsAndFlags.z);
 }
