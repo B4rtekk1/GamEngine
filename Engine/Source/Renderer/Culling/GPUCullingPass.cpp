@@ -188,7 +188,9 @@ void GPUCullingPass::recordBinned(const VkCommandBuffer commandBuffer, const std
          .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
          .buffer = m_indirectBuffer,
          .offset = 0,
-         .size = static_cast<VkDeviceSize>(m_maxDrawCount) * binCount * sizeof(VkDrawIndexedIndirectCommand)},
+         // Bins are packed by the renderer (CullingUniformData::binOffsets),
+         // so the written range is not binCount whole object ranges.
+         .size = VK_WHOLE_SIZE},
         {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
          .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
          .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -200,6 +202,31 @@ void GPUCullingPass::recordBinned(const VkCommandBuffer commandBuffer, const std
     const VkDependencyInfo drawDependency{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .bufferMemoryBarrierCount = 2, .pBufferMemoryBarriers = barriers};
     vkCmdPipelineBarrier2(commandBuffer, &drawDependency);
+}
+
+void GPUCullingPass::recordCandidateLevels(const VkCommandBuffer commandBuffer, const std::uint32_t objectCount,
+                                           const std::span<const ShadowPageWork> levels,
+                                           const std::uint32_t firstEntry) const {
+    if (objectCount == 0 || levels.empty() || m_candidateCountBuffer == VK_NULL_HANDLE || m_pageWorkBuffer == nullptr)
+        return;
+    m_pageWorkBuffer->update(levels.data(), sizeof(ShadowPageWork) * levels.size(),
+                             sizeof(ShadowPageWork) * firstEntry);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_descriptorSet, 0,
+                            nullptr);
+    CullingPushConstants pushConstants{};
+    pushConstants.sourceCount = objectCount;
+    pushConstants.pageWorkOffset = firstEntry;
+    pushConstants.pageWorkCount = static_cast<std::uint32_t>(levels.size());
+    pushConstants.mode = 6;
+    vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants),
+                       &pushConstants);
+    vkCmdDispatch(commandBuffer, (objectCount + 63U) / 64U, 1, 1);
+}
+
+void GPUCullingPass::clearCandidateCounts(const VkCommandBuffer commandBuffer) const {
+    if (m_candidateCountBuffer != VK_NULL_HANDLE)
+        vkCmdFillBuffer(commandBuffer, m_candidateCountBuffer, 0, VK_WHOLE_SIZE, 0);
 }
 
 void GPUCullingPass::recordCandidates(const VkCommandBuffer commandBuffer, const std::uint32_t objectCount,
@@ -344,60 +371,66 @@ void GPUCullingPass::recordCandidatesForPages(const VkCommandBuffer commandBuffe
                                               const std::span<const ShadowPageWork> pages) const {
     if (objectCount == 0 || pages.empty() || m_candidateCountBuffer == VK_NULL_HANDLE || m_pageWorkBuffer == nullptr)
         return;
+    preparePageCull(commandBuffer, pages);
+    const VkMemoryBarrier2 clearBarrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                        .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                        .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+    const VkDependencyInfo clearDependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &clearBarrier};
+    vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+    recordPageDispatchArgs(commandBuffer, pages);
+    const VkMemoryBarrier2 argumentBarrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                           .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                           .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                           .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
+    const VkDependencyInfo argumentDependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &argumentBarrier};
+    vkCmdPipelineBarrier2(commandBuffer, &argumentDependency);
+    recordPageCull(commandBuffer, objectCount, pages);
+}
 
-    // Page work is host-visible and frame-local.  Clear every active
-    // indirect counter in one transfer operation, then publish both the
-    // work list and counters to the sole page-culling dispatch.
+void GPUCullingPass::preparePageCull(const VkCommandBuffer commandBuffer,
+                                     const std::span<const ShadowPageWork> pages) const {
+    if (pages.empty() || m_candidateCountBuffer == VK_NULL_HANDLE || m_pageWorkBuffer == nullptr)
+        return;
+    // Page work is host-visible and frame-local; streams sharing it upload
+    // identical contents.
     m_pageWorkBuffer->update(pages.data(), sizeof(ShadowPageWork) * pages.size());
     vkCmdFillBuffer(commandBuffer, m_drawCountBuffer, 0, sizeof(std::uint32_t) * pages.size(), 0);
-    if (m_shadowTransformCountBuffer != VK_NULL_HANDLE) {
+    if (m_shadowTransformCountBuffer != VK_NULL_HANDLE)
         vkCmdFillBuffer(commandBuffer, m_shadowTransformCountBuffer, 0, sizeof(std::uint32_t) * pages.size(), 0);
-    }
-    const VkBufferMemoryBarrier2 barriers[3]{
-        {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-         .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-         .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-         .buffer = m_pageWorkBuffer->handle(),
-         .offset = 0,
-         .size = sizeof(ShadowPageWork) * pages.size()},
-        {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-         .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-         .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-         .buffer = m_drawCountBuffer,
-         .offset = 0,
-         .size = sizeof(std::uint32_t) * pages.size()},
-        {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-         .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-         .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-         .buffer = m_shadowTransformCountBuffer,
-         .offset = 0,
-         .size = sizeof(std::uint32_t) * pages.size()}};
-    const VkDependencyInfo clearDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                                           .bufferMemoryBarrierCount =
-                                               m_shadowTransformCountBuffer == VK_NULL_HANDLE ? 2U : 3U,
-                                           .pBufferMemoryBarriers = barriers};
-    vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+}
 
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_descriptorSet, 0,
-                            nullptr);
-    // Page work is sorted by clip level.  Generate a separate indirect
-    // dispatch for every contiguous level range: X then follows that
-    // level's compact candidate count instead of the full scene size.
+// Page work is sorted by clip level. Every contiguous level range gets its
+// own indirect dispatch, whose X follows that level's compact candidate
+// count instead of the full scene size.
+template <typename Function>
+static void forEachLevelRange(const std::span<const ShadowPageWork> pages, Function&& function) {
     std::size_t firstPage = 0;
     while (firstPage < pages.size()) {
         const std::uint32_t level = pages[firstPage].clipLevel;
         std::size_t pageEnd = firstPage + 1;
         while (pageEnd < pages.size() && pages[pageEnd].clipLevel == level)
             ++pageEnd;
-        const std::uint32_t pageCount = static_cast<std::uint32_t>(pageEnd - firstPage);
+        function(level, static_cast<std::uint32_t>(firstPage), static_cast<std::uint32_t>(pageEnd - firstPage));
+        firstPage = pageEnd;
+    }
+}
 
+void GPUCullingPass::recordPageDispatchArgs(const VkCommandBuffer commandBuffer,
+                                            const std::span<const ShadowPageWork> pages) const {
+    if (pages.empty() || m_candidateCountBuffer == VK_NULL_HANDLE || m_pageWorkBuffer == nullptr)
+        return;
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_descriptorSet, 0,
+                            nullptr);
+    // Each level writes its own argument slot, so the dispatches need no
+    // ordering between them.
+    forEachLevelRange(pages, [&](const std::uint32_t level, std::uint32_t, const std::uint32_t pageCount) {
         CullingPushConstants arguments{};
         arguments.candidateLevel = level;
         arguments.pageWorkCount = pageCount;
@@ -405,31 +438,27 @@ void GPUCullingPass::recordCandidatesForPages(const VkCommandBuffer commandBuffe
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(arguments),
                            &arguments);
         vkCmdDispatch(commandBuffer, 1, 1, 1);
-        const VkBufferMemoryBarrier2 dispatchBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                                                     .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                     .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                                                     .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                                                     .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
-                                                     .buffer = m_candidateDispatchBuffer,
-                                                     .offset = static_cast<VkDeviceSize>(level) *
-                                                               sizeof(VkDispatchIndirectCommand),
-                                                     .size = sizeof(VkDispatchIndirectCommand)};
-        const VkDependencyInfo dispatchDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                                                  .bufferMemoryBarrierCount = 1,
-                                                  .pBufferMemoryBarriers = &dispatchBarrier};
-        vkCmdPipelineBarrier2(commandBuffer, &dispatchDependency);
+    });
+}
 
+void GPUCullingPass::recordPageCull(const VkCommandBuffer commandBuffer, const std::uint32_t objectCount,
+                                    const std::span<const ShadowPageWork> pages) const {
+    if (objectCount == 0 || pages.empty() || m_candidateCountBuffer == VK_NULL_HANDLE || m_pageWorkBuffer == nullptr)
+        return;
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_descriptorSet, 0,
+                            nullptr);
+    // Levels cover disjoint page slots, so their dispatches run unordered.
+    forEachLevelRange(pages, [&](const std::uint32_t level, const std::uint32_t firstPage, std::uint32_t) {
         CullingPushConstants pushConstants{};
         pushConstants.sourceCount = objectCount;
-        pushConstants.pageWorkOffset = static_cast<std::uint32_t>(firstPage);
+        pushConstants.pageWorkOffset = firstPage;
         pushConstants.mode = 5;
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants),
                            &pushConstants);
         vkCmdDispatchIndirect(commandBuffer, m_candidateDispatchBuffer,
                               static_cast<VkDeviceSize>(level) * sizeof(VkDispatchIndirectCommand));
-        firstPage = pageEnd;
-    }
-
+    });
     const VkBufferMemoryBarrier2 drawBarriers[2]{
         {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
          .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

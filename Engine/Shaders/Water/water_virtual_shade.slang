@@ -98,9 +98,12 @@ bool traceHierarchical(float3 origin,float3 direction,uint tier,float roughness,
                        out float2 hitUv,out float hitDepth,out float confidence){
     hitUv=0;hitDepth=1;confidence=0;if(tier==0u)return false;
     uint pw,ph,mips;minDepthPyramid.GetDimensions(0,pw,ph,mips);
-    uint maxMip=min(mips-1u,tier==3u?6u:(tier==2u?5u:3u));
+    // Every tier uses the same hierarchy depth and ray reach; tiers only
+    // differ in iteration count (precision). Tier-dependent reach made
+    // adjacent 8x8 tiles disagree on hit/miss (SSR vs sky), i.e. a mosaic.
+    uint maxMip=min(mips-1u,6u);
     uint mip=min(maxMip,uint(roughness*float(maxMip)+0.5));
-    uint iterations=tier==3u?40u:(tier==2u?26u:14u);
+    uint iterations=tier==3u?40u:(tier==2u?28u:20u);
     float baseStep=maxDistance/float(iterations);
     float t=max(baseStep*0.5,0.04),previousT=0.0;
     [loop]for(uint it=0;it<iterations;++it){
@@ -153,11 +156,11 @@ float3 boxProjectedReflection(ReflectionProbeData probe,float3 worldPosition,flo
     float hit=min(min(dist.x,dist.y),dist.z);return normalize(local+direction*max(hit,0.0));
 }
 ClusterLightRange waterClusterRange(uint2 px,float3 worldPos){
-    uint2 grid=uint2((uint(frame.clusteredViewportNearFar.x)+63u)/64u,(uint(frame.clusteredViewportNearFar.y)+63u)/64u);
+    uint2 grid=(uint2(frame.clusteredViewportNearFar.xy)+ClusterTilePixelSize-1u)/ClusterTilePixelSize;
     float nearP=max(frame.clusteredViewportNearFar.z,1e-4);
     float viewDepth=max(-mul(float4(worldPos,1),frame.view).z,nearP);
     uint slice=min(uint(max(log2(viewDepth)*frame.clusterZScaleBiasEnvironmentMipRtContact.x+frame.clusterZScaleBiasEnvironmentMipRtContact.y,0.0)),23u);
-    uint2 tile=min(px/64u,grid-1u);return clusterRanges[(slice*grid.y+tile.y)*grid.x+tile.x];
+    uint2 tile=min(px/ClusterTilePixelSize,grid-1u);return clusterRanges[(slice*grid.y+tile.y)*grid.x+tile.x];
 }
 ReflectionCandidate sampleLocalProbes(float3 worldPos,float3 reflection,float roughness,uint mipCount,ClusterLightRange range){
     ReflectionCandidate none={float3(0),0};if(frame.reflectionProbeCount==0u)return none;
@@ -243,7 +246,7 @@ float3 shadePixel(uint2 px,uint packedTile){
 
     float3 Rvs=reflect(viewDir,Nvs);
     if(reflectionTier>0u&&rough>0.08){float3 tv=buildTangent(Nvs),bv=normalize(cross(Nvs,tv));float2 j=temporalDisk(frame.temporalSampleIndex);Rvs=normalize(Rvs+(tv*j.x+bv*j.y)*rough*0.035);}
-    float2 ruv;float rdepth,rconfidence;float rdist=reflectionTier==3?140.0:reflectionTier==2?80.0:36.0;
+    float2 ruv;float rdepth,rconfidence;const float rdist=140.0;
     bool rhit=traceHierarchical(viewPos+Nvs*0.03,Rvs,reflectionTier,rough,rdist,ruv,rdepth,rconfidence);
     float3 worldReflection=reflect(-V,N);uint rw,rh,rm;prefilteredEnvironmentMap.GetDimensions(0,rw,rh,rm);
     ReflectionCandidate rt={float3(0),0};

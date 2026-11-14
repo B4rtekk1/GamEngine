@@ -164,12 +164,24 @@ void ConsolePanel::clear() {
     Engine::Diagnostics::instance().clear();
 }
 
+namespace {
+bool consoleFocused = false;
+}
+
+bool ConsolePanel::hasFocus() {
+    return consoleFocused;
+}
+
 void ConsolePanel::draw(bool& isOpen) {
+    // Reset before Begin: a closed or collapsed console must not keep
+    // swallowing the scene's Ctrl+A.
+    consoleFocused = false;
     if (!ImGui::Begin("Console", &isOpen)) {
         ImGui::End();
         return;
     }
 
+    consoleFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     const auto diagnostics = Engine::Diagnostics::instance().entries();
 
     static bool showInfo = true;
@@ -179,8 +191,12 @@ void ConsolePanel::draw(bool& isOpen) {
     static bool textSelectionMode = false;
     static float textScale = 1.0F;
     static char filter[256]{};
-    static std::size_t selectedEntry = std::numeric_limits<std::size_t>::max();
-    static std::size_t lastVisibleCount = 0;
+    // Entries are identified by sequence, not by index: the diagnostic
+    // buffer is bounded, so once full every new message shifts all indices.
+    constexpr std::uint64_t noSelection = std::numeric_limits<std::uint64_t>::max();
+    static std::uint64_t selectedSequence = noSelection;
+    static std::uint64_t lastVisibleSequence = noSelection;
+    static bool allSelected = false; ///< Ctrl+A in the list view
 
     std::size_t counts[3]{};
     for (const Engine::Diagnostic& entry : diagnostics)
@@ -220,6 +236,8 @@ void ConsolePanel::draw(bool& isOpen) {
         if (enabled && matchesFilter(entry, filter))
             visible.push_back(index);
     }
+    const std::uint64_t newestVisibleSequence =
+        visible.empty() ? noSelection : diagnostics[visible.back()].sequence;
     const auto formatLine = [&](const Engine::Diagnostic& entry) {
         return '[' + formatTime(entry.timestamp) + "] " + levelName(toLogLevel(entry.severity)) + "  " +
                formatDiagnostic(entry);
@@ -272,11 +290,14 @@ void ConsolePanel::draw(bool& isOpen) {
                              rowStart.y + ImGui::GetTextLineHeight() + 1.0F},
                             ImGui::GetColorU32(EditorUI::withAlpha(EditorUI::colors().surfaceRaised, 0.35F)));
                     }
-                    if (ImGui::Selectable("##console-row", selectedEntry == index, ImGuiSelectableFlags_AllowOverlap))
-                        selectedEntry = index;
+                    if (ImGui::Selectable("##console-row", allSelected || selectedSequence == entry.sequence,
+                                          ImGuiSelectableFlags_AllowOverlap)) {
+                        selectedSequence = entry.sequence;
+                        allSelected = false;
+                    }
                     const bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal);
                     if (ImGui::BeginPopupContextItem("##console-row-menu")) {
-                        selectedEntry = index;
+                        selectedSequence = entry.sequence;
                         if (ImGui::MenuItem("Copy message"))
                             ImGui::SetClipboardText(formatDiagnostic(entry).c_str());
                         if (ImGui::MenuItem("Copy line"))
@@ -315,13 +336,33 @@ void ConsolePanel::draw(bool& isOpen) {
                     ImGui::PopID();
                 }
             }
-            if (ImGui::IsWindowFocused() && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C) &&
-                selectedEntry < diagnostics.size()) {
-                ImGui::SetClipboardText(formatLine(diagnostics[selectedEntry]).c_str());
+            // The list child only: with RootAndChildWindows the filter box
+            // counted too, and its Ctrl+A/Ctrl+C were taken over by the list.
+            const bool listFocused = ImGui::IsWindowFocused() && !ImGui::GetIO().WantTextInput;
+            if (listFocused && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false))
+                allSelected = true;
+            if (listFocused && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) {
+                if (allSelected) {
+                    std::string all;
+                    for (const std::size_t visibleIndex : visible)
+                        all += formatLine(diagnostics[visibleIndex]) + '\n';
+                    ImGui::SetClipboardText(all.c_str());
+                } else {
+                    for (const Engine::Diagnostic& entry : diagnostics) {
+                        if (entry.sequence == selectedSequence) {
+                            ImGui::SetClipboardText(formatLine(entry).c_str());
+                            break;
+                        }
+                    }
+                }
             }
+            if (listFocused && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+                allSelected = false;
             // Follow new entries only while the view is already at the bottom,
             // so reading older messages is not interrupted.
-            if (autoScroll && visible.size() != lastVisibleCount &&
+            // The newest visible sequence changes with every new message,
+            // also once the bounded buffer is full and the count stays fixed.
+            if (autoScroll && newestVisibleSequence != lastVisibleSequence &&
                 ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - ImGui::GetTextLineHeightWithSpacing() * 2.0F)
                 ImGui::SetScrollHereY(1.0F);
         }
@@ -330,7 +371,7 @@ void ConsolePanel::draw(bool& isOpen) {
         ImGui::PopStyleColor();
     }
     ImGui::PopFont();
-    lastVisibleCount = visible.size();
+    lastVisibleSequence = newestVisibleSequence;
     ImGui::End();
 }
 

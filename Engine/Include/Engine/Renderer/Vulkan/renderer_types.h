@@ -10,15 +10,20 @@
 #include <limits>
 
 namespace Engine {
-// Legacy forward UBO. It is intentionally kept below the Vulkan-guaranteed
-// maxUniformBufferRange (64 KiB): 32 * LocalLightGPU is 2 KiB.
+// The frame UBO keeps the first MaxLocalLights lights for consumers without
+// the clustered list (DDGI hit shading); it must stay well below
+// maxUniformBufferRange, so do not raise it.
 //
-// Clustered lighting uses a separate SSBO and must use
-// MaxClusteredLocalLights instead. Do not raise this value while
-// RendererUniformBufferObject still contains localLights.
+// Forward lighting and cluster culling read every light, up to
+// MaxClusteredLocalLights, from the separate local-light SSBO.
 inline constexpr std::uint32_t MaxLocalLights = 32;
 inline constexpr std::uint32_t MaxClusteredLocalLights = 1024;
+// Screen tile edge of one light cluster; ClusterTilePixelSize in SceneData.slang.
 inline constexpr std::uint32_t ClusterTileSize = 64;
+// Depth-bounded Forward+ light lists; TileLightPixelSize / TileLightStride in
+// SceneData.slang.
+inline constexpr std::uint32_t TileLightPixelSize = 16;
+inline constexpr std::uint32_t TileLightStride = 64;
 inline constexpr std::uint32_t ClusterDepthSlices = 24;
 inline constexpr std::uint32_t MaxLightsPerCluster = 64;
 
@@ -27,9 +32,13 @@ struct alignas(16) LocalLightGPU {
     glm::vec4 positionRange{};
     glm::vec4 directionOuterCos{};
     glm::vec4 colorIntensity{};
-    // x: inner cone cosine, y: LightType, z: casts local shadow.
+    // x: inner cone cosine, y: LightType, z: casts local shadow, w: 1 when
+    // `profile` holds a photometric profile (LightProfiles.h).
     glm::vec4 parameters{};
+    // 32 unorm8 intensities over 0-180 degrees from directionOuterCos.xyz.
+    std::array<glm::uvec4, 2> profile{};
 };
+static_assert(sizeof(LocalLightGPU) == 96, "LocalLightGPU mirrors LocalLightData in Common/SceneData.slang");
 
 /** std430 header for one (x, y, logarithmic-depth) forward+ cluster. */
 struct alignas(8) ClusterLightRangeGPU {
@@ -146,7 +155,7 @@ struct RendererInstanceData {
     glm::vec4 positionMaterial{};
     // Quaternion stored as xyzw.
     glm::vec4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
-    // xyz: non-uniform scale; w: bit-cast glass crack atlas slot + 1 (zero for other materials).
+    // xyz: non-uniform scale; w: unused (zero).
     glm::vec4 scaleBase{1.0F, 1.0F, 1.0F, 0.0F};
 };
 static_assert(sizeof(RendererInstanceData) == 48);

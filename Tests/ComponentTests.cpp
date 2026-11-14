@@ -11,6 +11,7 @@
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
 #include "Engine/Renderer/Lighting/EnvironmentBaker.h"
+#include "Engine/Renderer/Lighting/LightProfiles.h"
 #include "Engine/Renderer/Lighting/ReflectionProbeCapture.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
@@ -21,6 +22,11 @@
 #include "Engine/UI/Components/TextComponent.h"
 #include "Engine/UI/UIVertex.h"
 
+#include <algorithm>
+#include <cmath>
+#include <glm/geometric.hpp>
+#include <glm/trigonometric.hpp>
+#include <vector>
 #include <cstddef>
 #include <gtest/gtest.h>
 #include <limits>
@@ -125,14 +131,14 @@ TEST(GpuVertex, PacksMeshAttributesIntoTheGpuLayout) {
     };
 
     const Engine::GpuVertex packed = Engine::GpuVertex::pack(source);
-    EXPECT_EQ(sizeof(packed), 36U);
+    EXPECT_EQ(sizeof(packed), 32U);
     EXPECT_FLOAT_EQ(packed.px, source.position.x());
     EXPECT_FLOAT_EQ(packed.py, source.position.y());
     EXPECT_FLOAT_EQ(packed.pz, source.position.z());
     EXPECT_EQ(packed.materialIndex, source.materialIndex);
 
-    const glm::vec4 normal = glm::unpackSnorm3x10_1x2(packed.normal);
-    const glm::vec4 tangent = glm::unpackSnorm3x10_1x2(packed.tangent);
+    const glm::vec3 normal = Engine::GpuVertex::unpackNormal(packed.tangentFrame);
+    const glm::vec4 tangent = Engine::GpuVertex::unpackTangent(packed.tangentFrame);
     const glm::vec2 uv0 = glm::unpackHalf2x16(packed.texCoord);
     const glm::vec2 uv1 = glm::unpackHalf2x16(packed.texCoord1);
     const glm::vec4 color = glm::unpackUnorm4x8(packed.color);
@@ -147,6 +153,41 @@ TEST(GpuVertex, PacksMeshAttributesIntoTheGpuLayout) {
     EXPECT_NEAR(color.g, source.color.y(), 0.01F);
     EXPECT_NEAR(color.b, source.color.z(), 0.01F);
     EXPECT_FLOAT_EQ(color.a, 1.0F);
+}
+
+TEST(GpuVertex, TangentFrameKeepsNormalsAndTangentsWithinQuantizationError) {
+    // A deterministic spread of directions, including the poles and the
+    // octahedral fold (negative z), with tangents in every quadrant.
+    std::uint32_t state = 12345U;
+    const auto next = [&state] {
+        state = state * 1664525U + 1013904223U;
+        return static_cast<float>(state >> 8U) / static_cast<float>(1U << 24U) * 2.0F - 1.0F;
+    };
+    std::vector<glm::vec3> normals{{0, 0, 1}, {0, 0, -1}, {1, 0, 0}, {0, -1, 0}, {0.6F, 0.0F, -0.8F}};
+    for (int i = 0; i < 4000; ++i) {
+        const glm::vec3 candidate{next(), next(), next()};
+        if (glm::length(candidate) > 1.0e-3F)
+            normals.push_back(glm::normalize(candidate));
+    }
+    float worstNormal = 1.0F;
+    float worstTangent = 1.0F;
+    for (const glm::vec3& normal : normals) {
+        glm::vec3 helper = std::abs(normal.y) < 0.9F ? glm::vec3{0, 1, 0} : glm::vec3{1, 0, 0};
+        helper = glm::normalize(helper + glm::vec3{next(), next(), next()} * 0.3F);
+        const glm::vec3 direction = glm::normalize(glm::cross(normal, helper));
+        const float handedness = next() < 0.0F ? -1.0F : 1.0F;
+        const std::uint32_t frame = Engine::GpuVertex::packTangentFrame(normal, glm::vec4{direction, handedness});
+        const glm::vec3 decodedNormal = Engine::GpuVertex::unpackNormal(frame);
+        const glm::vec4 decodedTangent = Engine::GpuVertex::unpackTangent(frame);
+        worstNormal = std::min(worstNormal, glm::dot(decodedNormal, normal));
+        worstTangent = std::min(worstTangent, glm::dot(glm::vec3{decodedTangent}, direction));
+        EXPECT_EQ(decodedTangent.w, handedness);
+        EXPECT_NEAR(glm::dot(glm::vec3{decodedTangent}, decodedNormal), 0.0F, 1.0e-4F);
+    }
+    // 11-bit octahedral normals: below 0.1 degrees. 512 tangent angles: below
+    // 0.4 degrees plus the normal error.
+    EXPECT_GT(worstNormal, std::cos(glm::radians(0.1F)));
+    EXPECT_GT(worstTangent, std::cos(glm::radians(0.5F)));
 }
 
 TEST(PhysicsCommandBuffer, ClearsVelocityOverridesAndTeleports) {
@@ -380,19 +421,23 @@ TEST(ParticleTypes, SmokeEmitterProvidesStableSimulationDefaults) {
     EXPECT_FLOAT_EQ(collider.halfExtents.y(), 5.0F);
 }
 
+namespace {
+Engine::GPUMaterialData gpuGlassDefaults() {
+    return {};
+}
+} // namespace
+
 TEST(MaterialTypes, ExposeGpuFriendlyDefaultsAndLayerConfiguration) {
     EXPECT_EQ(Engine::MaxMaterialTextures, 4096u);
     EXPECT_EQ(alignof(Engine::GPUMaterialData), 16u);
     EXPECT_EQ(offsetof(Engine::GPUMaterialData, displacementParams), 96u);
     EXPECT_EQ(offsetof(Engine::GPUMaterialData, extensionTextureIndices), 112u);
     EXPECT_EQ(offsetof(Engine::GPUMaterialData, waterWaveCount), 816u);
+    // The glass block follows the water block: six vec4 and two arrays of three.
     EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassParams), 832u);
-    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassAttenuation), 848u);
-    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassTextureIndices), 864u);
-    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassTextureCoordinateSets), 880u);
     EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassTextureTransforms), 896u);
-    EXPECT_EQ(offsetof(Engine::GPUMaterialData, glassTextureRows1), 944u);
     EXPECT_EQ(sizeof(Engine::GPUMaterialData), 992u);
+    EXPECT_EQ(gpuGlassDefaults().glassTextureIndices[0], -1);
     const Engine::GPUMaterialData gpuMaterial;
     EXPECT_EQ(gpuMaterial.textureIndices[0], -1);
     EXPECT_EQ(gpuMaterial.textureIndices[3], -1);
@@ -411,3 +456,52 @@ TEST(MaterialTypes, ExposeGpuFriendlyDefaultsAndLayerConfiguration) {
 }
 
 } // namespace
+
+TEST(LightProfiles, BuiltInShapesPeakAtFullIntensity) {
+    for (int index = 1; index < Engine::LightProfileCount - 1; ++index) {
+        const auto profile = static_cast<Engine::LightProfile>(index);
+        const auto table = Engine::builtInLightProfile(profile);
+        EXPECT_EQ(*std::ranges::max_element(table), 255) << Engine::lightProfileName(profile);
+    }
+    const auto downlight = Engine::builtInLightProfile(Engine::LightProfile::Downlight);
+    EXPECT_EQ(downlight.front(), 255);
+    EXPECT_LT(downlight[20], 16); // ~116 degrees: above the horizon
+    const auto uniform = Engine::builtInLightProfile(Engine::LightProfile::None);
+    EXPECT_TRUE(std::ranges::all_of(uniform, [](const std::uint8_t value) { return value == 255; }));
+}
+
+TEST(LightProfiles, ParsesIesDownlightAndAveragesHorizontalAngles) {
+    // Type C, vertical 0-90 (dark above the horizon), two horizontal planes.
+    const std::string_view ies = "IESNA:LM-63-2002\n"
+                                 "[TEST] unit\n"
+                                 "[MANUFAC] engine\n"
+                                 "TILT=NONE\n"
+                                 "1 1000 1 3 2 1 2 0 0 0\n"
+                                 "1 1 50\n"
+                                 "0 45 90\n"
+                                 "0 90\n"
+                                 "1000 500 0\n"
+                                 "800 300 0\n";
+    const auto table = Engine::parseIesProfile(ies);
+    ASSERT_TRUE(table.has_value());
+    EXPECT_EQ((*table)[0], 255);              // nadir: (1000 + 800) / 2, the peak
+    EXPECT_NEAR((*table)[8], 110, 3);         // ~46 degrees: ~387 / 900
+    EXPECT_EQ((*table)[16], 0);               // ~93 degrees: outside the data
+    EXPECT_EQ((*table)[31], 0);
+}
+
+TEST(LightProfiles, RejectsMalformedIes) {
+    EXPECT_FALSE(Engine::parseIesProfile("IESNA:LM-63-2002\nno tilt line\n1 2 3").has_value());
+    EXPECT_FALSE(Engine::parseIesProfile("TILT=NONE\n1 1000 1 3").has_value());
+    EXPECT_FALSE(Engine::parseIesProfile("TILT=NONE\n1 1000 1 2 1 1 2 0 0 0 1 1 50 0 90 0 0 0").has_value());
+}
+
+TEST(LightProfiles, PacksFourSamplesPerWordInOrder) {
+    Engine::LightProfileTable table{};
+    for (std::size_t index = 0; index < table.size(); ++index)
+        table[index] = static_cast<std::uint8_t>(index * 8);
+    const auto packed = Engine::packLightProfile(table);
+    EXPECT_EQ(packed[0].x, 0x18100800U);
+    EXPECT_EQ(packed[0].y, 0x38302820U);
+    EXPECT_EQ(packed[1].w, 0xf8f0e8e0U);
+}

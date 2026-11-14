@@ -28,6 +28,18 @@ struct MeshletCullUniforms { float4x4 viewProjection; float4x4 occlusionViewProj
 // lengths once; every meshlet in the group uses the same world transform.
 groupshared float4 instanceScale;
 groupshared uint clusterVisible;
+// Hierarchy nodes below the root are tested once per instance, not once per
+// meshlet: sections are split to ~32 meshlets, so the root is usually a leaf
+// or the parent of a few leaves, and every meshlet of a leaf used to repeat
+// the same frustum, cone and Hi-Z test (the root's included).
+static const uint HierarchyRootIsLeaf = 0u;
+static const uint HierarchyLeafChildren = 1u; // leaves = the root's children
+static const uint HierarchyDeep = 2u;         // descend per meshlet
+static const uint MaxLeafChildren = 8u;       // build_meshlet_cluster_hierarchy maxChildren
+groupshared uint hierarchyMode;
+groupshared uint leafCount;
+groupshared uint leafVisibleBits;
+groupshared uint leafFirstMeshlet[MaxLeafChildren];
 
 bool rangeContains(uint first, uint count, uint value) {
     return value >= first && value - first < count;
@@ -47,16 +59,19 @@ bool sphereOccluded(float3 center, float radius) {
     const float4 clip = mul(float4(center, 1.0), culling.occlusionViewProjection);
     if (clip.w <= radius || clip.z <= 0.0) return false;
     const float2 ndc = clip.xy / clip.w;
-    const float radiusNdc = radius / max(clip.w - radius, 1.0e-4);
+    // Scale by the projection's per-axis focal length: radius / w alone is
+    // smaller than the projected sphere whenever the FOV is below 90 degrees.
+    const float4x4 m = culling.occlusionViewProjection;
+    const float2 focal = float2(length(float3(m[0].x, m[1].x, m[2].x)),
+                                length(float3(m[0].y, m[1].y, m[2].y)));
+    const float2 radiusNdc = radius * focal / max(clip.w - radius, 1.0e-4);
     // A sphere crossing the previous viewport edge has no complete depth
     // coverage there, even when it enters the current view after a turn.
     if (any(ndc - radiusNdc < -1.0) || any(ndc + radiusNdc > 1.0) ||
         clip.z + radius > clip.w) return false;
-    float2 minimumUv = saturate((ndc - radiusNdc) * float2(0.5, -0.5) + 0.5);
-    float2 maximumUv = saturate((ndc + radiusNdc) * float2(0.5, -0.5) + 0.5);
-    const float loY = min(minimumUv.y, maximumUv.y);
-    const float hiY = max(minimumUv.y, maximumUv.y);
-    minimumUv.y = loY; maximumUv.y = hiY;
+    // The projection already flips Y for Vulkan; NDC maps to UV directly.
+    const float2 minimumUv = saturate((ndc - radiusNdc) * 0.5 + 0.5);
+    const float2 maximumUv = saturate((ndc + radiusNdc) * 0.5 + 0.5);
     const float extent = max(maximumUv.x - minimumUv.x, maximumUv.y - minimumUv.y) *
                          max(culling.viewportWidth, culling.viewportHeight);
     const uint mip = uint(clamp(ceil(log2(max(extent, 1.0))), 0.0, float(culling.hiZMipCount - 1u)));
@@ -107,6 +122,16 @@ bool coneVisible(float4 cone, float4x4 world, float3 center, float radius, bool 
     return worldConeVisible(normalize(mul(float4(cone.xyz, 0.0), world).xyz), cone.w, center, radius);
 }
 
+// Frustum, then the ALU-only cone, then the Hi-Z texture reads.
+bool nodeVisible(GpuMeshletCluster node, GPUSceneInstanceRecord instance, bool uniformScale) {
+    const float3 center = mul(float4(node.bounds.xyz, 1.0), instance.worldMatrix).xyz;
+    const float radius = (node.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w;
+    return !outsideFrustum(center, radius) &&
+           (((instance.idsAndFlags.w & 10u) != 0u) ||
+            coneVisible(node.cone, instance.worldMatrix, center, radius, uniformScale)) &&
+           !sphereOccluded(center, radius);
+}
+
 // Descend only through the branch that owns meshletId. Child and descendant
 // ranges are contiguous in the baked hierarchy, therefore this work is
 // bounded by hierarchy depth rather than meshlet count. Every visited node is
@@ -118,12 +143,8 @@ bool clusterPathVisible(GPUSceneMeshRecord mesh, uint meshletId,
     uint nodeId = mesh.clusters.y;
     [loop] for (uint depth = 0u; depth < 32u; ++depth) {
         const GpuMeshletCluster node = clusters[nodeId];
-        const float3 center = mul(float4(node.bounds.xyz, 1.0), instance.worldMatrix).xyz;
-        const float radius = (node.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w;
-        if (outsideFrustum(center, radius) ||
-            (((instance.idsAndFlags.w & 10u) == 0u) &&
-             !coneVisible(node.cone, instance.worldMatrix, center, radius, uniformScale)) ||
-            sphereOccluded(center, radius)) return false;
+        // The workgroup already tested the root.
+        if (depth != 0u && !nodeVisible(node, instance, uniformScale)) return false;
         if (node.range.y == 0u) return true;
 
         uint childId = 0xffffffffu;
@@ -148,7 +169,8 @@ bool clusterPathVisible(GPUSceneMeshRecord mesh, uint meshletId,
 [numthreads(64, 1, 1)]
 [shader("compute")]
 void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
-    const uint visibleIndex = groupId.x;
+    // Rows of 32768 groups (InstanceRow in meshlet_build_dispatch.slang).
+    const uint visibleIndex = groupId.y * 32768u + groupId.x;
     if (visibleIndex >= visibleInstanceCount[0]) return;
     const uint instanceId = visibleInstances[visibleIndex];
     const GPUSceneInstanceRecord instance = instances[instanceId];
@@ -167,23 +189,44 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
 
     // Test the hierarchy root once before expanding. Fine culling descends
     // through the remaining branch for each candidate meshlet below.
+    // A cone cutoff is not invariant under non-uniform scale. Skipping
+    // the optional backface test in that case is conservative.
+    const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
+                              abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
+                              instance.displacementBoundsPadding.x <= 1.0e-6;
+    const bool hasHierarchy = mesh.clusters.z != 0u && mesh.lod.z != 0u;
     if (threadId.x == 0) {
         clusterVisible = 1u;
-        if (mesh.lod.z != 0u) {
+        hierarchyMode = HierarchyRootIsLeaf;
+        leafCount = 0u;
+        leafVisibleBits = 0u;
+        if (hasHierarchy) {
             const GpuMeshletCluster root = clusters[mesh.clusters.y];
-            const float3 center = mul(float4(root.bounds.xyz, 1.0), instance.worldMatrix).xyz;
-            const float radius = (root.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w;
-            const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
-                                      abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
-                                      instance.displacementBoundsPadding.x <= 1.0e-6;
-            clusterVisible = !outsideFrustum(center, radius) &&
-                             (((instance.idsAndFlags.w & 10u) != 0u) ||
-                              coneVisible(root.cone, instance.worldMatrix, center, radius, uniformScale)) &&
-                             !sphereOccluded(center, radius) ? 1u : 0u;
+            clusterVisible = nodeVisible(root, instance, uniformScale) ? 1u : 0u;
+            if (root.range.y != 0u) {
+                hierarchyMode = HierarchyDeep;
+                if (root.range.y <= MaxLeafChildren && clusters[root.range.x].range.y == 0u) {
+                    hierarchyMode = HierarchyLeafChildren;
+                    leafCount = root.range.y;
+                }
+            }
         }
     }
     GroupMemoryBarrierWithGroupSync();
     if (clusterVisible == 0u) return;
+    if (hierarchyMode == HierarchyLeafChildren) {
+        // One lane per leaf. Siblings are contiguous and, like their
+        // meshlet ranges, in meshlet order.
+        if (threadId.x < leafCount) {
+            const GpuMeshletCluster root = clusters[mesh.clusters.y];
+            const GpuMeshletCluster leaf = clusters[root.range.x + threadId.x];
+            leafFirstMeshlet[threadId.x] = leaf.range.z;
+            // A sibling that is not a leaf keeps its subtree conservatively.
+            if (leaf.range.y != 0u || nodeVisible(leaf, instance, uniformScale))
+                InterlockedOr(leafVisibleBits, 1u << threadId.x);
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
 
     uint capacity, stride;
     visibleMeshlets.GetDimensions(capacity, stride);
@@ -198,41 +241,40 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
         GpuMeshlet meshlet = (GpuMeshlet)0;
         float3 worldCenter = 0.0;
 
+        if (visible && hasHierarchy) {
+            if (hierarchyMode == HierarchyLeafChildren) {
+                uint leaf = 0u;
+                for (uint candidate = 1u; candidate < leafCount; ++candidate)
+                    if (leafFirstMeshlet[candidate] <= meshletId) leaf = candidate;
+                visible = (leafVisibleBits & (1u << leaf)) != 0u;
+            } else if (hierarchyMode == HierarchyDeep) {
+                visible = clusterPathVisible(mesh, meshletId, instance, uniformScale);
+            }
+        }
         if (visible) {
             meshlet = meshlets[meshletId];
             worldCenter = mul(float4(meshlet.bounds.xyz, 1.0), instance.worldMatrix).xyz;
             const float radius = (meshlet.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w;
-            const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
-                                      abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
-                                      instance.displacementBoundsPadding.x <= 1.0e-6;
-            visible = clusterPathVisible(mesh, meshletId, instance, uniformScale) &&
-                      !outsideFrustum(worldCenter, radius);
-            if (visible) visible = !sphereOccluded(worldCenter, radius);
+            visible = !outsideFrustum(worldCenter, radius) &&
+                      ((instance.idsAndFlags.w & 10u) != 0u ||
+                       coneVisible(meshlet.cone, instance.worldMatrix, worldCenter, radius, uniformScale)) &&
+                      !sphereOccluded(worldCenter, radius);
         }
 
-        // A cone cutoff is not invariant under non-uniform scale. Skipping
-        // the optional backface test in that case is conservative.
-        const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
-                                  abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
-                                  instance.displacementBoundsPadding.x <= 1.0e-6;
-        if (visible && (instance.idsAndFlags.w & 10u) == 0u)
-            visible = coneVisible(meshlet.cone, instance.worldMatrix, worldCenter,
-                                  (meshlet.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w,
-                                  uniformScale);
-
         // Merge runs of consecutive visible meshlets whose triangles are also
-        // contiguous in the index heap: one indexed draw then covers the run.
+        // contiguous in the index heap (material.y is a meshlet's first
+        // index there): one indexed draw then covers the run.
         // A cluster-culled scene otherwise emits one tiny draw per meshlet,
         // and the front end spends more time on those than culling saves.
         const uint lane = WaveGetLaneIndex();
         const uint previousLane = max(lane, 1u) - 1u;
-        const uint triangleEnd = meshlet.range.z + meshlet.range.w;
+        const uint indexEnd = meshlet.material.y + meshlet.range.w * 3u;
         const bool previousVisible = WaveReadLaneAt(visible, previousLane);
         const uint previousMeshletId = WaveReadLaneAt(meshletId, previousLane);
-        const uint previousTriangleEnd = WaveReadLaneAt(triangleEnd, previousLane);
+        const uint previousIndexEnd = WaveReadLaneAt(indexEnd, previousLane);
         const bool continuesRun = visible && lane != 0u && previousVisible &&
                                   previousMeshletId + 1u == meshletId &&
-                                  previousTriangleEnd == meshlet.range.z &&
+                                  previousIndexEnd == meshlet.material.y &&
                                   culling.meshletCount <= VisibleMeshletIdMask;
         const bool runStart = visible && !continuesRun;
         const uint4 breaks = WaveActiveBallot(!continuesRun);

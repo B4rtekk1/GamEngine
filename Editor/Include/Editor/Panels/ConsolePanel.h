@@ -18,6 +18,9 @@ class ConsolePanel final {
     static void draw(bool& isOpen);
     static void clear();
 
+    /** True while the console window (or its children) has keyboard focus. */
+    [[nodiscard]] static bool hasFocus();
+
   private:
     static void add(LogLevel level, std::string_view message);
 };

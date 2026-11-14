@@ -34,6 +34,15 @@ void markPageAndNeighbours(const uint encodedPage)
     // This replaces nine contended shared atomics per request with one.
     if (uniforms.pageCountPerAxis == 32u)
     {
+        // Neighbouring receivers almost always land on the same page; one
+        // lane then issues the atomic for the whole wave instead of 32
+        // serialized ones on a single shared word.
+        if (WaveActiveAllEqual(encodedPage))
+        {
+            if (WaveIsFirstLane())
+                InterlockedOr(groupPageBits[encodedPage >> 5], 1u << (encodedPage & 31));
+            return;
+        }
         InterlockedOr(groupPageBits[encodedPage >> 5], 1u << (encodedPage & 31));
         return;
     }
@@ -62,12 +71,17 @@ float4 reconstructWorld(const uint2 pixel, const float depth)
                                          : float4(homogeneous.xyz / homogeneous.w, 1.0);
 }
 
-[numthreads(8, 8, 1)]
+// 16x16 lanes per group: the shared bitset is cleared and flushed once per
+// 256 receivers instead of per 64, which quarters the global atomics.
+static const uint GROUP_SIZE = 16u;
+static const uint GROUP_LANES = GROUP_SIZE * GROUP_SIZE;
+
+[numthreads(16, 16, 1)]
 [shader("compute")]
 void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID)
 {
-    const uint localIndex = groupThreadId.y * 8 + groupThreadId.x;
-    for (uint word = localIndex; word < REQUEST_WORD_COUNT; word += 64u)
+    const uint localIndex = groupThreadId.y * GROUP_SIZE + groupThreadId.x;
+    for (uint word = localIndex; word < REQUEST_WORD_COUNT; word += GROUP_LANES)
         groupPageBits[word] = 0u;
     GroupMemoryBarrierWithGroupSync();
     const uint stride = max(uniforms.feedbackStride, 1u);
@@ -133,9 +147,9 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupTh
         }
     }
     GroupMemoryBarrierWithGroupSync();
-    // Flush each nonempty word once. All 64 lanes participate; there is no
+    // Flush each nonempty word once. All lanes participate; there is no
     // quadratic serial scan or wave-size-dependent correctness assumption.
-    for (uint word = localIndex; word < REQUEST_WORD_COUNT; word += 64u)
+    for (uint word = localIndex; word < REQUEST_WORD_COUNT; word += GROUP_LANES)
     {
         uint bits = groupPageBits[word];
         if (uniforms.pageCountPerAxis == 32u)
@@ -146,6 +160,10 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupTh
             if (row < 31u) bits |= groupPageBits[word + 1u];
             bits |= (bits << 1u) | (bits >> 1u);
         }
-        if (bits != 0u) InterlockedOr(requestedPageBits[word], bits);
+        // Every group requests the same handful of pages; a plain read skips
+        // the contended global atomic when those bits are already set. A
+        // stale read only costs a redundant (idempotent) OR.
+        if (bits != 0u && (requestedPageBits[word] & bits) != bits)
+            InterlockedOr(requestedPageBits[word], bits);
     }
 }

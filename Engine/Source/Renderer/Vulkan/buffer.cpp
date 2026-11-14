@@ -7,9 +7,55 @@
 #include <cassert>
 #include <cstring>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 
 namespace Engine {
+namespace {
+[[nodiscard]] const char* allocationResultName(const VkResult result) noexcept {
+    switch (result) {
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+        return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+    case VK_ERROR_OUT_OF_HOST_MEMORY:
+        return "VK_ERROR_OUT_OF_HOST_MEMORY";
+    case VK_ERROR_DEVICE_LOST:
+        return "VK_ERROR_DEVICE_LOST";
+    case VK_ERROR_TOO_MANY_OBJECTS:
+        return "VK_ERROR_TOO_MANY_OBJECTS";
+    case VK_ERROR_FEATURE_NOT_PRESENT:
+        return "VK_ERROR_FEATURE_NOT_PRESENT";
+    default:
+        return "VkResult error";
+    }
+}
+
+// Says what failed and how full device memory was, so an out-of-memory
+// failure on a large scene is distinguishable from a bad request.
+[[nodiscard]] std::string describeAllocationFailure(const VmaAllocator allocator, const VkResult result,
+                                                    const VkDeviceSize size, const bool deviceLocal) {
+    std::ostringstream message;
+    message << "Could not create Vulkan buffer with VMA: " << allocationResultName(result) << " (" << static_cast<int>(result) << ")" << ", "
+            << (deviceLocal ? "device-local" : "host-visible") << " request of " << size / (1024.0 * 1024.0)
+            << " MiB";
+    if (allocator != VK_NULL_HANDLE) {
+        const VkPhysicalDeviceMemoryProperties* memory = nullptr;
+        vmaGetMemoryProperties(allocator, &memory);
+        std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+        vmaGetHeapBudgets(allocator, budgets.data());
+        for (std::uint32_t heap = 0; memory != nullptr && heap < memory->memoryHeapCount; ++heap) {
+            if ((memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0)
+                continue;
+            message << "; GPU heap " << heap << ": " << budgets[heap].usage / (1024 * 1024) << " of "
+                    << budgets[heap].budget / (1024 * 1024) << " MiB budget in use";
+        }
+    }
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY)
+        message << ". The scene needs more GPU memory than is free: close other GPU programs, lower texture "
+                   "resolution or load a smaller part of the scene.";
+    return message.str();
+}
+} // namespace
+
 Buffer::~Buffer() {
     destroy();
 }
@@ -260,10 +306,12 @@ void Buffer::create(const CreateParameters& parameters) {
             static_cast<VmaAllocationCreateFlags>(VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT) |
             static_cast<VmaAllocationCreateFlags>(VMA_ALLOCATION_CREATE_MAPPED_BIT);
     }
-    if (vmaCreateBuffer(parameters.allocator, &bufferInfo, &allocationInfo, &buffer_, &allocation_, nullptr) !=
-        VK_SUCCESS) {
+    if (const VkResult result =
+            vmaCreateBuffer(parameters.allocator, &bufferInfo, &allocationInfo, &buffer_, &allocation_, nullptr);
+        result != VK_SUCCESS) {
         destroy();
-        throw std::runtime_error("Could not create Vulkan buffer with VMA");
+        throw std::runtime_error(describeAllocationFailure(parameters.allocator, result, bufferInfo.size,
+                                                           (parameters.properties & hostVisibleBit) == 0));
     }
     if ((parameters.properties & hostVisibleBit) != 0) {
         VmaAllocationInfo info{};

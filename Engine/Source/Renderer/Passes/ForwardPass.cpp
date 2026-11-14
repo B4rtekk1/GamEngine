@@ -16,15 +16,58 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
                          Assets::AssetManager& assets, const VkImageLayout colorInitialLayout,
                          const bool colorInitialLayoutExternallySynchronized, const VkFormat velocityFormat,
                          const VkFormat viewNormalFormat, const bool preserveDepth, const bool depthOnly,
-                         const bool enableMeshletPipelines) {
+                         const bool enableMeshletPipelines, const VkFormat localLightDataFormat,
+                         const VkDescriptorSetLayout meshletDrawLayout) {
     reportedMissingShaderGraphSlots_.clear();
+    const bool meshShaderPipelines = enableMeshletPipelines && meshletDrawLayout != VK_NULL_HANDLE;
+    drawMeshTasksIndirect_ =
+        meshShaderPipelines ? reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(
+                                  vkGetDeviceProcAddr(device, "vkCmdDrawMeshTasksIndirectEXT"))
+                            : nullptr;
+    meshShaderDrawFlags_.fill(0U);
+    // Sub-pixel rejection tests pixel centres, which only matches
+    // single-sample rasterization.
+    meshShaderSmallPrimitiveFlag_ = samples == VK_SAMPLE_COUNT_1_BIT ? 2U : 0U;
+    // Visibility-buffer prepass: colour target 0 holds triangle ids, which
+    // every mesh-shader program writes (VisibilityBufferPass).
+    visibilityIds_ = depthOnly && colorFormat == VK_FORMAT_R32_UINT && meshShaderPipelines;
+    // Mesh-shader twin of a meshlet pipeline: same fragment program, the
+    // vertex stage replaced by meshMain reading MeshletDraw.slang's set 1.
+    const bool visibilityIds = visibilityIds_;
+    const auto meshShaderOptions = [meshletDrawLayout, visibilityIds](GraphicsPipelineOptions pipelineOptions,
+                                                                      std::filesystem::path shader) {
+        if (visibilityIds) {
+            // depth_velocity[_flat]_meshshader -> depth_velocity_vis[_flat]_meshshader
+            std::string name = shader.filename().string();
+            name.insert(std::string{"depth_velocity"}.size(), "_vis");
+            shader.replace_filename(name);
+            pipelineOptions.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+        }
+        pipelineOptions.shader = shader;
+        pipelineOptions.meshShader = true;
+        pipelineOptions.vertexBindings.clear();
+        pipelineOptions.vertexAttributes.clear();
+        pipelineOptions.descriptorSetLayouts.push_back(meshletDrawLayout);
+        pipelineOptions.pushConstantSize = sizeof(std::uint32_t) * 2;
+        pipelineOptions.pushConstantStages = VK_SHADER_STAGE_MESH_BIT_EXT;
+        // meshMain culls back faces per primitive (meshShaderDrawFlags_), so
+        // a slot's draw can mix one-sided and two-sided meshlets.
+        pipelineOptions.cullMode = VK_CULL_MODE_NONE;
+        return pipelineOptions;
+    };
     hasVelocityAttachment_ = velocityFormat != VK_FORMAT_UNDEFINED;
     hasViewNormalAttachment_ = viewNormalFormat != VK_FORMAT_UNDEFINED;
+    // The data target takes the second slot, which the lighting pass leaves
+    // free (velocity is final after the prepass).
+    hasLocalLightDataAttachment_ = localLightDataFormat != VK_FORMAT_UNDEFINED && !hasVelocityAttachment_;
     preserveDepth_ = preserveDepth;
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
     options.dynamicRendering = true;
-    options.additionalColorFormat = velocityFormat;
+    options.additionalColorFormat = hasLocalLightDataAttachment_ ? localLightDataFormat : velocityFormat;
+    if (hasLocalLightDataAttachment_)
+        options.additionalColorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     options.thirdColorFormat = viewNormalFormat;
     options.depthFormat = depthFormat;
     options.samples = samples;
@@ -45,7 +88,14 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
         options.depthInitialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         options.depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         options.depthWriteEnable = VK_FALSE;
-        options.depthCompareOp = VK_COMPARE_OP_EQUAL;
+        // EQUAL needs bit-identical depth from two different shader modules.
+        // slangc's direct SPIR-V path drops both `precise` and the Invariant
+        // decoration, so the driver may round the forward position a few ULPs
+        // differently; those pixels failed the test and left holes along
+        // triangle edges. Pull the lighting depth a few steps towards the
+        // camera and accept anything at or in front of the prepass depth.
+        options.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+        options.depthBiasConstantFactor = -4.0F;
     }
     options.shader = depthOnly ? (hasVelocityAttachment_ ? "shaders/depth_velocity.spv"
                                                           : "shaders/depth_velocity_no_velocity.spv")
@@ -63,18 +113,17 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
         {1, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(GpuVertex, color)},
         {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
         {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
-        {3, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, normal)},
+        {3, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, tangentFrame)},
         {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
-        {9, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, tangent)},
     };
-    // depth_velocity consumes position, UV0/UV1, normal and material index
-    // only. Supplying color/tangent causes Vulkan validation warnings at
-    // locations 1/9. Shader Graph and grass programs keep the full layout.
+    // depth_velocity consumes position, UV0/UV1, tangent frame and material
+    // index only. Supplying color causes a Vulkan validation warning at
+    // location 1. Shader Graph and grass programs keep the full layout.
     const auto stripDepthOnlyAttributes = [depthOnly](GraphicsPipelineOptions& pipelineOptions) {
         if (!depthOnly)
             return;
         std::erase_if(pipelineOptions.vertexAttributes, [](const VkVertexInputAttributeDescription& attribute) {
-            return attribute.location == 1 || attribute.location == 9;
+            return attribute.location == 1;
         });
     };
     std::array<std::filesystem::path, MaterialShaderCount> shaderPaths{};
@@ -91,16 +140,28 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
                        "shaders/forward_pbr_normal_no_velocity.spv",  "shaders/forward_pbr_extended_no_velocity.spv",
                        "shaders/forward_pbr_foliage_no_velocity.spv", "shaders/forward_pbr_terrain_no_velocity.spv"};
     }
+    // Reduced variants (useReducedShaders): the prepass drops displacement,
+    // the resolved lighting programs drop the DDGI probe lookup.
+    const bool resolvedLighting = !depthOnly && preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT;
+    const char* const reducedSuffix = depthOnly ? "_flat" : "_noddgi";
+    const auto reducedShader = [reducedSuffix](const std::filesystem::path& path, const char* tail = "") {
+        return path.parent_path() / (path.stem().string() + reducedSuffix + tail + path.extension().string());
+    };
     for (std::size_t index = 0; index < shaderPaths.size(); ++index) {
-        // Water has its own render pass and a second descriptor set for the
-        // immutable opaque scene.  Building a forward-compatible pipeline
+        // Water and glass have their own passes and a second descriptor set
+        // for the immutable opaque scene.  Building a forward-compatible pipeline
         // here produces a validation warning (velocity target mismatch) and
         // can never be selected by a draw loop.
-        if (index == materialShaderIndex(MaterialShader::Water) || index == GlassThinProgramSlot) {
+        if (isCompositedProgramSlot(index)) {
             continue;
         }
         GraphicsPipelineOptions materialOptions = options;
         materialOptions.shader = shaderPaths[index];
+        // Only the resolved PBR programs write the deferred local light
+        // inputs; the rest light themselves and leave the cleared texel.
+        if (hasLocalLightDataAttachment_ &&
+            !(index == materialShaderIndex(MaterialShader::StandardPBR) || index >= PbrNormalProgramSlot))
+            materialOptions.additionalColorWriteMask = 0;
         stripDepthOnlyAttributes(materialOptions);
         if (preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT &&
             (index == materialShaderIndex(MaterialShader::StandardPBR) || index >= PbrNormalProgramSlot)) {
@@ -121,10 +182,64 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
                 path.parent_path() / (path.stem().string() + "_meshlet" + path.extension().string());
             meshletMaterialPipelines_[index].create(device, meshletOptions);
         }
+        if (drawMeshTasksIndirect_ != nullptr) {
+            const auto& path = materialOptions.shader;
+            meshShaderMaterialPipelines_[index].create(
+                device, meshShaderOptions(materialOptions, path.parent_path() / (path.stem().string() + "_meshshader" +
+                                                                                 path.extension().string())));
+            meshShaderDrawFlags_[index] =
+                (materialOptions.cullMode == VK_CULL_MODE_BACK_BIT ? 1U : 0U) | meshShaderSmallPrimitiveFlag_;
+            // MeshletDrawVisibility: the slots the visibility resolve shades.
+            if (visibilityIds_ && isVisibilityResolvedSlot(index))
+                meshShaderDrawFlags_[index] |= 4U;
+            if (!depthOnly)
+                flatMeshShaderMaterialPipelines_[index].create(
+                    device, meshShaderOptions(materialOptions,
+                                              path.parent_path() / (path.stem().string() + "_flat_meshshader" +
+                                                                    path.extension().string())));
+        }
+        const bool resolvedProgram =
+            index == materialShaderIndex(MaterialShader::StandardPBR) || index >= PbrNormalProgramSlot;
+        if (depthOnly || (resolvedLighting && resolvedProgram)) {
+            GraphicsPipelineOptions reducedOptions = materialOptions;
+            reducedOptions.shader = reducedShader(materialOptions.shader);
+            reducedMaterialPipelines_[index].create(device, reducedOptions);
+            reducedOptions.cullMode = VK_CULL_MODE_NONE;
+            reducedTwoSidedMaterialPipelines_[index].create(device, reducedOptions);
+            if (enableMeshletPipelines) {
+                GraphicsPipelineOptions reducedMeshletOptions = materialOptions;
+                reducedMeshletOptions.shader = reducedShader(materialOptions.shader, "_meshlet");
+                reducedMeshletMaterialPipelines_[index].create(device, reducedMeshletOptions);
+            }
+            if (drawMeshTasksIndirect_ != nullptr) {
+                reducedMeshShaderMaterialPipelines_[index].create(
+                    device, meshShaderOptions(materialOptions, reducedShader(materialOptions.shader, "_meshshader")));
+                if (!depthOnly)
+                    flatReducedMeshShaderMaterialPipelines_[index].create(
+                        device,
+                        meshShaderOptions(materialOptions, reducedShader(materialOptions.shader, "_flat_meshshader")));
+            }
+        }
+        // Resolved PBR programs of the lighting pass without the local light
+        // walk, for frames whose local lights the deferred compute pass adds.
+        if (drawMeshTasksIndirect_ != nullptr && resolvedLighting && resolvedProgram && hasLocalLightDataAttachment_) {
+            const auto& path = materialOptions.shader;
+            const std::string stem = path.stem().string();
+            constexpr std::array<const char*, 4> tails{"_deferred_meshshader", "_noddgi_deferred_meshshader",
+                                                       "_deferred_flat_meshshader",
+                                                       "_noddgi_deferred_flat_meshshader"};
+            for (std::size_t set = 0; set < tails.size(); ++set)
+                deferredMeshShaderMaterialPipelines_[set][index].create(
+                    device, meshShaderOptions(materialOptions,
+                                              path.parent_path() / (stem + tails[set] + path.extension().string())));
+        }
     }
     shaderGraphPipelineOptions_ = options;
     shaderGraphPipelineOptions_.shader.clear();
-    shaderGraphPipelines_.initialize(device, shaderGraphPipelineOptions_);
+    if (hasLocalLightDataAttachment_)
+        shaderGraphPipelineOptions_.additionalColorWriteMask = 0;
+    shaderGraphPipelines_.initialize(device, shaderGraphPipelineOptions_,
+                                     drawMeshTasksIndirect_ != nullptr ? meshletDrawLayout : VK_NULL_HANDLE);
 
     GraphicsPipelineOptions foliageOptions = options;
     foliageOptions.shader = depthOnly                ? options.shader
@@ -145,6 +260,11 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     GraphicsPipelineOptions depthFoliageOptions = foliageOptions;
     stripDepthOnlyAttributes(depthFoliageOptions);
     foliagePipeline_.create(device, depthFoliageOptions);
+    if (depthOnly || resolvedLighting) {
+        GraphicsPipelineOptions reducedFoliageOptions = depthFoliageOptions;
+        reducedFoliageOptions.shader = reducedShader(depthFoliageOptions.shader);
+        reducedFoliagePipeline_.create(device, reducedFoliageOptions);
+    }
     GraphicsPipelineOptions grassOptions = foliageOptions;
     grassOptions.shader =
         hasVelocityAttachment_ ? "shaders/grass_forward.spv" : "shaders/grass_forward_no_velocity.spv";
@@ -153,6 +273,8 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     std::erase_if(grassOptions.vertexAttributes, [](const VkVertexInputAttributeDescription& attribute) {
         return attribute.location == 4 || attribute.location == 9;
     });
+    if (hasLocalLightDataAttachment_)
+        grassOptions.additionalColorWriteMask = 0;
     grassPipeline_.create(device, grassOptions);
 
 }
@@ -161,16 +283,32 @@ void ForwardPass::destroy() noexcept {
     reportedMissingShaderGraphSlots_.clear();
     hasVelocityAttachment_ = false;
     hasViewNormalAttachment_ = false;
+    hasLocalLightDataAttachment_ = false;
     preserveDepth_ = false;
     shaderGraphPipelines_.destroy();
     foliagePipeline_.destroy();
+    reducedFoliagePipeline_.destroy();
     grassPipeline_.destroy();
+    useReduced_ = false;
+    useFlatMeshShaders_ = false;
+    useDeferredLocal_ = false;
+    visibilityIds_ = false;
+    for (auto& pipelines : deferredMeshShaderMaterialPipelines_)
+        for (auto& pipeline : pipelines)
+            pipeline.destroy();
     for (auto& pipeline : materialPipelines_)
         pipeline.destroy();
     for (auto& pipeline : twoSidedMaterialPipelines_)
         pipeline.destroy();
     for (auto& pipeline : meshletMaterialPipelines_)
         pipeline.destroy();
+    for (auto& pipelines :
+         {&reducedMaterialPipelines_, &reducedTwoSidedMaterialPipelines_, &reducedMeshletMaterialPipelines_,
+          &meshShaderMaterialPipelines_, &reducedMeshShaderMaterialPipelines_, &flatMeshShaderMaterialPipelines_,
+          &flatReducedMeshShaderMaterialPipelines_})
+        for (auto& pipeline : *pipelines)
+            pipeline.destroy();
+    drawMeshTasksIndirect_ = nullptr;
 }
 
 std::uint32_t ForwardPass::registerShaderGraph(const ShaderGraphProgram& program, const MaterialRenderState& state) {
@@ -183,6 +321,14 @@ std::uint32_t ForwardPass::registerShaderGraph(const ShaderGraphProgram& program
         }
     }
     return shaderGraphPipelines_.getOrCreate(program.id, shader, state);
+}
+
+bool ForwardPass::hasMeshShaderPipeline(const std::uint32_t shaderSlot) const noexcept {
+    if (drawMeshTasksIndirect_ == nullptr)
+        return false;
+    if (shaderSlot < MaterialShaderCount)
+        return meshShaderMaterialPipelines_[shaderSlot].handle() != VK_NULL_HANDLE;
+    return shaderGraphPipelines_.findMesh(shaderSlot) != nullptr;
 }
 
 bool ForwardPass::hasMaterialPipeline(const std::uint32_t shaderSlot) const noexcept {
@@ -228,7 +374,7 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer, const VkImageView colorVi
                         const VkImageView velocityView, const VkImageView viewNormalView,
                         const VkImageView colorResolveView, const VkImageView depthResolveView, const VkExtent2D extent,
                         VkDescriptorSet sceneDescriptorSet, VkBuffer vertexBuffer, VkBuffer instanceBuffer,
-                        VkBuffer indexBuffer) const {
+                        VkBuffer indexBuffer, const VkImageView localLightDataView) const {
     (void)instanceBuffer; // Instance data is fetched from descriptor binding 5.
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView = colorView;
@@ -236,6 +382,8 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer, const VkImageView colorVi
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     color.clearValue.color = {{0.02F, 0.02F, 0.05F, 1.0F}};
+    if (visibilityIds_)
+        color.clearValue.color.uint32[0] = 0xffffffffU; // MeshletDraw.slang VisibilityNone
     if (colorResolveView != VK_NULL_HANDLE) {
         color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
         color.resolveImageView = colorResolveView;
@@ -249,6 +397,12 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer, const VkImageView colorVi
     velocity.clearValue.color = {{0.0F, 0.0F, 0.0F, 0.0F}};
     VkRenderingAttachmentInfo normals = velocity;
     normals.imageView = viewNormalView;
+    if (hasLocalLightDataAttachment_) {
+        // Cleared to "no surface": texels nothing writes add no local light.
+        velocity.imageView = localLightDataView;
+        velocity.clearValue.color.uint32[0] = velocity.clearValue.color.uint32[1] = 0;
+        velocity.clearValue.color.uint32[2] = velocity.clearValue.color.uint32[3] = 0;
+    }
     std::array colors{color, velocity, normals};
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     depth.imageView = depthView;
@@ -265,7 +419,8 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer, const VkImageView colorVi
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
     rendering.renderArea.extent = extent;
     rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1U + (hasVelocityAttachment_ ? 1U : 0U) + (hasViewNormalAttachment_ ? 1U : 0U);
+    rendering.colorAttachmentCount = 1U + (hasVelocityAttachment_ || hasLocalLightDataAttachment_ ? 1U : 0U) +
+                                     (hasViewNormalAttachment_ ? 1U : 0U);
     rendering.pColorAttachments = colors.data();
     rendering.pDepthAttachment = &depth;
     vkCmdBeginRendering(commandBuffer, &rendering);
@@ -300,7 +455,10 @@ void ForwardPass::drawMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sc
         drawShaderGraph(commandBuffer, sceneDescriptorSet, shaderSlot, indirectDraw, commandOffset, countOffset);
         return;
     }
-    const auto& pipeline = twoSided ? twoSidedMaterialPipelines_[shaderSlot] : materialPipelines_[shaderSlot];
+    const bool reduced = useReduced_ && reducedMaterialPipelines_[shaderSlot].handle() != VK_NULL_HANDLE;
+    const auto& pipeline = twoSided
+                               ? (reduced ? reducedTwoSidedMaterialPipelines_ : twoSidedMaterialPipelines_)[shaderSlot]
+                               : (reduced ? reducedMaterialPipelines_ : materialPipelines_)[shaderSlot];
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 1,
                             &sceneDescriptorSet, 0, nullptr);
@@ -313,19 +471,68 @@ void ForwardPass::drawMeshletMaterial(VkCommandBuffer commandBuffer, VkDescripto
                                       const VkDeviceSize commandOffset, const VkDeviceSize countOffset) const {
     if (shaderSlot >= MaterialShaderCount || !indirectDraw.valid())
         return;
-    const auto& pipeline = meshletMaterialPipelines_[shaderSlot];
+    const bool reduced = useReduced_ && reducedMeshletMaterialPipelines_[shaderSlot].handle() != VK_NULL_HANDLE;
+    const auto& pipeline = (reduced ? reducedMeshletMaterialPipelines_ : meshletMaterialPipelines_)[shaderSlot];
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 1,
                             &sceneDescriptorSet, 0, nullptr);
     indirectDraw.record(commandBuffer, commandOffset, countOffset);
 }
 
+void ForwardPass::drawMeshShaderMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
+                                         VkDescriptorSet meshletDrawSet, const std::uint32_t shaderSlot,
+                                         const VkBuffer commands) const {
+    if (drawMeshTasksIndirect_ == nullptr || commands == VK_NULL_HANDLE)
+        return;
+    const GraphicsPipeline* selected = nullptr;
+    std::uint32_t flags = 0;
+    if (shaderSlot < MaterialShaderCount) {
+        const bool reduced =
+            useReduced_ && reducedMeshShaderMaterialPipelines_[shaderSlot].handle() != VK_NULL_HANDLE;
+        selected = &(reduced ? reducedMeshShaderMaterialPipelines_ : meshShaderMaterialPipelines_)[shaderSlot];
+        bool flatSelected = false;
+        if (useFlatMeshShaders_) {
+            const GraphicsPipeline& flat =
+                (reduced ? flatReducedMeshShaderMaterialPipelines_ : flatMeshShaderMaterialPipelines_)[shaderSlot];
+            if (flat.handle() != VK_NULL_HANDLE) {
+                selected = &flat;
+                flatSelected = true;
+            }
+        }
+        if (useDeferredLocal_) {
+            const GraphicsPipeline& deferred =
+                deferredMeshShaderMaterialPipelines_[(reduced ? 1U : 0U) | (flatSelected ? 2U : 0U)][shaderSlot];
+            if (deferred.handle() != VK_NULL_HANDLE)
+                selected = &deferred;
+        }
+        flags = meshShaderDrawFlags_[shaderSlot];
+    } else {
+        bool doubleSided = false;
+        selected = shaderGraphPipelines_.findMesh(shaderSlot, &doubleSided);
+        flags = (doubleSided ? 0U : 1U) | meshShaderSmallPrimitiveFlag_;
+    }
+    if (selected == nullptr || selected->handle() == VK_NULL_HANDLE)
+        return;
+    const GraphicsPipeline& pipeline = *selected;
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    const VkDescriptorSet sets[]{sceneDescriptorSet, meshletDrawSet};
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 2, sets, 0, nullptr);
+    // MeshletDrawConstants in MeshletDraw.slang.
+    const std::uint32_t constants[]{shaderSlot, flags};
+    vkCmdPushConstants(commandBuffer, pipeline.layout(), VK_SHADER_STAGE_MESH_BIT_EXT, 0, sizeof(constants), constants);
+    drawMeshTasksIndirect_(commandBuffer, commands,
+                           static_cast<VkDeviceSize>(shaderSlot) * sizeof(VkDrawMeshTasksIndirectCommandEXT), 1,
+                           sizeof(VkDrawMeshTasksIndirectCommandEXT));
+}
+
 void ForwardPass::drawFoliage(VkCommandBuffer commandBuffer, const VkDescriptorSet sceneDescriptorSet,
                               const Culling::IndexedIndirectDrawCount& indirectDraw) const {
     if (!indirectDraw.valid())
         return;
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, foliagePipeline_.handle());
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, foliagePipeline_.layout(), 0, 1,
+    const GraphicsPipeline& pipeline =
+        useReduced_ && reducedFoliagePipeline_.handle() != VK_NULL_HANDLE ? reducedFoliagePipeline_ : foliagePipeline_;
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 1,
                             &sceneDescriptorSet, 0, nullptr);
     indirectDraw.record(commandBuffer);
 }

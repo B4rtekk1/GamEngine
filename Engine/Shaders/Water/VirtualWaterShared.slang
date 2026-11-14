@@ -33,10 +33,12 @@ static const uint WaterMetaPageMask = WATER_META_PAGE_MASK;
 static const uint FarAnalyticPageId = WATER_FAR_ANALYTIC_PAGE_ID;
 static const uint FarAnalyticFlag = WATER_FAR_ANALYTIC_FLAG;
 static const uint AuthoredWaterFlag = WATER_AUTHORED_FLAG;
-static const uint MaxPages = 7184u;
+static const uint MaxPages = 8080u;
 static const uint MaxPhysicalStatePages = WATER_MAX_PHYSICAL_STATE_PAGES;
 static const uint StateGridResolution = WATER_STATE_RESOLUTION;
 static const uint StateCellsPerPage = WATER_STATE_CELLS_PER_PAGE;
+// Sparse tile classification marks candidates per block of 4x4 8px tiles.
+static const uint WATER_CANDIDATE_BLOCK_TILES = 4u;
 
 struct GPUVirtualWaterPage {
     float originX, originZ, baseHeight, cellSize;
@@ -76,7 +78,7 @@ struct GPUWaterCullConfig {
     float reflectionVarianceScale, highQualityPixels, mediumQualityPixels, lowQualityPixels;
     float qualityScale;
     uint currentFrame, occlusionGraceFrames, occludedFramesRequired;
-    uint maxHighGeometryPages, padding0, padding1, padding2;
+    uint maxHighGeometryPages, markCandidateTiles, padding1, padding2;
 };
 
 struct GPUWaterStatePhysicalRef { uint tier, slot, generation, reserved; };
@@ -127,11 +129,19 @@ float3 waterWorldToLocal(float3 p, RendererInstanceData instance) {
 
 float waterPageSize(GPUVirtualWaterPage page) { return page.cellSize * 8.0; }
 
+// Every clip level snaps to twice its own page size, which is the page grid of
+// the next coarser level. Snapping each level to its own page size lets the
+// fine level drift by one fine page relative to the coarse ring's hole, which
+// opens a gap on one side and an overlap on the other. With this snap the fine
+// level always covers exactly 4x4 coarse pages, offset inside the coarse 8x8
+// grid by waterClipHoleOffset() (0 or 1 page per axis).
+float waterSnapSize(GPUVirtualWaterPage page) { return max(waterPageSize(page) * 2.0, 1e-4); }
+
 float2 waterSnappedOffset(GPUVirtualWaterPage page, RendererInstanceData instance, float3 cameraWorld) {
     if ((page.flags & WATER_PAGE_CAMERA_RELATIVE) == 0u) return float2(0.0);
-    const float pageSize = max(waterPageSize(page), 1e-4);
+    const float snap = waterSnapSize(page);
     const float3 localCamera = waterWorldToLocal(cameraWorld, instance);
-    return floor(localCamera.xz / pageSize) * pageSize;
+    return floor(localCamera.xz / snap) * snap;
 }
 
 float2 waterPageOrigin(GPUVirtualWaterPage page, RendererInstanceData instance, float3 cameraWorld) {
@@ -140,10 +150,37 @@ float2 waterPageOrigin(GPUVirtualWaterPage page, RendererInstanceData instance, 
 
 int2 waterPageWorldCoord(GPUVirtualWaterPage page, RendererInstanceData instance, float3 cameraWorld) {
     if ((page.flags & WATER_PAGE_CAMERA_RELATIVE) == 0u) return int2(page.localPageX, page.localPageZ);
-    const float pageSize = max(waterPageSize(page), 1e-4);
     const float3 localCamera = waterWorldToLocal(cameraWorld, instance);
-    const int2 center = int2(floor(localCamera.xz / pageSize));
+    const int2 center = int2(floor(localCamera.xz / waterSnapSize(page))) * 2;
     return center + int2(page.localPageX, page.localPageZ);
+}
+
+// Position of the finer level's 4x4 footprint inside this level's 8x8 grid:
+// pages [2+offset, 6+offset) on each axis are covered by the finer level.
+int2 waterClipHoleOffset(GPUVirtualWaterPage page, RendererInstanceData instance, float3 cameraWorld) {
+    const float3 localCamera = waterWorldToLocal(cameraWorld, instance);
+    return int2(floor(localCamera.xz / max(waterPageSize(page), 1e-4))) & 1;
+}
+
+bool waterClipPageCovered(GPUVirtualWaterPage page, int2 holeOffset) {
+    if ((page.flags & WATER_PAGE_CAMERA_RELATIVE) == 0u || page.level == 0u) return false;
+    const int2 grid = int2(page.localPageX, page.localPageZ) + 4 - holeOffset;
+    return all(grid >= 2) && all(grid < 6);
+}
+
+// Coarse ring pages adjacent to the finer level carry edge midpoints so their
+// vertices match the finer level's doubled vertex density.
+uint waterClipStitchMask(GPUVirtualWaterPage page, int2 holeOffset) {
+    if ((page.flags & WATER_PAGE_CAMERA_RELATIVE) == 0u) return page.stitchMask;
+    if (page.level == 0u) return 0u;
+    const int2 grid = int2(page.localPageX, page.localPageZ) + 4 - holeOffset;
+    const bool holeRows = grid.y >= 2 && grid.y < 6;
+    const bool holeColumns = grid.x >= 2 && grid.x < 6;
+    if (grid.x == 6 && holeRows) return 1u;    // StitchLeft
+    if (grid.x == 1 && holeRows) return 2u;    // StitchRight
+    if (grid.y == 6 && holeColumns) return 4u; // StitchBottom
+    if (grid.y == 1 && holeColumns) return 8u; // StitchTop
+    return 0u;
 }
 
 float2 waterPageUvFromWorld(GPUVirtualWaterPage page, RendererInstanceData instance,

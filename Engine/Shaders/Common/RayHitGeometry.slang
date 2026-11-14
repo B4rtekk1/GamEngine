@@ -1,4 +1,5 @@
-// Matches GpuVertex (36 bytes), GPUSceneInstanceRecord and GPUSceneMeshRecord.
+import Common.VertexFrame;
+// Matches GpuVertex (32 bytes), GPUSceneInstanceRecord and GPUSceneMeshRecord.
 // Global index entries already contain the global vertex offset.
 struct RaySceneInstance {
     float4x4 worldMatrix;
@@ -30,26 +31,19 @@ struct RayVertex {
     uint materialIndex;
 };
 
-float3 decodeSnorm3x10(uint packed) {
-    int3 signedValue = int3(int(packed << 22) >> 22,
-                            int(packed << 12) >> 22,
-                            int(packed << 2) >> 22);
-    return clamp(float3(signedValue) / 511.0, -1.0, 1.0);
-}
-
 RayVertex loadRayVertex(uint index) {
-    const uint byteOffset = index * 36u;
+    const uint byteOffset = index * 32u; // sizeof(GpuVertex)
     RayVertex result;
     result.position = asfloat(rayVertices.Load3(byteOffset));
-    result.normal = decodeSnorm3x10(rayVertices.Load(byteOffset + 12u));
-    const uint uv0 = rayVertices.Load(byteOffset + 20u);
-    const uint uv1 = rayVertices.Load(byteOffset + 24u);
+    result.normal = decodeVertexNormal(rayVertices.Load(byteOffset + 12u));
+    const uint uv0 = rayVertices.Load(byteOffset + 16u);
+    const uint uv1 = rayVertices.Load(byteOffset + 20u);
     result.uv0 = float2(f16tof32(uv0 & 0xffffu), f16tof32(uv0 >> 16u));
     result.uv1 = float2(f16tof32(uv1 & 0xffffu), f16tof32(uv1 >> 16u));
-    const uint color = rayVertices.Load(byteOffset + 28u);
+    const uint color = rayVertices.Load(byteOffset + 24u);
     result.color = float3(color & 255u, (color >> 8u) & 255u,
                           (color >> 16u) & 255u) / 255.0;
-    result.materialIndex = rayVertices.Load(byteOffset + 32u);
+    result.materialIndex = rayVertices.Load(byteOffset + 28u);
     return result;
 }
 

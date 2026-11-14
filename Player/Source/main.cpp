@@ -44,8 +44,32 @@ int main(int argc, char** argv) {
         std::uint32_t benchmarkFrames = 0;
         std::uint32_t benchmarkWarmup = 120;
         std::filesystem::path benchmarkOutput;
+        std::filesystem::path screenshotPath;
+        std::uint32_t screenshotFrame = 240;
+        // The last physics step of a frame runs while
+        // the frame renders; --no-pipelined-physics applies each step before
+        // rendering instead, one fixed step sooner.
+        bool pipelinedPhysics = true;
+        // --sequential-compute keeps every compute pass on the graphics queue,
+        // so each one gets its own isolated GPU timestamp when profiling.
+        bool asyncCompute = true;
+        // --no-mesh-shaders draws GPU-culled meshlets as indexed draws, for
+        // A/B measurements against the mesh-shader path.
+        bool meshShaders = true;
         for (int index = 1; index < argc; ++index) {
             const std::string_view argument{argv[index]};
+            if (argument == "--no-pipelined-physics") {
+                pipelinedPhysics = false;
+                continue;
+            }
+            if (argument == "--sequential-compute") {
+                asyncCompute = false;
+                continue;
+            }
+            if (argument == "--no-mesh-shaders") {
+                meshShaders = false;
+                continue;
+            }
             if (argument == "--project") {
                 if (++index == argc)
                     throw std::runtime_error("--project requires a file path");
@@ -62,6 +86,15 @@ int main(int argc, char** argv) {
                 if (++index == argc)
                     throw std::runtime_error(std::string{argument} + " requires a value");
                 (argument == "--width" ? windowWidth : windowHeight) = std::stoi(argv[index]);
+                continue;
+            }
+            if (argument == "--screenshot" || argument == "--screenshot-frame") {
+                if (++index == argc)
+                    throw std::runtime_error(std::string{argument} + " requires a value");
+                if (argument == "--screenshot")
+                    screenshotPath = argv[index];
+                else
+                    screenshotFrame = static_cast<std::uint32_t>(std::stoul(argv[index]));
                 continue;
             }
             if (argument == "--benchmark" || argument == "--benchmark-warmup" || argument == "--benchmark-output") {
@@ -90,7 +123,8 @@ int main(int argc, char** argv) {
         const Engine::RenderConfig renderConfig{
             // Hi-Z culling rides on the shadow hierarchy that High VSM builds
             // anyway; keep the explicit flag so a game can opt out per title.
-            .features = Engine::RenderFeatures{.shadows = true, .occlusionCulling = true},
+            .features = Engine::RenderFeatures{.shadows = true, .occlusionCulling = true, .meshShaders = meshShaders},
+            .renderPath = asyncCompute ? Engine::RenderPath::AsyncCompute : Engine::RenderPath::Sequential,
             .antialiasing = Engine::AntialiasingLevel::TAA,
             .shadowQuality = Engine::ShadowQuality::High,
             .gtaoQuality = Engine::GtaoQuality::High,
@@ -100,11 +134,14 @@ int main(int argc, char** argv) {
                                  .width = windowWidth,
                                  .height = windowHeight,
                                  .closeOnEscape = false,
+                                 .pipelinedPhysics = pipelinedPhysics,
                                  .assetRoot = project.assetRoot(),
                                  .render = renderConfig,
                                  .benchmarkFrames = benchmarkFrames,
                                  .benchmarkWarmupFrames = benchmarkWarmup,
-                                 .benchmarkOutput = benchmarkOutput}};
+                                 .benchmarkOutput = benchmarkOutput,
+                                 .screenshotPath = screenshotPath,
+                                 .screenshotFrame = screenshotFrame}};
         if (!std::filesystem::is_regular_file(scenePath)) {
             throw std::runtime_error("Scene file does not exist: " + scenePath.string());
         }

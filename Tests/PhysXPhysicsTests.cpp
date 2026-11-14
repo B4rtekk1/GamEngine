@@ -136,6 +136,40 @@ TEST(PhysXPhysics, DynamicBoxFallsAndRestsOnStaticGround) {
     EXPECT_LT(box.velocity().length(), 0.05F);
 }
 
+TEST(PhysXPhysics, PipelinedSimulationMatchesSynchronousStepsOneUpdateLater) {
+    const auto makeScene = [](Engine::Scene& scene) {
+        const Engine::Actor ground = scene.createActor("Ground");
+        ground.addBoxCollider({5.0F, 0.5F, 5.0F});
+        const Engine::Actor box = scene.createActor("Box");
+        box.setPosition({0.0F, 3.0F, 0.0F});
+        box.addBoxCollider({0.5F, 0.5F, 0.5F});
+        box.addRigidbody();
+        return box;
+    };
+    Engine::Scene synchronousScene;
+    const Engine::Actor synchronousBox = makeScene(synchronousScene);
+    Engine::Scene pipelinedScene;
+    const Engine::Actor pipelinedBox = makeScene(pipelinedScene);
+
+    Engine::PhysicsSystem synchronous;
+    Engine::PhysicsSystem pipelined;
+    pipelined.setPipelinedSimulation(true);
+    for (int step = 0; step < 30; ++step) {
+        synchronous.update(synchronousScene, 1.0F / 60.0F);
+        pipelined.update(pipelinedScene, 1.0F / 60.0F);
+    }
+    // The 30th pipelined step is still in flight: the ECS holds step 29.
+    EXPECT_GT(pipelinedBox.position().y(), synchronousBox.position().y());
+    pipelined.synchronize(pipelinedScene);
+    EXPECT_NEAR(pipelinedBox.position().y(), synchronousBox.position().y(), 1.0e-5F);
+
+    // A query completes the in-flight step before touching the scene.
+    pipelined.update(pipelinedScene, 1.0F / 60.0F);
+    synchronous.update(synchronousScene, 1.0F / 60.0F);
+    EXPECT_TRUE(pipelined.raycast(pipelinedScene, {0.0F, 10.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, 20.0F));
+    EXPECT_NEAR(pipelinedBox.position().y(), synchronousBox.position().y(), 1.0e-5F);
+}
+
 TEST(PhysXPhysics, TriggerDoesNotStopDynamicBody) {
     Engine::Scene scene;
     const Engine::Actor trigger = scene.createActor("Trigger");
@@ -399,22 +433,134 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     EXPECT_TRUE(renderer.material.shaderProgramSpirv.empty());
 }
 
-TEST(SceneSerializer, LoadsVersion30AndResavesAsCurrentVersion) {
-    Engine::Scene source;
-    source.createCube("Version 30 migration");
-    std::ostringstream currentFormat;
-    ASSERT_NO_THROW(Engine::SceneSerializer::save(source, currentFormat));
-    std::string legacy = currentFormat.str();
-    const auto currentHeader = "GAMENGINE_SCENE " + std::to_string(Engine::SceneSerializer::FormatVersion);
-    ASSERT_TRUE(legacy.starts_with(currentHeader + "\n"));
-    legacy.replace(0, currentHeader.size(), "GAMENGINE_SCENE 30");
+namespace {
+// A material's default tail as SceneSerializer writes it after the
+// displacement scale/offset: the glass block (transmission, IOR, thickness,
+// attenuation colour and distance, dirt, three textures and three UV
+// transforms, versions 29-33 and 35+) and the specular factor (36+).
+const std::string DefaultGlassFields = " 0 1.5 0 1 1 1 1 0 0 -1 -1 -1"
+                                       " 0 0 0 1 1 0 0 0 0 1 1 0 0 0 0 1 1 0";
+const std::string DefaultSpecularField = " 1";
 
+std::string sceneWithMaterialTail(const std::string& header, const std::string& glassFields) {
+    Engine::Scene source;
+    const auto actor = source.createCube("Glass migration");
+    source.editor().patch<Engine::MeshRendererComponent>(source.findEntity(actor.id()), [](auto& renderer) {
+        renderer.material.pbr.displacementScale = 0.25F;
+        renderer.material.pbr.displacementOffset = 0.375F;
+    });
+    std::ostringstream currentFormat;
+    Engine::SceneSerializer::save(source, currentFormat);
+    std::string text = currentFormat.str();
+    const auto currentHeader = "GAMENGINE_SCENE " + std::to_string(Engine::SceneSerializer::FormatVersion);
+    EXPECT_TRUE(text.starts_with(currentHeader + "\n"));
+    text.replace(0, currentHeader.size(), header);
+    const std::string current = " 0.25 0.375" + DefaultGlassFields + DefaultSpecularField;
+    std::size_t replaced = 0;
+    for (auto position = text.find(current); position != std::string::npos;
+         position = text.find(current, position + 1)) {
+        text.replace(position, current.size(), " 0.25 0.375" + glassFields);
+        ++replaced;
+    }
+    EXPECT_GT(replaced, 0U);
+    return text;
+}
+} // namespace
+
+TEST(SceneSerializer, LoadsVersion30GlassMaterialAndResavesAsCurrentVersion) {
+    const std::string glassFields = " 0.9 1.45 0.01 0.8 0.9 0.85 1 0.1 0.05 -1 -1 -1"
+                                    " 0 0 0 1 1 0 1 0.5 0.25 2 2 0 0 0 0 1 1 0";
     Engine::Scene loaded;
-    std::istringstream input{legacy};
+    std::istringstream input{sceneWithMaterialTail("GAMENGINE_SCENE 30", glassFields)};
     ASSERT_NO_THROW(Engine::SceneSerializer::load(loaded, input));
+    const auto restored = loaded.findActor("Glass migration");
+    ASSERT_TRUE(restored.valid());
+    const auto& pbr = loaded.editor().read<Engine::MeshRendererComponent>(loaded.findEntity(restored.id())).material.pbr;
+    EXPECT_FLOAT_EQ(pbr.displacementOffset, 0.375F);
+    EXPECT_FLOAT_EQ(pbr.transmission, 0.9F);
+    EXPECT_FLOAT_EQ(pbr.ior, 1.45F);
+    EXPECT_FLOAT_EQ(pbr.thickness, 0.01F);
+    EXPECT_FLOAT_EQ(pbr.attenuationColor.g(), 0.9F);
+    EXPECT_FLOAT_EQ(pbr.attenuationDistance, 0.1F);
+    EXPECT_FLOAT_EQ(pbr.dirtIntensity, 0.05F);
+    EXPECT_EQ(pbr.glassTextureTransforms[1].texCoord, 1U);
+    EXPECT_FLOAT_EQ(pbr.glassTextureTransforms[1].scaleX, 2.0F);
+    EXPECT_TRUE(Engine::usesGlass(pbr));
+
     std::ostringstream migrated;
     ASSERT_NO_THROW(Engine::SceneSerializer::save(loaded, migrated));
+    const auto currentHeader = "GAMENGINE_SCENE " + std::to_string(Engine::SceneSerializer::FormatVersion);
     EXPECT_TRUE(migrated.str().starts_with(currentHeader + "\n"));
+    Engine::Scene reloaded;
+    std::istringstream again{migrated.str()};
+    ASSERT_NO_THROW(Engine::SceneSerializer::load(reloaded, again));
+    const auto& roundTrip =
+        reloaded.editor()
+            .read<Engine::MeshRendererComponent>(reloaded.findEntity(reloaded.findActor("Glass migration").id()))
+            .material.pbr;
+    EXPECT_FLOAT_EQ(roundTrip.transmission, 0.9F);
+    EXPECT_FLOAT_EQ(roundTrip.attenuationDistance, 0.1F);
+}
+
+TEST(SceneSerializer, LoadsVersion34MaterialWithoutGlassFields) {
+    Engine::Scene loaded;
+    std::istringstream input{sceneWithMaterialTail("GAMENGINE_SCENE 34", "")};
+    ASSERT_NO_THROW(Engine::SceneSerializer::load(loaded, input));
+    const auto restored = loaded.findActor("Glass migration");
+    ASSERT_TRUE(restored.valid());
+    const auto& pbr = loaded.editor().read<Engine::MeshRendererComponent>(loaded.findEntity(restored.id())).material.pbr;
+    EXPECT_FLOAT_EQ(pbr.displacementOffset, 0.375F);
+    EXPECT_FLOAT_EQ(pbr.transmission, 0.0F);
+    EXPECT_FALSE(Engine::usesGlass(pbr));
+}
+
+TEST(SceneSerializer, LoadsVersion35GlassAndPersistsReflectivity) {
+    Engine::Scene loaded;
+    std::istringstream input{sceneWithMaterialTail("GAMENGINE_SCENE 35",
+                                                   " 1 1.5 0.005 1 1 1 1 0 0 -1 -1 -1"
+                                                   " 0 0 0 1 1 0 0 0 0 1 1 0 0 0 0 1 1 0")};
+    ASSERT_NO_THROW(Engine::SceneSerializer::load(loaded, input));
+    const auto entity = loaded.findEntity(loaded.findActor("Glass migration").id());
+    EXPECT_FLOAT_EQ(loaded.editor().read<Engine::MeshRendererComponent>(entity).material.pbr.specular, 1.0F);
+    loaded.editor().patch<Engine::MeshRendererComponent>(entity,
+                                                         [](auto& renderer) { renderer.material.pbr.specular = 2.5F; });
+    std::ostringstream saved;
+    ASSERT_NO_THROW(Engine::SceneSerializer::save(loaded, saved));
+    Engine::Scene reloaded;
+    std::istringstream again{saved.str()};
+    ASSERT_NO_THROW(Engine::SceneSerializer::load(reloaded, again));
+    const auto& pbr =
+        reloaded.editor()
+            .read<Engine::MeshRendererComponent>(reloaded.findEntity(reloaded.findActor("Glass migration").id()))
+            .material.pbr;
+    EXPECT_FLOAT_EQ(pbr.specular, 2.5F);
+    EXPECT_FLOAT_EQ(pbr.transmission, 1.0F);
+}
+
+TEST(SceneSerializer, PersistsLightProfiles) {
+    Engine::Scene source;
+    Engine::LightComponent light;
+    light.type = Engine::LightType::Point;
+    light.profile = Engine::LightProfile::Ies;
+    light.iesProfile = "Lights/wall sconce.ies";
+    static_cast<void>(source.createLight("Profiled lamp", light));
+    std::ostringstream saved;
+    ASSERT_NO_THROW(Engine::SceneSerializer::save(source, saved));
+    Engine::Scene loaded;
+    std::istringstream input{saved.str()};
+    ASSERT_NO_THROW(Engine::SceneSerializer::load(loaded, input));
+    const auto& restored =
+        loaded.editor().read<Engine::LightComponent>(loaded.findEntity(loaded.findActor("Profiled lamp").id()));
+    EXPECT_EQ(restored.profile, Engine::LightProfile::Ies);
+    EXPECT_EQ(restored.iesProfile, std::filesystem::path{"Lights/wall sconce.ies"});
+}
+
+TEST(SceneSerializer, RejectsInvalidGlassMaterial) {
+    Engine::Scene loaded;
+    std::istringstream input{sceneWithMaterialTail(
+        "GAMENGINE_SCENE " + std::to_string(Engine::SceneSerializer::FormatVersion),
+        " 1.5 1.5 0 1 1 1 1 0 0 -1 -1 -1 0 0 0 1 1 0 0 0 0 1 1 0 0 0 0 1 1 0 1")};
+    EXPECT_THROW(Engine::SceneSerializer::load(loaded, input), std::runtime_error);
 }
 
 TEST(SceneSerializer, PreservesShaderGraphSourceWithoutAsset) {

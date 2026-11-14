@@ -31,6 +31,19 @@ namespace {
 }
 } // namespace
 
+void Project::save() const {
+    std::ofstream output{manifestPath_, std::ios::trunc};
+    if (!output) {
+        throw std::runtime_error("Could not write project manifest: " + manifestPath_.string());
+    }
+    output << "# GamEngine project\nname = " << name_
+           << "\nasset_root = " << assetRoot_.lexically_relative(rootPath_).generic_string()
+           << "\nstartup_scene = " << startupScene_.lexically_relative(rootPath_).generic_string() << '\n';
+    if (!output) {
+        throw std::runtime_error("Could not write project manifest: " + manifestPath_.string());
+    }
+}
+
 Project Project::load(const std::filesystem::path& manifestPath) {
     const auto absoluteManifest = std::filesystem::absolute(manifestPath).lexically_normal();
     std::ifstream input{absoluteManifest};

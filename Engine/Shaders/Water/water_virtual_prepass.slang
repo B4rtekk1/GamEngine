@@ -24,10 +24,9 @@ float edgeEffectiveCell(float2 uv,float cell,uint mask){
 
 void evaluateWavesCurrentPrevious(MaterialData m,float2 xz,float currentTime,float previousTime,float cell,uint mask,
                                   out float3 d,out float3 t,out float3 b,
-                                  out float3 pd,out float3 pt,out float3 pb,
-                                  out float unresolvedVariance){
+                                  out float3 pd,out float unresolvedVariance){
  d=0;t=float3(1,0,0);b=float3(0,0,1);
- pd=0;pt=float3(1,0,0);pb=float3(0,0,1);unresolvedVariance=0.0;
+ pd=0;unresolvedVariance=0.0;
  const float frameDt=max(currentTime-previousTime,0.0);
  [unroll] for(uint i=0;i<8;++i){
    if(i>=m.waterWaveCount.x) break;
@@ -48,9 +47,9 @@ void evaluateWavesCurrentPrevious(MaterialData m,float2 xz,float currentTime,flo
    d+=lod*float3(h*dir.x*c,w.z*s,h*dir.y*c);
    t+=lod*float3(-h*dir.x*dir.x*k*s,w.z*dir.x*k*c,-h*dir.x*dir.y*k*s);
    b+=lod*float3(-h*dir.x*dir.y*k*s,w.z*dir.y*k*c,-h*dir.y*dir.y*k*s);
+   // Only the previous displacement feeds motion vectors; previous tangents
+   // were never consumed and are not evaluated.
    pd+=lod*float3(h*dir.x*pc,w.z*ps,h*dir.y*pc);
-   pt+=lod*float3(-h*dir.x*dir.x*k*ps,w.z*dir.x*k*pc,-h*dir.x*dir.y*k*ps);
-   pb+=lod*float3(-h*dir.x*dir.y*k*ps,w.z*dir.y*k*pc,-h*dir.y*dir.y*k*ps);
  }
 }
 
@@ -60,11 +59,8 @@ float2 octEncode(float3 n){
  return e;
 }
 
+// Callers validate the reference (slot range + generation) once per vertex.
 GPUWaterStateCell sampleStateGrid(GPUWaterStatePhysicalRef ref,float2 uv){
-    GPUWaterStateCell zero=(GPUWaterStateCell)0;
-    if(!waterStateRefValid(ref)) return zero;
-    GPUWaterPhysicalState owner=physicalStates[ref.slot];
-    if(owner.generation!=ref.generation) return zero;
     uv=saturate(uv);
     uint resolution=waterStateTierResolution(ref.tier);
     float2 p=uv*float(max(resolution,2u)-1u);
@@ -124,8 +120,9 @@ VSOut vertexMain(VSIn input,uint instanceId:SV_InstanceID,uint baseInstance:SV_S
  GPUWaterStateCell localState=(GPUWaterStateCell)0;
  float2 interactionSlope=0.0;
  float interactionEnergy=0.0;
- if(waterStateRefValid(physical)&&physicalStates[physical.slot].generation==physical.generation){
-   GPUWaterPhysicalState summary=physicalStates[physical.slot];
+ GPUWaterPhysicalState summary=(GPUWaterPhysicalState)0;
+ if(waterStateRefValid(physical)) summary=physicalStates[physical.slot];
+ if(waterStateRefValid(physical)&&summary.generation==physical.generation&&summary.generation!=0u){
    float2 stateUv=waterStateUvFromWorld(p,inst,summary,frame.cameraPosition.xyz,worldBase);
    localState=sampleStateGrid(physical,stateUv);
    float stateDu=1.0/float(max(waterStateTierResolution(physical.tier),2u)-1u);
@@ -140,9 +137,9 @@ VSOut vertexMain(VSIn input,uint instanceId:SV_InstanceID,uint baseInstance:SV_S
    worldBase+=waterRotateQuaternion(float3(0,localState.height,0),inst.rotation);
  }
  float cell=edgeEffectiveCell(input.position.xz,p.cellSize,p.spectralEdgeMask);
- float3 d,t,b,pd,pt,pb;float unresolvedVariance;
+ float3 d,t,b,pd;float unresolvedVariance;
  evaluateWavesCurrentPrevious(m,worldBase.xz,frame.windGustFrequencyTime.z,frame.windGustFrequencyTime.w,
-                              cell,v.waveCandidateMask,d,t,b,pd,pt,pb,unresolvedVariance);
+                              cell,v.waveCandidateMask,d,t,b,pd,unresolvedVariance);
  float3 world=worldBase+waterRotateQuaternion(d*inst.scaleBase.xyz,inst.rotation);
  float3 tw=normalize(waterRotateQuaternion(t,inst.rotation)); float3 bw=normalize(waterRotateQuaternion(b,inst.rotation));
  float3 n=normalize(cross(bw,tw));

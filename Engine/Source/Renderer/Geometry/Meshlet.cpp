@@ -7,6 +7,8 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <utility>
+#include <vector>
 
 namespace Engine {
 namespace {
@@ -105,6 +107,147 @@ void finish_meshlet(Mesh& mesh, const std::uint32_t firstVertex, const std::uint
         result |= ((x >> bit) & 1U) << (3U * bit) | ((y >> bit) & 1U) << (3U * bit + 1U) |
                   ((z >> bit) & 1U) << (3U * bit + 2U);
     return result;
+}
+
+// Reorders the triangles of one index range so that the greedy, order-preserving
+// partition in build_meshlets() produces well-filled, compact meshlets. Each
+// meshlet grows by the triangle adjacent to it that adds the fewest new
+// vertices (ties: the one whose vertices have the fewest triangles left, which
+// closes off the meshlet border first, as meshoptimizer does). When nothing
+// adjacent fits, the next unused triangle in Morton order of its centroid
+// continues the meshlet if it fits, otherwise it starts the next one.
+//
+// The partition then flushes exactly where this pass ended each meshlet: the
+// triangle following a meshlet always overflows its vertex or triangle budget,
+// or changes material. Triangles keep their winding; only their order within
+// the range changes. In source order meshlets were vertex-bound (Bistro:
+// ~46 triangles for ~62 vertices), so mesh shaders shaded ~2.5x the vertices
+// a post-transform cache does.
+void optimize_meshlet_triangle_order(Mesh& mesh, const std::uint32_t firstIndex, const std::uint32_t indexCount,
+                                     const MeshletBuildOptions options) {
+    const std::uint32_t triangleCount = indexCount / 3U;
+    if (triangleCount < 2U || options.maxTriangles < 2U)
+        return;
+    const auto source = mesh.indices.begin() + firstIndex;
+
+    // Section-local vertex ids keep the working set proportional to the range.
+    std::vector<std::uint32_t> uniqueVertices(source, source + indexCount);
+    std::ranges::sort(uniqueVertices);
+    uniqueVertices.erase(std::unique(uniqueVertices.begin(), uniqueVertices.end()), uniqueVertices.end());
+    const auto vertexCount = static_cast<std::uint32_t>(uniqueVertices.size());
+    std::vector<std::uint32_t> corners(indexCount);
+    for (std::uint32_t index = 0; index < indexCount; ++index)
+        corners[index] = static_cast<std::uint32_t>(
+            std::ranges::lower_bound(uniqueVertices, source[index]) - uniqueVertices.begin());
+
+    // Vertex -> triangle adjacency (CSR).
+    std::vector<std::uint32_t> adjacencyOffsets(vertexCount + 1U, 0U);
+    for (const std::uint32_t corner : corners)
+        ++adjacencyOffsets[corner + 1U];
+    std::partial_sum(adjacencyOffsets.begin(), adjacencyOffsets.end(), adjacencyOffsets.begin());
+    std::vector<std::uint32_t> adjacency(indexCount);
+    {
+        std::vector<std::uint32_t> fill(adjacencyOffsets.begin(), adjacencyOffsets.end() - 1);
+        for (std::uint32_t index = 0; index < indexCount; ++index)
+            adjacency[fill[corners[index]]++] = index / 3U;
+    }
+    std::vector<std::uint32_t> liveTriangles(vertexCount);
+    for (std::uint32_t vertex = 0; vertex < vertexCount; ++vertex)
+        liveTriangles[vertex] = adjacencyOffsets[vertex + 1U] - adjacencyOffsets[vertex];
+    std::vector<std::uint32_t> materials(triangleCount);
+    for (std::uint32_t triangle = 0; triangle < triangleCount; ++triangle)
+        materials[triangle] = mesh.vertices[source[triangle * 3U]].materialIndex;
+
+    // Spatial fallback order.
+    const AABB bounds = bounds_for_indices(mesh, firstIndex, indexCount);
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> seeds(triangleCount);
+    for (std::uint32_t triangle = 0; triangle < triangleCount; ++triangle) {
+        const Vec3 centroid = (mesh.vertices[source[triangle * 3U]].position +
+                               mesh.vertices[source[triangle * 3U + 1U]].position +
+                               mesh.vertices[source[triangle * 3U + 2U]].position) *
+                              (1.0F / 3.0F);
+        seeds[triangle] = {morton_code(centroid, bounds), triangle};
+    }
+    std::ranges::sort(seeds);
+
+    constexpr std::uint32_t NotInMeshlet = std::numeric_limits<std::uint32_t>::max();
+    std::vector<std::uint32_t> meshletOfVertex(vertexCount, NotInMeshlet);
+    std::vector<bool> emitted(triangleCount, false);
+    std::array<std::uint32_t, MeshletBuildOptions::MaxVertices> meshletVertices{};
+    std::uint32_t meshletVertexCount = 0;
+    std::uint32_t meshletTriangleCount = 0;
+    std::uint32_t meshletMaterial = 0;
+    std::uint32_t meshletId = 0;
+    std::size_t seedCursor = 0;
+
+    std::vector<std::uint32_t> reordered;
+    reordered.reserve(indexCount);
+    const auto newVertices = [&](const std::uint32_t triangle) {
+        std::uint32_t count = 0;
+        for (std::uint32_t corner = 0; corner < 3U; ++corner) {
+            const std::uint32_t vertex = corners[triangle * 3U + corner];
+            // A degenerate triangle may repeat a vertex: count it once.
+            bool repeated = false;
+            for (std::uint32_t previous = 0; previous < corner; ++previous)
+                repeated = repeated || corners[triangle * 3U + previous] == vertex;
+            if (!repeated && meshletOfVertex[vertex] != meshletId)
+                ++count;
+        }
+        return count;
+    };
+    const auto endMeshlet = [&] {
+        ++meshletId;
+        meshletVertexCount = 0;
+        meshletTriangleCount = 0;
+    };
+
+    for (std::uint32_t written = 0; written < triangleCount; ++written) {
+        std::uint32_t best = NotInMeshlet;
+        std::uint32_t bestExtra = 4U;
+        std::uint32_t bestLive = std::numeric_limits<std::uint32_t>::max();
+        for (std::uint32_t slot = 0; slot < meshletVertexCount && bestExtra != 0U; ++slot) {
+            const std::uint32_t vertex = meshletVertices[slot];
+            for (std::uint32_t edge = adjacencyOffsets[vertex]; edge < adjacencyOffsets[vertex + 1U]; ++edge) {
+                const std::uint32_t triangle = adjacency[edge];
+                if (emitted[triangle] || materials[triangle] != meshletMaterial)
+                    continue;
+                const std::uint32_t extra = newVertices(triangle);
+                if (meshletVertexCount + extra > options.maxVertices)
+                    continue;
+                const std::uint32_t live = liveTriangles[corners[triangle * 3U]] +
+                                           liveTriangles[corners[triangle * 3U + 1U]] +
+                                           liveTriangles[corners[triangle * 3U + 2U]];
+                if (extra < bestExtra || (extra == bestExtra && live < bestLive)) {
+                    best = triangle;
+                    bestExtra = extra;
+                    bestLive = live;
+                }
+            }
+        }
+        if (best == NotInMeshlet) {
+            while (emitted[seeds[seedCursor].second])
+                ++seedCursor;
+            best = seeds[seedCursor].second;
+            if (meshletTriangleCount != 0U &&
+                (materials[best] != meshletMaterial || meshletVertexCount + newVertices(best) > options.maxVertices))
+                endMeshlet();
+        }
+        if (meshletTriangleCount == 0U)
+            meshletMaterial = materials[best];
+        emitted[best] = true;
+        for (std::uint32_t corner = 0; corner < 3U; ++corner) {
+            const std::uint32_t vertex = corners[best * 3U + corner];
+            reordered.push_back(source[best * 3U + corner]);
+            --liveTriangles[vertex];
+            if (meshletOfVertex[vertex] != meshletId) {
+                meshletOfVertex[vertex] = meshletId;
+                meshletVertices[meshletVertexCount++] = vertex;
+            }
+        }
+        if (++meshletTriangleCount >= options.maxTriangles)
+            endMeshlet();
+    }
+    std::ranges::copy(reordered, source);
 }
 
 [[nodiscard]] MeshletClusterNode cluster_bounds(const Mesh& mesh, const std::uint32_t first,
@@ -277,6 +420,7 @@ bool build_meshlets(Mesh& mesh, const MeshletBuildOptions options) {
         if (indexCount == 0 || indexCount % 3U != 0U || firstIndex > mesh.indices.size() ||
             indexCount > mesh.indices.size() - firstIndex)
             return false;
+        optimize_meshlet_triangle_order(mesh, firstIndex, indexCount, options);
         std::array<std::uint32_t, MeshletBuildOptions::MaxVertices> localVertices{};
         std::uint32_t localCount = 0;
         std::uint32_t vertexStart = static_cast<std::uint32_t>(mesh.meshletVertices.size());

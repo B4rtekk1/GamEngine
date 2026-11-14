@@ -1,5 +1,6 @@
 #include "Engine/Scripting/ScriptSystem.h"
 
+#include "ConsoleSource.h"
 #include "Engine/Core/Diagnostics.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
@@ -16,6 +17,39 @@ std::string objectName(const Registry& registry, const Entity entity) {
     }
     return "Entity " + std::to_string(entity);
 }
+
+// Names the scripted object and script class in console messages logged from
+// one script callback. Names are looked up only if something is logged.
+class ScriptConsoleScope final {
+  public:
+    // `className` must outlive the scope; it is read only if something is logged.
+    ScriptConsoleScope(const ScriptRegistry& scripts, const Registry& registry, const Entity entity,
+                       const std::string& className) noexcept
+        : owner_{&scripts, &registry, entity, &className}, source_{&owner_, &context}, scope_{source_} {}
+
+  private:
+    struct Owner final {
+        const ScriptRegistry* scripts;
+        const Registry* registry;
+        Entity entity;
+        const std::string* className;
+    };
+
+    static DiagnosticContext context(const void* owner) {
+        const auto& script = *static_cast<const Owner*>(owner);
+        return {
+            .subsystem = "Script",
+            .object = objectName(*script.registry, script.entity),
+            .component = *script.className,
+            .file = script.scripts->sourceFile(*script.className).value_or(std::string{}),
+            .suggestedAction = {},
+        };
+    }
+
+    Owner owner_;
+    ConsoleSource source_;
+    ScopedConsoleSource scope_;
+};
 } // namespace
 
 DiagnosticContext ScriptSystem::diagnosticContext(const Registry& registry, const Entity entity,
@@ -42,6 +76,9 @@ void ScriptSystem::destroyRuntime(const Registry& registry, const Entity entity,
     if (!component.runtime) {
         return;
     }
+    const ScriptConsoleScope consoleScope{scripts_, registry, entity,
+                                          component.runtimeClassName.empty() ? component.className
+                                                                             : component.runtimeClassName};
     if (component.runtimeEnabled) {
         try {
             component.runtime->onDisable();
@@ -75,6 +112,9 @@ void ScriptSystem::disableRuntime(const Registry& registry, const Entity entity,
     if (!component.runtime || !component.runtimeEnabled) {
         return;
     }
+    const ScriptConsoleScope consoleScope{scripts_, registry, entity,
+                                          component.runtimeClassName.empty() ? component.className
+                                                                             : component.runtimeClassName};
     try {
         component.runtime->onDisable();
         component.runtimeEnabled = false;
@@ -101,6 +141,9 @@ bool ScriptSystem::createRuntime(Registry& registry, const Entity entity, Script
     }
     component.runtimeClassName = component.className;
     component.lastDiagnosticKey.clear();
+    const ScriptConsoleScope consoleScope{scripts_, registry, entity,
+                                          component.runtimeClassName.empty() ? component.className
+                                                                             : component.runtimeClassName};
     try {
         if (scene != nullptr) {
             component.runtime->attach(*scene, registry, entity);
@@ -132,6 +175,9 @@ bool ScriptSystem::enableRuntime(const Registry& registry, const Entity entity, 
     if (component.runtimeEnabled) {
         return true;
     }
+    const ScriptConsoleScope consoleScope{scripts_, registry, entity,
+                                          component.runtimeClassName.empty() ? component.className
+                                                                             : component.runtimeClassName};
     try {
         component.runtime->onEnable();
         component.runtimeEnabled = true;
@@ -151,6 +197,9 @@ bool ScriptSystem::enableRuntime(const Registry& registry, const Entity entity, 
 
 bool ScriptSystem::updateRuntime(const Registry& registry, const Entity entity, ScriptComponent& component,
                                  const float deltaTime) const {
+    const ScriptConsoleScope consoleScope{scripts_, registry, entity,
+                                          component.runtimeClassName.empty() ? component.className
+                                                                             : component.runtimeClassName};
     try {
         component.runtime->onUpdate(deltaTime);
         return true;

@@ -36,6 +36,71 @@ TEST(TransformSystem, DirtyLeafDoesNotChangeSiblingWorldRevisions) {
     Engine::TransformSystem::invalidate(registry);
 }
 
+TEST(TransformSystem, ChangeLogKeepsUpdatesResolvedByAnEarlierCaller) {
+    // A camera moved by a script is resolved by the physics step's update;
+    // the renderer's later update then has an unrelated (or empty) batch.
+    // Reading changes since its stored serial must still report the camera.
+    Engine::Registry registry;
+    const auto camera = registry.create();
+    const auto body = registry.create();
+    registry.add<Engine::Transform>(camera);
+    registry.add<Engine::Transform>(body);
+    Engine::TransformSystem::updateDirty(registry);
+    const std::uint64_t consumed = Engine::TransformSystem::worldTransformSerial(registry);
+
+    registry.modify<Engine::Transform>(camera, [](auto& transform) { transform.rotation = {0, 5, 0}; });
+    Engine::TransformSystem::updateDirty(registry); // physics step
+    registry.modify<Engine::Transform>(body, [](auto& transform) { transform.position = {1, 0, 0}; });
+    Engine::TransformSystem::updateDirty(registry); // physics interpolation
+    Engine::TransformSystem::updateDirty(registry); // renderer: nothing left
+
+    const auto latest = Engine::TransformSystem::changedWorldTransforms(registry);
+    ASSERT_EQ(latest.size(), 1U);
+    EXPECT_EQ(latest.front(), body);
+    bool complete = false;
+    const auto changes = Engine::TransformSystem::worldTransformChangesSince(registry, consumed, complete);
+    EXPECT_TRUE(complete);
+    ASSERT_EQ(changes.size(), 2U);
+    EXPECT_EQ(changes[0].entity, camera);
+    EXPECT_EQ(changes[1].entity, body);
+    const std::uint64_t now = Engine::TransformSystem::worldTransformSerial(registry);
+    EXPECT_TRUE(Engine::TransformSystem::worldTransformChangesSince(registry, now, complete).empty());
+    EXPECT_TRUE(complete);
+
+    // After the registry contents are replaced, an old serial is incomplete.
+    Engine::TransformSystem::invalidate(registry);
+    Engine::TransformSystem::updateDirty(registry);
+    (void)Engine::TransformSystem::worldTransformChangesSince(registry, consumed, complete);
+    EXPECT_FALSE(complete);
+    Engine::TransformSystem::invalidate(registry);
+}
+
+TEST(TransformComponent, ClosedFormMatrixMatchesRotationChain) {
+    // matrix() is a closed form of T * Rx * Ry * Rz * S; keep it equal to
+    // the generic axis-angle product it replaced.
+    const float angles[] = {-270.0F, -90.0F, -33.5F, 0.0F, 12.25F, 45.0F, 90.0F, 179.0F, 400.0F};
+    for (const float x : angles) {
+        for (const float y : angles) {
+            for (const float z : angles) {
+                Engine::Transform transform;
+                transform.position = {1.5F, -2.0F, 3.25F};
+                transform.rotation = {x, y, z};
+                transform.scale = {2.0F, 0.5F, -1.25F};
+                Engine::Mat4 expected = Engine::Mat4::translate(transform.position);
+                expected = Engine::Mat4::rotate(expected, Engine::Radians{Engine::Degrees{x}}, {1.0F, 0.0F, 0.0F});
+                expected = Engine::Mat4::rotate(expected, Engine::Radians{Engine::Degrees{y}}, {0.0F, 1.0F, 0.0F});
+                expected = Engine::Mat4::rotate(expected, Engine::Radians{Engine::Degrees{z}}, {0.0F, 0.0F, 1.0F});
+                expected = Engine::Mat4::scale(expected, transform.scale);
+                const glm::mat4 actual = transform.matrix().native();
+                for (int column = 0; column < 4; ++column)
+                    for (int row = 0; row < 4; ++row)
+                        EXPECT_NEAR(actual[column][row], expected.native()[column][row], 1.0e-5F)
+                            << "rotation " << x << ", " << y << ", " << z;
+            }
+        }
+    }
+}
+
 TEST(RendererTransformHistory, SettlesOnceAndIgnoresMaterialIndex) {
     Engine::RendererInstanceData current;
     Engine::RendererPreviousTransformData previous;

@@ -454,6 +454,13 @@ class RenderGraph final {
     std::vector<BarrierBatch> releaseBarriers_;
     std::vector<QueueDependency> queueDependencies_;
     std::vector<QueueBatch> queueBatches_;
+    // reset() parks the per-frame containers here instead of freeing them.
+    // An identical graph next frame copy-assigns into these elements, which
+    // reuses their inner vectors' capacity rather than reallocating them.
+    std::vector<Pass> passPool_;
+    std::vector<BarrierBatch> barrierRecycle_;
+    std::vector<BarrierBatch> releaseBarrierRecycle_;
+    std::vector<QueueBatch> queueBatchRecycle_;
     std::vector<UploadWait> uploadWaits_;
     std::vector<TextureHandle> exportedTextures_;
     std::vector<BufferHandle> exportedBuffers_;

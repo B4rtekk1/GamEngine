@@ -120,11 +120,18 @@ void UploadContext::reclaim() noexcept {
     if (device_ == nullptr) {
         return;
     }
-    uint64_t copyDone = completedValue();
+    const auto readyDone = completedValue();
+    uint64_t copyDone = readyDone;
     if (copyTimeline_ != nullptr) {
         vkGetSemaphoreCounterValue(device_, copyTimeline_, &copyDone);
+        // A batch without a graphics finalizer signals only the ready
+        // timeline, and only after its copies. Judged by the copy timeline
+        // alone its range never retired, so allocate() -- whose wait() is on
+        // the ready timeline and returned at once -- spun forever on a large
+        // upload (the editor froze adding a big model). Either signal means
+        // the copies of that value have completed.
+        copyDone = std::max(copyDone, readyDone);
     }
-    const auto readyDone = completedValue();
     for (Submitted& submitted : submitted_) {
         if (submitted.copyCommandBuffer != VK_NULL_HANDLE && submitted.value <= copyDone) {
             vkFreeCommandBuffers(device_, pool_, 1, &submitted.copyCommandBuffer);

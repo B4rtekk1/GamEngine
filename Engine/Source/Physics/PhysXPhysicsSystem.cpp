@@ -5,7 +5,6 @@
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
-#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Scene/Scene.h"
@@ -309,14 +308,6 @@ physx::PxFilterFlags simulationFilter(physx::PxFilterObjectAttributes attributes
                                       physx::PxFilterObjectAttributes attributes1, physx::PxFilterData filter1,
                                       physx::PxPairFlags& pairFlags, const void* constantBlock,
                                       physx::PxU32 constantBlockSize) {
-    constexpr physx::PxU32 glassGroup = 0x474c4153U;
-    if (filter0.word2 == glassGroup && filter1.word2 == glassGroup && filter0.word0 == filter1.word0 &&
-        filter0.word1 == filter1.word1 && (filter0.word3 || filter1.word3))
-        return physx::PxFilterFlag::eSUPPRESS;
-    if (filter0.word2 == glassGroup)
-        filter0 = {};
-    if (filter1.word2 == glassGroup)
-        filter1 = {};
     const auto result = physx::PxDefaultSimulationFilterShader(attributes0, filter0, attributes1, filter1, pairFlags,
                                                                constantBlock, constantBlockSize);
     if (!physx::PxFilterObjectIsTrigger(attributes0) && !physx::PxFilterObjectIsTrigger(attributes1))
@@ -411,10 +402,16 @@ struct PhysicsSystem::BroadPhaseCache final {
         std::uint64_t poseWorldRevision{};
         Vec3 lastLinearVelocity;
         Vec3 lastAngularVelocity;
-        std::vector<std::vector<physx::PxShape*>> glassShapes;
-        physx::PxShape* intactGlassShape{};
-        std::shared_ptr<const Mesh> glassGeometry;
-        float glassSeparationTime{};
+        // Dynamic poses around the latest fixed step, for render interpolation.
+        physx::PxTransform previousPose{physx::PxIdentity};
+        physx::PxTransform currentPose{physx::PxIdentity};
+        bool hasStepPoses{};
+        // Pose before an in-flight pipelined step. It becomes previousPose
+        // only when that step's results are fetched, so interpolation keeps
+        // using the last completed pair while PhysX simulates.
+        physx::PxTransform pendingPreviousPose{physx::PxIdentity};
+        // A resting body's pose was already presented for this step.
+        bool restPosePresented{};
     };
 
     struct CookedMeshKey final {
@@ -445,6 +442,9 @@ struct PhysicsSystem::BroadPhaseCache final {
     physx::PxCookingParams cookingParameters{physx::PxTolerancesScale{}};
     std::unique_ptr<PhysicsDispatcher> dispatcher;
     physx::PxScene* physicsScene{};
+    // A pipelined step has been started with simulate() but not fetched.
+    bool simulationPending{};
+    float pendingDeltaTime{};
     Registry* registry{};
     std::uint64_t structuralRevision{};
     std::uint64_t colliderRevision{};
@@ -477,6 +477,12 @@ struct PhysicsSystem::BroadPhaseCache final {
         sceneDescription.filterShader = simulationFilter;
         sceneDescription.flags |= PxSceneFlag::eENABLE_ACTIVE_ACTORS;
         sceneDescription.flags |= PxSceneFlag::eENABLE_CCD;
+        // Objects added to or re-enabled in the scene-query tree go to a
+        // secondary pruner until the next rebuild. The default incremental
+        // BVH rebalances on every insertion; a fracture enables every cell
+        // shape of a pane at once, and with 500 panes that dominated the
+        // impact frame. The PxBVH pruner builds in bulk: 74 -> 47 ms peak.
+        sceneDescription.dynamicTreeSecondaryPruner = PxDynamicTreeSecondaryPruner::eBVH;
         physicsScene = context->physics->createScene(sceneDescription);
         if (physicsScene == nullptr) {
             fail("PxPhysics::createScene failed");
@@ -497,6 +503,10 @@ struct PhysicsSystem::BroadPhaseCache final {
     }
 
     void shutdown() noexcept {
+        // PhysX objects cannot be released while the scene is simulating.
+        if (simulationPending && physicsScene != nullptr)
+            physicsScene->fetchResults(true);
+        simulationPending = false;
         releaseActors();
         releaseCookedMeshes();
         if (physicsScene != nullptr) {
@@ -798,59 +808,6 @@ struct PhysicsSystem::BroadPhaseCache final {
         rigid.setAngularVelocity(toPhysX(state->angularVelocity * DegreesToRadians), false);
     }
 
-    bool attachGlass(physx::PxRigidActor& actor, const GlassDestructionComponent& glass,
-                     const ColliderComponent& collider, const Transform& transform,
-                     std::vector<std::vector<physx::PxShape*>>& shapes, physx::PxShape*& intactShape) {
-        using namespace physx;
-        auto* material =
-            context->physics->createMaterial(std::max(collider.friction, 0.0F), std::max(collider.friction, 0.0F),
-                                             std::clamp(collider.restitution, 0.0F, 1.0F));
-        if (!material)
-            return false;
-        const auto scale = absoluteScale(transform);
-        // An intact pane has a continuous surface. Cooked shard hulls can
-        // shrink slightly at shared vertices and must not leak raycasts.
-        intactShape = attachGeometry(actor,
-                                     PxBoxGeometry{glass.size.x * scale.x() * 0.5F, glass.size.y * scale.y() * 0.5F,
-                                                   glass.thickness * scale.z() * 0.5F},
-                                     *material, PxTransform{PxIdentity}, collider.isTrigger);
-        bool success = intactShape != nullptr;
-        if (intactShape) {
-            intactShape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, !glass.fractured && !collider.isTrigger);
-            intactShape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, !glass.fractured);
-            intactShape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, !glass.fractured && collider.isTrigger);
-        }
-        for (const auto& fragment : glass.fragments) {
-            shapes.emplace_back();
-            auto attachPart = [&](const std::shared_ptr<const Mesh>& part) {
-                auto* convex = part ? cachedConvexMesh(part, scale) : nullptr;
-                auto* shape =
-                    convex ? attachGeometry(actor, PxConvexMeshGeometry{convex}, *material,
-                                            PxTransform{toPhysX(Vec3{fragment.center.x, fragment.center.y, 0} * scale)},
-                                            collider.isTrigger)
-                           : nullptr;
-                if (!shape)
-                    return false;
-                const bool active = glass.fractured && fragment.attached;
-                shape->setContactOffset(std::clamp(glass.thickness * scale.z() * 0.2F, 0.0001F, 0.02F));
-                shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, active && !collider.isTrigger);
-                shape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, active);
-                shape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, active && collider.isTrigger);
-                shapes.back().push_back(shape);
-                return true;
-            };
-            if (fragment.collisionGeometry && !fragment.collisionGeometry->convexCollisionParts.empty()) {
-                for (const auto& part : fragment.collisionGeometry->convexCollisionParts)
-                    success = attachPart(part) && success;
-            } else
-                success = attachPart(fragment.collisionGeometry) && success;
-            if (!success)
-                break;
-        }
-        material->release();
-        return success;
-    }
-
     ActorRecord createActor(const Entity entity, Registry& owner, Transform& transform) {
         ++diagnostics.actorCreations;
         using namespace physx;
@@ -868,19 +825,9 @@ struct PhysicsSystem::BroadPhaseCache final {
             throw std::runtime_error("PhysX rigid actor creation failed");
         }
         actor->userData = reinterpret_cast<void*>(static_cast<std::uintptr_t>(entity));
-        std::vector<std::vector<PxShape*>> glassShapes;
-        PxShape* intactGlassShape = nullptr;
         if (owner.has<ColliderComponent>(entity)) {
             const ColliderComponent& collider = owner.get<ColliderComponent>(entity);
-            const bool compoundGlass = !dynamic && owner.has<GlassDestructionComponent>(entity);
-            bool attached = true;
-            if (compoundGlass) {
-                const auto& glass = owner.get<GlassDestructionComponent>(entity);
-                // Reserve both intact and fractured shapes before gameplay.
-                attached = attached && attachGlass(*actor, glass, collider, transform, glassShapes, intactGlassShape);
-            } else
-                attached = attachCollider(*actor, collider, transform, dynamic);
-            if (!attached) {
+            if (!attachCollider(*actor, collider, transform, dynamic)) {
                 actor->release();
                 throw std::runtime_error("PhysX collider creation/cooking failed");
             }
@@ -893,41 +840,9 @@ struct PhysicsSystem::BroadPhaseCache final {
             .scaleWorldRevision = owner.get<Transform>(entity).worldRevision(),
             .poseWorldRevision = owner.get<Transform>(entity).worldRevision(),
         };
-        record.glassShapes = std::move(glassShapes);
-        record.intactGlassShape = intactGlassShape;
-        if (owner.has<GlassDestructionComponent>(entity))
-            record.glassGeometry = owner.get<GlassDestructionComponent>(entity).fractureRenderGeometry;
-        Entity sourcePane = owner.has<GlassDestructionComponent>(entity) ? entity : NullEntity;
-        if (owner.has<GlassFragmentBindingComponent>(entity))
-            sourcePane = owner.get<GlassFragmentBindingComponent>(entity).paneEntity;
-        if (sourcePane != NullEntity) {
-            const bool debris = owner.has<GlassDebrisComponent>(entity);
-            record.glassSeparationTime = debris ? 0.08F : 0.0F;
-            const PxFilterData filter{PxU32(sourcePane), PxU32(sourcePane >> 32), 0x474c4153U, debris ? 1U : 0U};
-            std::vector<PxShape*> shapes(actor->getNbShapes());
-            actor->getShapes(shapes.data(), PxU32(shapes.size()));
-            for (auto* shape : shapes)
-                shape->setSimulationFilterData(filter);
-        }
         if (dynamic) {
             auto& rigid = *static_cast<PxRigidDynamic*>(actor);
             configureRigidBody(rigid, *body);
-            if (owner.has<GlassDebrisComponent>(entity)) {
-                float thickness = 0.006F;
-                if (owner.has<GlassFragmentBindingComponent>(entity)) {
-                    const auto pane = owner.get<GlassFragmentBindingComponent>(entity).paneEntity;
-                    if (owner.valid(pane) && owner.has<GlassDestructionComponent>(pane))
-                        thickness = owner.get<GlassDestructionComponent>(pane).thickness;
-                }
-                PxShape* shape = nullptr;
-                if (rigid.getShapes(&shape, 1) && shape)
-                    shape->setContactOffset(
-                        std::clamp(thickness * absoluteScale(transform).z() * 0.2F, 0.0001F, 0.02F));
-                // Sweep thin shards rather than inflating coplanar contacts;
-                // speculative contacts can lock fresh splinters in a pane.
-                rigid.setRigidBodyFlag(PxRigidBodyFlag::eENABLE_CCD, true);
-                rigid.setSolverIterationCounts(8, 2);
-            }
             restoreRigidBodyState(owner, entity, rigid);
         }
         physicsScene->addActor(*actor);
@@ -972,48 +887,6 @@ struct PhysicsSystem::BroadPhaseCache final {
             return;
         }
         Transform world = TransformSystem::worldTransform(owner, entity);
-        const auto existing = actors.find(entity);
-        if (existing != actors.end() && owner.has<GlassDestructionComponent>(entity) &&
-            owner.has<ColliderComponent>(entity) && existing->second.bodyType == RigidbodyType::Static &&
-            same(existing->second.lastTransform.scale, world.scale)) {
-            auto& record = existing->second;
-            const auto& glass = owner.get<GlassDestructionComponent>(entity);
-            const auto& collider = owner.get<ColliderComponent>(entity);
-            if (record.glassShapes.size() == glass.fragments.size() &&
-                record.glassGeometry == glass.fractureRenderGeometry) {
-                ++diagnostics.glassShapeUpdates;
-                if (record.intactGlassShape) {
-                    auto flags = record.intactGlassShape->getFlags();
-                    flags.clear(physx::PxShapeFlag::eSIMULATION_SHAPE);
-                    flags.clear(physx::PxShapeFlag::eSCENE_QUERY_SHAPE);
-                    flags.clear(physx::PxShapeFlag::eTRIGGER_SHAPE);
-                    if (!glass.fractured) {
-                        flags |= physx::PxShapeFlag::eSCENE_QUERY_SHAPE;
-                        flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE
-                                                    : physx::PxShapeFlag::eSIMULATION_SHAPE;
-                    }
-                    if (flags != record.intactGlassShape->getFlags())
-                        record.intactGlassShape->setFlags(flags);
-                }
-                for (std::size_t i = 0; i < record.glassShapes.size(); ++i) {
-                    const bool active = glass.fractured && glass.fragments[i].attached;
-                    for (auto* shape : record.glassShapes[i]) {
-                        auto flags = shape->getFlags();
-                        flags.clear(physx::PxShapeFlag::eSIMULATION_SHAPE);
-                        flags.clear(physx::PxShapeFlag::eSCENE_QUERY_SHAPE);
-                        flags.clear(physx::PxShapeFlag::eTRIGGER_SHAPE);
-                        if (active) {
-                            flags |= physx::PxShapeFlag::eSCENE_QUERY_SHAPE;
-                            flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE
-                                                        : physx::PxShapeFlag::eSIMULATION_SHAPE;
-                        }
-                        if (flags != shape->getFlags())
-                            shape->setFlags(flags);
-                    }
-                }
-                return;
-            }
-        }
         removeActor(entity);
         actors.emplace(entity, createActor(entity, owner, world));
     }
@@ -1220,6 +1093,69 @@ struct PhysicsSystem::BroadPhaseCache final {
         commands->clear();
     }
 
+    // Commands (teleports included) were applied before this, so a teleport
+    // starts and ends the step at its new pose instead of sweeping to it.
+    void captureStepPoses(const bool beforeStep, const bool pipelined = false) {
+        for (auto& [entity, record] : actors) {
+            (void)entity;
+            if (record.bodyType != RigidbodyType::Dynamic)
+                continue;
+            const physx::PxTransform pose = record.actor->getGlobalPose();
+            if (beforeStep) {
+                (pipelined ? record.pendingPreviousPose : record.previousPose) = pose;
+            } else {
+                if (pipelined)
+                    record.previousPose = record.pendingPreviousPose;
+                record.currentPose = pose;
+                record.hasStepPoses = true;
+                record.restPosePresented = false;
+            }
+        }
+    }
+
+    // Fixed steps do not run every rendered frame. Present each dynamic body
+    // between its last two simulated poses, so it (and any camera attached to
+    // it) moves every frame rather than in steps. PhysX keeps owning the
+    // simulated pose: dynamic Transforms are never pushed back into it.
+    void interpolatePoses(Registry& owner, const float alpha) {
+        for (auto& [entity, record] : actors) {
+            if (record.bodyType != RigidbodyType::Dynamic || !record.hasStepPoses)
+                continue;
+            // tryGet validates the entity itself.
+            Transform* transform = owner.tryGet<Transform>(entity);
+            if (transform == nullptr)
+                continue;
+            const physx::PxTransform& from = record.previousPose;
+            const physx::PxTransform& to = record.currentPose;
+            // Sleeping and resting bodies have identical step poses. Present
+            // `to` itself: the blended quaternion differs from it in the last
+            // bits depending on alpha, which marked every resting body's
+            // Transform changed on every frame (renderer uploads, shadow
+            // cache invalidation) and redid the Euler conversion for nothing.
+            const bool atRest = from == to;
+            if (atRest && record.restPosePresented)
+                continue;
+            physx::PxVec3 position = to.p;
+            physx::PxQuat rotation = to.q;
+            if (!atRest) {
+                position = from.p + (to.p - from.p) * alpha;
+                // Normalized lerp along the shorter arc; one fixed step is small.
+                const physx::PxQuat target = from.q.dot(to.q) < 0.0F ? -to.q : to.q;
+                rotation = from.q * (1.0F - alpha) + target * alpha;
+                rotation.normalize();
+            }
+            record.restPosePresented = atRest;
+            const Vec3 newPosition = fromPhysX(position);
+            const Vec3 newRotation = eulerDegrees(fromPhysX(rotation).normalized());
+            if (newPosition.native() == transform->position.native() &&
+                newRotation.native() == transform->rotation.native())
+                continue;
+            transform->position = newPosition;
+            transform->rotation = newRotation;
+            owner.markChanged<Transform>(entity);
+        }
+    }
+
     void pullPhysXState(Registry& owner) {
         physx::PxU32 activeCount = 0;
         physx::PxActor** activeActors = physicsScene->getActiveActors(activeCount);
@@ -1252,27 +1188,6 @@ struct PhysicsSystem::BroadPhaseCache final {
             owner.markChanged<Transform>(*entity);
         }
     }
-
-    void updateGlassSeparation(float deltaTime) {
-        for (auto& [entity, record] : actors) {
-            if (record.glassSeparationTime <= 0)
-                continue;
-            record.glassSeparationTime -= deltaTime;
-            if (record.glassSeparationTime > 0)
-                continue;
-            // Fresh coplanar fracture faces need a few integration steps to
-            // separate before colliding with their own pane and siblings.
-            // Contacts with floors, props and other panes remain enabled.
-            std::vector<physx::PxShape*> shapes(record.actor->getNbShapes());
-            record.actor->getShapes(shapes.data(), physx::PxU32(shapes.size()));
-            for (auto* shape : shapes) {
-                auto filter = shape->getSimulationFilterData();
-                filter.word3 = 0;
-                shape->setSimulationFilterData(filter);
-            }
-            physicsScene->resetFiltering(*record.actor);
-        }
-    }
 };
 
 PhysicsDiagnostics PhysicsSystem::diagnostics() const noexcept {
@@ -1283,6 +1198,22 @@ void PhysicsSystem::reset() const noexcept {
     broadPhaseCache_.reset();
 }
 
+void PhysicsSystem::finishPendingStep(Scene& scene) const {
+    if (!broadPhaseCache_ || !broadPhaseCache_->simulationPending)
+        return;
+    BroadPhaseCache& runtime = *broadPhaseCache_;
+    runtime.physicsScene->fetchResults(true);
+    runtime.simulationPending = false;
+    runtime.captureStepPoses(false, true);
+    Registry& registry = scene.registry();
+    runtime.pullPhysXState(registry);
+    trampleTerrainGrass(registry, runtime.pendingDeltaTime);
+}
+
+void PhysicsSystem::synchronize(Scene& scene) const {
+    finishPendingStep(scene);
+}
+
 void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
     if (deltaTime <= 0.0F) {
         return;
@@ -1290,24 +1221,30 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
     if (!broadPhaseCache_) {
         broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
     }
+    // A pipelined step from the previous call must land before the ECS is
+    // pushed into PhysX again.
+    finishPendingStep(scene);
     BroadPhaseCache& runtime = *broadPhaseCache_;
     Registry& registry = scene.registry();
-    TransformSystem::updateDirty(registry);
-    runtime.ensureWorld(registry);
-    runtime.pushEcsState(registry);
-    GlassDestructionSystem::update(scene, deltaTime, this);
     TransformSystem::updateDirty(registry);
     runtime.ensureWorld(registry);
     runtime.physicsScene->setGravity(toPhysX(gravity_));
     runtime.pushEcsState(registry);
     {
         GE_PROFILE_SCOPE("PhysXSimulationCPU");
-        runtime.updateGlassSeparation(deltaTime);
-        const auto simulationStart = std::chrono::steady_clock::now();
+        if (pipelined_) {
+            // Leave PhysX running on its worker threads; the results are
+            // fetched by the next update(), raycast() or synchronize().
+            runtime.captureStepPoses(true, true);
+            runtime.pendingDeltaTime = deltaTime;
+            runtime.physicsScene->simulate(deltaTime);
+            runtime.simulationPending = true;
+            return;
+        }
+        runtime.captureStepPoses(true);
         runtime.physicsScene->simulate(deltaTime);
         runtime.physicsScene->fetchResults(true);
-        scene.reportGlassPhysicsCost(
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - simulationStart).count());
+        runtime.captureStepPoses(false);
     }
     runtime.pullPhysXState(registry);
     trampleTerrainGrass(registry, deltaTime);
@@ -1324,6 +1261,8 @@ std::optional<RaycastHit> PhysicsSystem::raycast(Scene& scene, const Vec3 origin
     if (!broadPhaseCache_) {
         broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
     }
+    // Scene queries and ECS pushes need a scene that is not simulating.
+    finishPendingStep(scene);
     BroadPhaseCache& runtime = *broadPhaseCache_;
     Registry& registry = scene.registry();
     TransformSystem::updateDirty(registry);
@@ -1337,6 +1276,7 @@ std::optional<RaycastHit> PhysicsSystem::raycastPrepared(Scene& scene, const Vec
                                                          const float maxDistance, const ObjectId ignoredActor) const {
     if (!broadPhaseCache_ || !broadPhaseCache_->physicsScene)
         return std::nullopt;
+    finishPendingStep(scene);
     BroadPhaseCache& runtime = *broadPhaseCache_;
     physx::PxRaycastBuffer hit;
     const physx::PxHitFlags hitFlags = physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
@@ -1378,8 +1318,22 @@ std::optional<RaycastHit> PhysicsSystem::raycastPrepared(Scene& scene, const Vec
     };
 }
 
+void PhysicsSystem::interpolate(Scene& scene, const float alpha) const {
+    if (!broadPhaseCache_)
+        return;
+    broadPhaseCache_->interpolatePoses(scene.registry(), std::clamp(alpha, 0.0F, 1.0F));
+}
+
 void Physics::update(const float deltaTime) const {
     system_.update(*scene_, deltaTime);
+}
+
+void Physics::interpolate(const float alpha) const {
+    system_.interpolate(*scene_, alpha);
+}
+
+void Physics::synchronize() const {
+    system_.synchronize(*scene_);
 }
 
 std::optional<RaycastHit> Physics::raycast(const Vec3 origin, const Vec3 direction, const float maxDistance) const {
@@ -1388,46 +1342,15 @@ std::optional<RaycastHit> Physics::raycast(const Vec3 origin, const Vec3 directi
 
 std::optional<RaycastHit> Physics::shootRay(const Vec3 origin, const Vec3 direction, const float maxDistance,
                                             const ObjectId ignoredActor) {
-    return shootRay(origin, direction, maxDistance, ignoredActor, 40.0F, 0.18F);
-}
-
-std::optional<RaycastHit> Physics::shootRay(const Vec3 origin, const Vec3 direction, const float maxDistance,
-                                            const ObjectId ignoredActor, const float energy, const float radius) {
     const float directionLength = direction.length();
     if (directionLength <= 0.0F || maxDistance <= 0.0F)
         return std::nullopt;
-    const Vec3 normalizedDirection = direction * (1.0F / directionLength);
-    constexpr float RayEpsilon = 0.001F;
-    constexpr unsigned MaxIgnoredGlassDebris = 32;
-    Vec3 rayOrigin = origin;
-    float remainingDistance = maxDistance;
-    ObjectId ignored = ignoredActor;
-    std::optional<RaycastHit> hit;
-    for (unsigned skipped = 0; skipped <= MaxIgnoredGlassDebris; ++skipped) {
-        hit = system_.raycast(*scene_, rayOrigin, normalizedDirection, remainingDistance, ignored);
-        if (!hit)
-            return std::nullopt;
-        const Entity hitEntity = scene_->findEntity(hit->actor.id());
-        if (!scene_->registry().has<GlassDebrisComponent>(hitEntity))
-            break;
-        const float travelled = hit->distance + RayEpsilon;
-        if (travelled >= remainingDistance)
-            return std::nullopt;
-        rayOrigin = hit->point + normalizedDirection * RayEpsilon;
-        remainingDistance -= travelled;
-        ignored = hit->actor.id();
-    }
+    auto hit = system_.raycast(*scene_, origin, direction * (1.0F / directionLength), maxDistance, ignoredActor);
     if (hit) {
         constexpr std::size_t MaxBulletImpacts = 128;
         if (bulletImpacts_.size() == MaxBulletImpacts)
             bulletImpacts_.erase(bulletImpacts_.begin());
         bulletImpacts_.push_back({origin, hit->point, hit->normal, hit->actor.id()});
-        GlassDestructionSystem::onImpact(*scene_, scene_->findEntity(hit->actor.id()),
-                                         GlassImpact{.worldPosition = hit->point,
-                                                     .worldDirection = normalizedDirection,
-                                                     .worldNormal = hit->normal,
-                                                     .energy = energy,
-                                                     .radius = radius});
     }
     return hit;
 }

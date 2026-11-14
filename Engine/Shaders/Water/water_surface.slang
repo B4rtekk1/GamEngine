@@ -3,6 +3,7 @@
 // water-only inputs (scene colour/depth, SSR, FFT and foam) belong here, not
 // in Forward/forward_pbr.slang.
 import Common.PbrLighting;
+import Common.VertexFrame;
 import Common.SceneData;
 
 #ifndef FORWARD_OUTPUT_VELOCITY
@@ -54,9 +55,10 @@ struct WaterVertexInput
     [[vk::location(1)]] float3 color : COLOR0;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
     [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
-    [[vk::location(3)]] float3 normal : NORMAL;
+    [[vk::location(3)]] uint tangentFrame : NORMAL; // GpuVertex::packTangentFrame
+    property float3 normal { get { return decodeVertexNormal(tangentFrame); } }
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
-    [[vk::location(9)]] float4 tangent : TANGENT;
+    property float4 tangent { get { return decodeVertexTangent(tangentFrame, decodeVertexNormal(tangentFrame)); } }
 };
 
 struct WaterVertexOutput

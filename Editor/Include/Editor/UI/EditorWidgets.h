@@ -37,4 +37,22 @@ void keyChip(const char* key);
 /** Small rounded label with a coloured background. */
 void badge(const char* text, ImVec4 background, ImVec4 foreground);
 
+/**
+ * Opens a centred modal with a fixed minimum width, generous padding and no
+ * native title bar. Draw dialogHeader() first; end with ImGui::EndPopup().
+ */
+bool beginDialog(const char* id, float width = 440.0F);
+
+/** Icon, title and optional description at the top of a dialog. */
+void dialogHeader(Icon icon, ImVec4 iconColor, const char* title, const char* description = nullptr);
+
+/** Caption above a full-width input; the next item then spans the dialog. */
+void fieldLabel(const char* label);
+
+/** Separates the dialog body from its buttons and right-aligns @p count buttons of @p width. */
+void dialogFooter(int count, float width = 104.0F);
+
+/** True when Escape is pressed while the current dialog has focus. */
+[[nodiscard]] bool dialogEscapePressed();
+
 } // namespace EditorUI

@@ -6,16 +6,17 @@ import Water.VirtualWaterShared;
 [[vk::binding(0,1)]] StructuredBuffer<GPUVirtualWaterPage> pages;
 [[vk::binding(1,1)]] StructuredBuffer<RendererInstanceData> instances;
 [[vk::binding(2,1)]] StructuredBuffer<GPUWaterPageHistory> history;
-[[vk::binding(3,1)]] RWStructuredBuffer<GPUWaterStatePhysicalRef> pageTable;
-[[vk::binding(4,1)]] RWStructuredBuffer<GPUWaterPhysicalState> physicalStates;
+[[vk::binding(3,1)]] globallycoherent RWStructuredBuffer<GPUWaterStatePhysicalRef> pageTable;
+[[vk::binding(4,1)]] globallycoherent RWStructuredBuffer<GPUWaterPhysicalState> physicalStates;
 [[vk::binding(5,1)]] StructuredBuffer<GPUWaterInteractionEvent> events;
 [[vk::binding(6,1)]] RWStructuredBuffer<uint> allocatorCounter;
 [[vk::binding(7,1)]] StructuredBuffer<GPUWaterStateCell> stateCellsRead;
 [[vk::binding(8,1)]] RWStructuredBuffer<GPUWaterStateCell> stateCellsWrite;
 [[vk::binding(9,1)]] RWStructuredBuffer<GPUWaterFrameBudget> frameBudget;
 
+// frameCounter is the monotonically increasing water frame number.
 struct Push {
-    uint eventCount, pageCount, frameIndex, pad;
+    uint eventCount, pageCount, frameCounter, pad;
     float deltaTime, pad1, pad2, pad3;
 };
 [[vk::push_constant]] ConstantBuffer<Push> push;
@@ -61,49 +62,99 @@ uint desiredPeriod(uint tier, bool visible, bool eventHit) {
     return 8u;
 }
 
-// Multi-rate neighbour normalization.  The state update samples across page
-// borders; limiting adjacent periods to a 2:1 ratio prevents a fast page from
-// repeatedly exchanging state with an effectively frozen neighbour.  Four
-// serial relaxation passes are enough for the supported {1,2,4,8} periods.
-void tightenPeriodPair(uint aPage,uint bPage) {
-    if(aPage>=push.pageCount||bPage>=push.pageCount||aPage==bPage)return;
-    GPUWaterStatePhysicalRef aRef=pageTable[aPage],bRef=pageTable[bPage];
-    if(!waterStateRefValid(aRef)||!waterStateRefValid(bRef))return;
-    GPUWaterPhysicalState a=physicalStates[aRef.slot],b=physicalStates[bRef.slot];
-    if(a.generation!=aRef.generation||b.generation!=bRef.generation||
-       a.generation==0u||b.generation==0u)return;
-    uint ap=waterUpdatePeriod(a.updateRatePacked),bp=waterUpdatePeriod(b.updateRatePacked);
-    if(ap>bp*2u){
-        ap=min(bp*2u,8u);
-        a.updateRatePacked=waterPackUpdateRate(ap,waterUpdatePhase(a.updateRatePacked)%ap);
-        physicalStates[aRef.slot]=a;
-    } else if(bp>ap*2u){
-        bp=min(ap*2u,8u);
-        b.updateRatePacked=waterPackUpdateRate(bp,waterUpdatePhase(b.updateRatePacked)%bp);
-        physicalStates[bRef.slot]=b;
-    }
+static const uint ALLOCATOR_THREADS = WATER_MAX_PHYSICAL_STATE_PAGES;
+static const uint MAX_ALLOCATIONS_PER_FRAME = 256u;
+static const uint REQUEST_EVENT_HIT = 1u << 16u;
+static const uint REQUEST_VISIBLE = 1u << 17u;
+static const uint REQUEST_TIER_SHIFT = 18u;
+
+groupshared uint requestList[MAX_ALLOCATIONS_PER_FRAME];
+groupshared uint requestCount;
+groupshared uint bestVictimKey;
+groupshared uint sharedCursor;
+
+bool pageEventHit(GPUVirtualWaterPage page, RendererInstanceData instance) {
+    bool hit=false;
+    [loop] for(uint eventIndex=0u;eventIndex<push.eventCount;++eventIndex)
+        hit = hit || eventTouchesPage(events[eventIndex],page,instance);
+    return hit;
 }
 
-[numthreads(1,1,1)]
-[shader("compute")]
-void main(uint3 tid:SV_DispatchThreadID) {
-    if (any(tid != 0u)) return;
-    uint cursor = allocatorCounter[0];
+GPUWaterStatePhysicalRef invalidRef() {
+    GPUWaterStatePhysicalRef ref=(GPUWaterStatePhysicalRef)0;
+    ref.slot=WATER_INVALID_PHYSICAL_PAGE;
+    return ref;
+}
 
-    [loop] for (uint pageId=0u; pageId<push.pageCount; ++pageId) {
+// Victim key for the parallel slot search: free slots beat every evictable
+// slot, higher LRU score beats lower, and ties prefer the slot closest after
+// the rotating cursor. Zero means "not evictable". Slots that are visible,
+// pinned or were allocated this frame (inactiveSeconds < 0) are never
+// evicted, so a full cache degrades to "no state" instead of thrashing.
+uint victimKey(uint slot, uint cursor) {
+    const GPUWaterPhysicalState physical=physicalStates[slot];
+    const uint rotation=(slot+WATER_MAX_PHYSICAL_STATE_PAGES-cursor)%WATER_MAX_PHYSICAL_STATE_PAGES;
+    const uint order=255u-rotation;
+    if(physical.generation==0u) return 0xffffff00u|order;
+    if(physical.pinCount!=0u || physical.inactiveSeconds<0.0 || physical.lastVisibleFrame==push.frameCounter)
+        return 0u;
+    const float score=physical.inactiveSeconds+(push.frameCounter-physical.lastInteractionFrame>8u?2.0:0.0);
+    const uint quantized=min(uint(clamp(score+1.0,0.0,65000.0)*256.0),0xfffffdu)+1u;
+    return (quantized<<8u)|order;
+}
+
+// Multi-rate neighbour normalization. The state update samples across page
+// borders; limiting adjacent periods to a 2:1 ratio prevents a fast page from
+// repeatedly exchanging state with an effectively frozen neighbour. Every page
+// only ever lowers its own period (each physical slot has exactly one owner),
+// so the parallel relaxation is race-free and monotone; four passes cover the
+// supported {1,2,4,8} periods.
+uint neighbourPeriodLimit(uint neighbourPage, uint limit) {
+    if(neighbourPage>=push.pageCount) return limit;
+    const GPUWaterStatePhysicalRef ref=pageTable[neighbourPage];
+    if(!waterStateRefValid(ref)) return limit;
+    const GPUWaterPhysicalState physical=physicalStates[ref.slot];
+    if(physical.generation!=ref.generation||physical.generation==0u) return limit;
+    return min(limit,waterUpdatePeriod(physical.updateRatePacked)*2u);
+}
+
+void tightenPagePeriod(uint pageId) {
+    const GPUWaterStatePhysicalRef ref=pageTable[pageId];
+    if(!waterStateRefValid(ref)) return;
+    GPUWaterPhysicalState physical=physicalStates[ref.slot];
+    if(physical.generation!=ref.generation||physical.generation==0u) return;
+    const GPUVirtualWaterPage p=pages[pageId];
+    const uint current=waterUpdatePeriod(physical.updateRatePacked);
+    uint limit=current;
+    limit=neighbourPeriodLimit(p.neighborLeft0,limit);   limit=neighbourPeriodLimit(p.neighborLeft1,limit);
+    limit=neighbourPeriodLimit(p.neighborRight0,limit);  limit=neighbourPeriodLimit(p.neighborRight1,limit);
+    limit=neighbourPeriodLimit(p.neighborBottom0,limit); limit=neighbourPeriodLimit(p.neighborBottom1,limit);
+    limit=neighbourPeriodLimit(p.neighborTop0,limit);    limit=neighbourPeriodLimit(p.neighborTop1,limit);
+    if(limit>=current) return;
+    physical.updateRatePacked=waterPackUpdateRate(limit,waterUpdatePhase(physical.updateRatePacked)%limit);
+    physicalStates[ref.slot]=physical;
+}
+
+// One workgroup: phase 1 validates/reconnects every page in parallel, phase 2
+// serially grants new slots (with a parallel victim search per request) so two
+// pages can never claim the same slot, phase 3 relaxes update rates.
+[numthreads(ALLOCATOR_THREADS,1,1)]
+[shader("compute")]
+void main(uint3 localId:SV_GroupThreadID) {
+    const uint lane=localId.x;
+    if(lane==0u){ requestCount=0u; sharedCursor=allocatorCounter[0]%WATER_MAX_PHYSICAL_STATE_PAGES; }
+    GroupMemoryBarrierWithGroupSync();
+
+    [loop] for (uint pageId=lane; pageId<push.pageCount; pageId+=ALLOCATOR_THREADS) {
         GPUVirtualWaterPage page=pages[pageId];
         if ((page.executionFlags & WATER_EXEC_SPARSE_STATE) == 0u) {
-            pageTable[pageId]=(GPUWaterStatePhysicalRef)0;
-            pageTable[pageId].slot=WATER_INVALID_PHYSICAL_PAGE;
+            pageTable[pageId]=invalidRef();
             continue;
         }
         RendererInstanceData instance=instances[page.instanceIndex];
         GPUWaterPageHistory h=history[pageId];
         const bool visible=(h.packedQuality&WATER_VALID_FLAG)!=0u;
-        bool eventHit=false;
-        [loop] for(uint eventIndex=0u;eventIndex<push.eventCount;++eventIndex)
-            eventHit = eventHit || eventTouchesPage(events[eventIndex],page,instance);
-
+        const bool eventHit=pageEventHit(page,instance);
         const bool stateOnly=(page.flags&WATER_PAGE_STATE_ONLY)!=0u;
         const int2 stateCoord=waterStateWorldCoord(page,instance,frame.cameraPosition.xyz);
         GPUWaterStatePhysicalRef ref=pageTable[pageId];
@@ -112,48 +163,65 @@ void main(uint3 tid:SV_DispatchThreadID) {
             GPUWaterPhysicalState physical=physicalStates[ref.slot];
             refValid=physical.generation==ref.generation && ownerMatches(physical,page,stateCoord);
         }
-        if(!refValid) {
-            ref.slot=WATER_INVALID_PHYSICAL_PAGE; ref.generation=0u; ref.tier=0u; ref.reserved=0u;
-            pageTable[pageId]=ref;
-        }
 
         // Reconnect a recentered geometry slot to an already-resident world state page.
         if(!refValid) {
+            ref=invalidRef();
             [loop] for(uint slot=0u;slot<WATER_MAX_PHYSICAL_STATE_PAGES;++slot) {
                 GPUWaterPhysicalState physical=physicalStates[slot];
                 if(ownerMatches(physical,page,stateCoord)) {
-                    ref.slot=slot; ref.generation=physical.generation; ref.tier=physical.tier; ref.reserved=0u;
+                    ref.slot=slot; ref.generation=physical.generation; ref.tier=physical.tier;
                     refValid=true; break;
                 }
             }
         }
 
         const uint desiredTier=desiredTierForPage(page,h,eventHit);
-        const bool needsState=stateOnly||eventHit||visible||refValid;
-        if(!needsState) { pageTable[pageId]=ref; continue; }
-
         if(!refValid) {
-            uint chosen=WATER_INVALID_PHYSICAL_PAGE;
-            [loop] for(uint attempt=0u;attempt<WATER_MAX_PHYSICAL_STATE_PAGES;++attempt) {
-                uint candidate=(cursor+attempt)%WATER_MAX_PHYSICAL_STATE_PAGES;
-                if(physicalStates[candidate].generation==0u) { chosen=candidate; break; }
+            pageTable[pageId]=ref;
+            if(stateOnly||eventHit||visible) {
+                uint request=0u; InterlockedAdd(requestCount,1u,request);
+                if(request<MAX_ALLOCATIONS_PER_FRAME)
+                    requestList[request]=pageId|(eventHit?REQUEST_EVENT_HIT:0u)|(visible?REQUEST_VISIBLE:0u)|
+                                         (desiredTier<<REQUEST_TIER_SHIFT);
             }
-            if(chosen==WATER_INVALID_PHYSICAL_PAGE) {
-                float oldest=-1.0;
-                [loop] for(uint attempt=0u;attempt<WATER_MAX_PHYSICAL_STATE_PAGES;++attempt) {
-                    uint candidate=(cursor+attempt)%WATER_MAX_PHYSICAL_STATE_PAGES;
-                    GPUWaterPhysicalState physical=physicalStates[candidate];
-                    if(physical.pinCount!=0u) continue;
-                    const float score=physical.inactiveSeconds +
-                        (push.frameIndex-physical.lastInteractionFrame>8u?2.0:0.0);
-                    if(score>oldest){oldest=score;chosen=candidate;}
-                }
-            }
-            if(chosen==WATER_INVALID_PHYSICAL_PAGE) continue;
-            cursor=(chosen+1u)%WATER_MAX_PHYSICAL_STATE_PAGES;
+            continue;
+        }
 
-            GPUWaterPhysicalState previous=physicalStates[chosen];
-            uint generation=previous.generation+1u;
+        GPUWaterPhysicalState physical=physicalStates[ref.slot];
+        ref.tier=desiredTier;
+        if(visible) physical.lastVisibleFrame=push.frameCounter;
+        if(eventHit) physical.lastInteractionFrame=push.frameCounter;
+        uint period=desiredPeriod(desiredTier,visible,eventHit);
+        uint phase=waterUpdatePhase(physical.updateRatePacked)%period;
+        physical.updateRatePacked=waterPackUpdateRate(period,phase);
+        physical.pinCount=eventHit?2u:(physical.pinCount>0u?physical.pinCount-1u:0u);
+        // Keep physical.tier as the source resolution until the update pass
+        // has resampled into the requested ref.tier.
+        physicalStates[ref.slot]=physical;
+        pageTable[pageId]=ref;
+    }
+    AllMemoryBarrierWithGroupSync();
+
+    const uint requests=min(requestCount,MAX_ALLOCATIONS_PER_FRAME);
+    [loop] for(uint requestIndex=0u; requestIndex<requests; ++requestIndex) {
+        if(lane==0u) bestVictimKey=0u;
+        GroupMemoryBarrierWithGroupSync();
+        const uint cursor=sharedCursor;
+        uint ignored=0u; InterlockedMax(bestVictimKey,victimKey(lane,cursor),ignored);
+        GroupMemoryBarrierWithGroupSync();
+        if(lane==0u && bestVictimKey!=0u) {
+            const uint request=requestList[requestIndex];
+            const uint pageId=request&0xffffu;
+            const bool eventHit=(request&REQUEST_EVENT_HIT)!=0u;
+            const bool visible=(request&REQUEST_VISIBLE)!=0u;
+            const uint desiredTier=(request>>REQUEST_TIER_SHIFT)&3u;
+            const uint chosen=(cursor+(255u-(bestVictimKey&0xffu)))%WATER_MAX_PHYSICAL_STATE_PAGES;
+            GPUVirtualWaterPage page=pages[pageId];
+            RendererInstanceData instance=instances[page.instanceIndex];
+            const int2 stateCoord=waterStateWorldCoord(page,instance,frame.cameraPosition.xyz);
+
+            uint generation=physicalStates[chosen].generation+1u;
             if(generation==0u) generation=1u;
             GPUWaterPhysicalState fresh=(GPUWaterPhysicalState)0;
             fresh.inactiveSeconds=-1.0;
@@ -162,38 +230,24 @@ void main(uint3 tid:SV_DispatchThreadID) {
             fresh.ownerX=stateCoord.x; fresh.ownerZ=stateCoord.y;
             fresh.generation=generation; fresh.tier=desiredTier;
             fresh.pinCount=eventHit?2u:0u;
-            fresh.lastVisibleFrame=visible?push.frameIndex:0u;
-            fresh.lastInteractionFrame=eventHit?push.frameIndex:0u;
+            fresh.lastVisibleFrame=visible?push.frameCounter:0u;
+            fresh.lastInteractionFrame=eventHit?push.frameCounter:0u;
             uint period=desiredPeriod(desiredTier,visible,eventHit);
             uint phase=(uint(stateCoord.x)*73856093u^uint(stateCoord.y)*19349663u^page.bodyIdIndex)%period;
             fresh.updateRatePacked=waterPackUpdateRate(period,phase);
             physicalStates[chosen]=fresh;
-            ref.tier=desiredTier; ref.slot=chosen; ref.generation=generation; ref.reserved=0u;
-        } else {
-            GPUWaterPhysicalState physical=physicalStates[ref.slot];
-            ref.tier=desiredTier;
-            if(visible) physical.lastVisibleFrame=push.frameIndex;
-            if(eventHit) physical.lastInteractionFrame=push.frameIndex;
-            uint period=desiredPeriod(desiredTier,visible,eventHit);
-            uint phase=waterUpdatePhase(physical.updateRatePacked)%period;
-            physical.updateRatePacked=waterPackUpdateRate(period,phase);
-            physical.pinCount=eventHit?2u:(physical.pinCount>0u?physical.pinCount-1u:0u);
-            // Keep physical.tier as the source resolution until the update pass
-            // has resampled into the requested ref.tier.
-            physicalStates[ref.slot]=physical;
+            GPUWaterStatePhysicalRef ref=invalidRef();
+            ref.tier=desiredTier; ref.slot=chosen; ref.generation=generation;
+            pageTable[pageId]=ref;
+            sharedCursor=(chosen+1u)%WATER_MAX_PHYSICAL_STATE_PAGES;
         }
-        pageTable[pageId]=ref;
+        AllMemoryBarrierWithGroupSync();
     }
-    // Conservative mixed-rate boundary policy.  This is deliberately done in
-    // the serial allocation pass so no extra synchronization pass is required.
-    [unroll]for(uint relaxation=0u;relaxation<4u;++relaxation){
-        [loop]for(uint pageId=0u;pageId<push.pageCount;++pageId){
-            GPUVirtualWaterPage p=pages[pageId];
-            tightenPeriodPair(pageId,p.neighborLeft0);   tightenPeriodPair(pageId,p.neighborLeft1);
-            tightenPeriodPair(pageId,p.neighborRight0);  tightenPeriodPair(pageId,p.neighborRight1);
-            tightenPeriodPair(pageId,p.neighborBottom0); tightenPeriodPair(pageId,p.neighborBottom1);
-            tightenPeriodPair(pageId,p.neighborTop0);    tightenPeriodPair(pageId,p.neighborTop1);
-        }
+
+    [unroll] for(uint relaxation=0u;relaxation<4u;++relaxation){
+        [loop] for(uint pageId=lane;pageId<push.pageCount;pageId+=ALLOCATOR_THREADS)
+            tightenPagePeriod(pageId);
+        AllMemoryBarrierWithGroupSync();
     }
-    allocatorCounter[0]=cursor;
+    if(lane==0u) allocatorCounter[0]=sharedCursor;
 }

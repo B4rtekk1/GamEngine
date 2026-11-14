@@ -433,6 +433,71 @@ void drawRestoreGlyph(ImDrawList* const drawList, const ImVec2 center, const flo
 
 } // namespace
 
+/** Selection and lifetime commands raised by the menu bar and applied by the main loop. */
+struct EditorMenuActions final {
+    bool exitRequested = false;
+    bool cutRequested = false;
+    bool deleteRequested = false;
+    bool selectAllRequested = false;
+    bool deselectRequested = false;
+    bool openProjectFolderRequested = false;
+    bool openLogFolderRequested = false;
+    bool toggleFullscreenRequested = false;
+    bool saveLayoutRequested = false;
+    bool loadLayoutRequested = false;
+    bool frameSelectedRequested = false;
+    bool renameRequested = false;
+    bool revealAssetsRequested = false;
+    bool screenshotRequested = false;
+    int currentGizmo = 0; ///< in: 0 translate, 1 rotate, 2 scale
+    int currentSelectionTool = 0; ///< in: 0 rectangle, 1 lasso
+    int setGizmo = -1;
+    int setSelectionTool = -1;
+    /// Scene to open on the background loader (main.cpp). Opening a scene
+    /// can decode and cook large models; on the UI thread that froze the
+    /// window until the OS reported it as not responding.
+    std::filesystem::path backgroundSceneLoad;
+};
+
+/**
+ * Applies a just-loaded scene's sky. The sidecar stores the sky relative to
+ * the asset root of the project the scene was saved in; a scene opened from
+ * another project would otherwise lose its sky to the default one.
+ */
+void applyLoadedSceneEnvironment(const Engine::ScenePreset& scene, Engine::Renderer& renderer,
+                                 const Engine::Assets::Content& content, const std::filesystem::path& path) {
+    if (scene.environmentEquirectangular().empty())
+        return;
+    auto environment = content.assetRoot() / scene.environmentEquirectangular();
+    std::error_code ignored;
+    if (!std::filesystem::exists(environment, ignored)) {
+        for (auto directory = std::filesystem::absolute(path, ignored).parent_path();
+             !directory.empty() && directory != directory.root_path(); directory = directory.parent_path()) {
+            std::ifstream project{directory / "GamEngine.project"};
+            if (!project)
+                continue;
+            std::string assetRoot = "Assets";
+            for (std::string line; std::getline(project, line);) {
+                const auto separator = line.find('=');
+                if (separator == std::string::npos || line.rfind("asset_root", 0) != 0)
+                    continue;
+                assetRoot = line.substr(separator + 1);
+                assetRoot.erase(0, assetRoot.find_first_not_of(" \t\""));
+                assetRoot.erase(assetRoot.find_last_not_of(" \t\"\r") + 1);
+            }
+            const auto candidate = directory / assetRoot / scene.environmentEquirectangular();
+            if (std::filesystem::exists(candidate, ignored)) {
+                Editor::ConsolePanel::warning("Scene sky '" + scene.environmentEquirectangular().string() +
+                                              "' is not in this project; using " + candidate.string());
+                environment = candidate;
+            }
+            break;
+        }
+    }
+    if (!renderer.setEnvironmentEquirectangular(environment))
+        throw std::runtime_error("Could not load scene HDR/EXR environment");
+}
+
 Engine::Entity
 drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine::Assets::Content& content,
                   Engine::Project& project, const std::filesystem::path& editorRoot, Editor::WindowsTitleBar& titleBar,
@@ -442,9 +507,12 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
                   bool& undoRequested, bool& redoRequested, bool& copyRequested, bool& pasteRequested,
                   bool& duplicateRequested, bool& resetHistoryRequested, bool& showHierarchy, bool& showViewport,
                   bool& showInspector, bool& showAssetManager, bool& showTerrainTools, bool& showConsole,
-                  bool& showTerminal, bool& showShaderGraph, bool& showGpuProfile, bool& gameBuildRequested) {
+                  bool& showTerminal, bool& showShaderGraph, bool& showGpuProfile, bool& gameBuildRequested,
+                  EditorMenuActions& actions) {
     static bool showShortcuts = false;
     static bool showAbout = false;
+    static bool showPreferences = false;
+    static bool showProjectSettings = false;
     static bool openSceneSettings = false;
     static bool openNewProject = false;
     static char newProjectName[128] = "MyGame";
@@ -471,24 +539,13 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
     const auto saveSceneAs = [&] {
         EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::SaveScene);
     };
+    // Hands the scene to the background loader; main.cpp adopts it, applies
+    // its sky and antialiasing, and reports errors once it is parsed.
     const auto loadScene = [&](const std::filesystem::path& path) {
-        std::optional<Engine::AntialiasingLevel> antialiasing;
-        // Loading may fail after replacing the registry (for example while
-        // reading environment settings). The caller must still reload it.
-        sceneLoaded = true;
-        Engine::SceneSerializer::load(scene, path, antialiasing);
-        resetHistoryRequested = true;
-        if (!scene.environmentEquirectangular().empty() &&
-            !renderer.setEnvironmentEquirectangular(content.assetRoot() / scene.environmentEquirectangular())) {
-            throw std::runtime_error("Could not load scene HDR/EXR environment");
-        }
-        EditorSceneSession::markSceneSaved(path);
-        if (antialiasing) {
-            renderer.setAntialiasingLevel(*antialiasing);
-            antialiasingChanged = true;
-        }
+        if (!std::filesystem::is_regular_file(path))
+            throw std::runtime_error("Scene file not found: " + path.string());
+        actions.backgroundSceneLoad = path;
         sceneFileError.clear();
-        Editor::ConsolePanel::info("Loaded scene: " + path.string());
     };
     const auto tryLoadScene = [&](const std::filesystem::path& path) {
         try {
@@ -529,6 +586,8 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             content.setAssetRoot(createdProject.assetRoot());
             project = std::move(createdProject);
             EditorSceneSession::setProjectRoot(project.rootPath(), project.assetRoot());
+            // Before loading: the scene's IBL cache belongs in the new project.
+            renderer.setProjectRoot(project.rootPath());
             loadScene(project.startupScene());
             newProjectError.clear();
             Editor::ConsolePanel::info("Created project: " + project.name());
@@ -546,12 +605,15 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             content.setAssetRoot(loadedProject.assetRoot());
             project = std::move(loadedProject);
             EditorSceneSession::setProjectRoot(project.rootPath(), project.assetRoot());
+            // Before loading: the scene's IBL cache belongs in the new project.
+            renderer.setProjectRoot(project.rootPath());
             if (std::filesystem::is_regular_file(project.startupScene())) {
                 loadScene(project.startupScene());
             } else {
                 EditorSceneSession::clearSavedScene();
                 sceneDeleted = true;
             }
+            Editor::addRecentProject(project.manifestPath());
             Editor::ConsolePanel::info("Loaded project: " + project.name());
         } catch (const std::exception& error) {
             sceneFileError = error.what();
@@ -693,9 +755,23 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             requestNewProject();
         if (menuItem("Open Project...", "Ctrl+O", EditorUI::Icon::Folder))
             EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::LoadProject);
+        if (beginSubMenu("Open Recent", EditorUI::Icon::Folder)) {
+            const auto recents = Editor::loadRecentProjects();
+            if (recents.empty())
+                ImGui::TextDisabled("No recent projects");
+            for (const auto& manifest : recents) {
+                const std::string label = manifest.parent_path().filename().string() + "  -  " + manifest.string();
+                if (menuItem(label.c_str(), nullptr, std::nullopt, manifest == project.manifestPath()))
+                    loadProject(manifest);
+            }
+            ImGui::EndMenu();
+        }
         if (menuItem("Build Game", nullptr, EditorUI::Icon::Archive, false, !project.manifestPath().empty()))
             gameBuildRequested = true;
         ImGui::EndDisabled();
+        ImGui::Separator();
+        if (menuItem("Exit", "Alt+F4", EditorUI::Icon::Stop))
+            actions.exitRequested = true;
         if (!sceneFileError.empty()) {
             ImGui::Separator();
             EditorUI::iconLabel(EditorUI::Icon::Error, palette.error);
@@ -711,13 +787,17 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
 
     if (openDeleteScene)
         ImGui::OpenPopup("##confirm-delete-scene");
-    if (ImGui::BeginPopupModal("##confirm-delete-scene", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        EditorUI::iconLabel(EditorUI::Icon::Warning, EditorUI::colors().warning);
-        ImGui::SameLine(0.0F, 6.0F);
-        ImGui::TextWrapped("Delete scene '%s'?", activeScenePath.filename().string().c_str());
-        ImGui::TextDisabled("This permanently removes the scene file from the project.");
-        ImGui::Separator();
-        if (EditorUI::dangerButton("Delete", {120.0F, 0.0F})) {
+    if (EditorUI::beginDialog("##confirm-delete-scene", 400.0F)) {
+        const std::string deleteTitle = "Delete '" + activeScenePath.filename().string() + "'?";
+        EditorUI::dialogHeader(EditorUI::Icon::Warning, EditorUI::colors().warning, deleteTitle.c_str(),
+                               "This permanently removes the scene file from the project.");
+        EditorUI::dialogFooter(2);
+        if (ImGui::Button("Cancel", {104.0F, 0.0F}) || EditorUI::dialogEscapePressed()) {
+            openDeleteScene = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (EditorUI::dangerButton("Delete", {104.0F, 0.0F})) {
             std::error_code error;
             if (std::filesystem::remove(activeScenePath, error) && !error) {
                 const auto terrainPath = std::filesystem::path{activeScenePath.string() + ".terrain"};
@@ -736,11 +816,6 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             openDeleteScene = false;
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", {120.0F, 0.0F})) {
-            openDeleteScene = false;
-            ImGui::CloseCurrentPopup();
-        }
         ImGui::EndPopup();
     }
 
@@ -754,8 +829,26 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             copyRequested = true;
         if (menuItem("Paste", "Ctrl+V", std::nullopt, false, canPaste && !playing))
             pasteRequested = true;
+        if (menuItem("Cut", "Ctrl+X", std::nullopt, false, !playing))
+            actions.cutRequested = true;
         if (menuItem("Duplicate", "Ctrl+D", std::nullopt, false, !playing))
             duplicateRequested = true;
+        if (menuItem("Delete", "Del", EditorUI::Icon::Trash, false, !playing))
+            actions.deleteRequested = true;
+        if (menuItem("Rename", "F2", std::nullopt, false, !playing))
+            actions.renameRequested = true;
+        menuSection("Selection");
+        if (menuItem("Select All", "Ctrl+A", std::nullopt, false, !playing))
+            actions.selectAllRequested = true;
+        if (menuItem("Deselect All", "Esc", std::nullopt, false, !playing))
+            actions.deselectRequested = true;
+        if (menuItem("Frame Selected", "F", EditorUI::Icon::Frame, false, !playing))
+            actions.frameSelectedRequested = true;
+        menuSection("Preferences");
+        if (menuItem("Editor Preferences...", nullptr, EditorUI::Icon::Gear))
+            showPreferences = true;
+        if (menuItem("Project Settings...", nullptr, EditorUI::Icon::Gear))
+            showProjectSettings = true;
         menuSection("Play Mode");
         if (menuItem(playing ? "Stop" : "Play", "F5", playing ? EditorUI::Icon::Stop : EditorUI::Icon::Play))
             playToggleRequested = true;
@@ -767,6 +860,16 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
     }
 
     if (beginTopMenu("View", "Show, hide and arrange editor panels", titleBar)) {
+        menuSection("Tools");
+        const char* const gizmoNames[] = {"Translate", "Rotate", "Scale"};
+        const char* const gizmoKeys[] = {"W", "E", "R"};
+        for (int i = 0; i < 3; ++i)
+            if (menuItem(gizmoNames[i], gizmoKeys[i], std::nullopt, actions.currentGizmo == i, !playing))
+                actions.setGizmo = i;
+        if (menuItem("Rectangle Select", nullptr, std::nullopt, actions.currentSelectionTool == 0, !playing))
+            actions.setSelectionTool = 0;
+        if (menuItem("Lasso Select", nullptr, std::nullopt, actions.currentSelectionTool == 1, !playing))
+            actions.setSelectionTool = 1;
         menuSection("Panels");
         menuToggle("Hierarchy", EditorUI::Icon::List, showHierarchy);
         menuToggle("Viewport", EditorUI::Icon::Frame, showViewport);
@@ -783,6 +886,38 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             showTerrainTools = showConsole = showTerminal = true;
             EditorStyle::requestDockLayoutReset();
         }
+        if (menuItem("Save Layout", nullptr, EditorUI::Icon::Save))
+            actions.saveLayoutRequested = true;
+        if (menuItem("Load Saved Layout", nullptr, EditorUI::Icon::Folder))
+            actions.loadLayoutRequested = true;
+        if (menuItem("Toggle Fullscreen", "F11", EditorUI::Icon::Frame))
+            actions.toggleFullscreenRequested = true;
+        endTopMenu();
+    }
+
+    if (beginTopMenu("Assets", "Create, import and locate project assets", titleBar)) {
+        const bool hasProject = !project.manifestPath().empty();
+        menuSection("Create");
+        if (menuItem("Shader Graph", nullptr, EditorUI::Icon::Layers, false, hasProject)) {
+            showAssetManager = true;
+            AssetManagerPanel::request(AssetManagerPanel::Request::CreateShaderGraph);
+        }
+        menuSection("Import");
+        if (menuItem("Import File...", nullptr, EditorUI::Icon::Import, false, hasProject)) {
+            showAssetManager = true;
+            AssetManagerPanel::request(AssetManagerPanel::Request::ImportFile);
+        }
+        if (menuItem("Import Folder...", nullptr, EditorUI::Icon::Folder, false, hasProject)) {
+            showAssetManager = true;
+            AssetManagerPanel::request(AssetManagerPanel::Request::ImportFolder);
+        }
+        if (menuItem("Import ZIP Archive...", nullptr, EditorUI::Icon::Archive, false, hasProject)) {
+            showAssetManager = true;
+            AssetManagerPanel::request(AssetManagerPanel::Request::ImportArchive);
+        }
+        ImGui::Separator();
+        if (menuItem("Show Assets Folder", nullptr, EditorUI::Icon::Folder, false, hasProject))
+            actions.revealAssetsRequested = true;
         endTopMenu();
     }
 
@@ -799,18 +934,28 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
                 createdEntity = scene.createCapsule();
             if (menuItem("Plane"))
                 createdEntity = scene.createPlane();
+            if (menuItem("Cylinder"))
+                createdEntity = scene.createCylinder();
+            if (menuItem("Cone"))
+                createdEntity = scene.createCone();
             if (menuItem("Ramp"))
                 createdEntity = scene.createRamp();
-            ImGui::Separator();
-            if (menuItem("Glass"))
-                createdEntity = scene.createGlass();
+            if (menuItem("Glass Pane"))
+                createdEntity = scene.createGlassPane();
             ImGui::EndMenu();
         }
         ImGui::Separator();
         if (menuItem("Camera", nullptr, EditorUI::Icon::Camera))
             createdEntity = scene.createCamera();
-        if (menuItem("Light", nullptr, EditorUI::Icon::Light))
-            createdEntity = scene.createLight();
+        if (beginSubMenu("Light", EditorUI::Icon::Light)) {
+            if (menuItem("Directional Light"))
+                createdEntity = scene.createLight();
+            if (menuItem("Point Light"))
+                createdEntity = scene.createPointLight();
+            if (menuItem("Spot Light"))
+                createdEntity = scene.createSpotLight();
+            ImGui::EndMenu();
+        }
         ImGui::Separator();
         if (menuItem("Terrain", nullptr, EditorUI::Icon::Terrain))
             createdEntity = scene.createTerrain();
@@ -830,6 +975,8 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
     }
 
     if (beginTopMenu("Rendering", "Renderer quality, features and debug views", titleBar)) {
+        if (menuItem("Capture Screenshot", "F12", EditorUI::Icon::Camera))
+            actions.screenshotRequested = true;
         menuSection("Quality preset");
         constexpr std::array<const char*, 4> presetLabels{"Low", "Medium", "High", "Ultra"};
         const auto currentPreset = [&] {
@@ -894,6 +1041,129 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
                 renderer.setRtContactShadowSettings(settings);
             ImGui::Unindent(ImGui::GetFontSize() * 1.6F);
         }
+        menuSection("Global illumination");
+        {
+            auto gi = renderer.globalIllumination();
+            bool giChanged = false;
+            const auto selectMode = [&](const char* label, Engine::GlobalIlluminationMode mode, bool enabled) {
+                if (menuItem(label, nullptr, std::nullopt, gi.mode == mode, enabled) && gi.mode != mode) {
+                    gi.mode = mode;
+                    giChanged = true;
+                }
+            };
+            selectMode("Off", Engine::GlobalIlluminationMode::Off, true);
+            selectMode("Screen-space (SSGI)", Engine::GlobalIlluminationMode::ScreenSpace, true);
+            selectMode("Ray-traced probes (DDGI)", Engine::GlobalIlluminationMode::RayTracedProbes,
+                       renderer.ddgiSupported());
+            if (!renderer.ddgiSupported())
+                ImGui::TextDisabled("DDGI needs cluster ray tracing (NVIDIA RTX Mega Geometry).");
+            constexpr std::array<const char*, 3> qualityLabels{"Low", "Medium", "High"};
+            ImGui::PushItemWidth(180.0F);
+            if (gi.mode == Engine::GlobalIlluminationMode::ScreenSpace) {
+                int quality = std::max(0, static_cast<int>(gi.ssgi.quality) - 1);
+                if (ImGui::Combo("SSGI quality", &quality, qualityLabels.data(), 3)) {
+                    gi.ssgi.quality = static_cast<Engine::SsgiQuality>(quality + 1);
+                    giChanged = true;
+                }
+                giChanged |= ImGui::SliderFloat("Radius", &gi.ssgi.radius, 0.5F, 16.0F, "%.1f m");
+                giChanged |= ImGui::SliderFloat("Thickness", &gi.ssgi.thickness, 0.05F, 4.0F, "%.2f m");
+                giChanged |= ImGui::SliderFloat("Intensity##ssgi", &gi.ssgi.intensity, 0.0F, 4.0F, "%.2f");
+            } else if (gi.mode == Engine::GlobalIlluminationMode::RayTracedProbes) {
+                int quality = static_cast<int>(gi.ddgi.quality);
+                if (ImGui::Combo("DDGI quality", &quality, qualityLabels.data(), 3)) {
+                    gi.ddgi.quality = static_cast<Engine::DdgiQuality>(quality);
+                    giChanged = true;
+                }
+                // Changing the spacing resets every probe, so apply it on release.
+                static float spacingDraft = -1.0F;
+                if (spacingDraft < 0.0F || !ImGui::IsAnyItemActive())
+                    spacingDraft = gi.ddgi.probeSpacing;
+                ImGui::SliderFloat("Probe spacing", &spacingDraft, 0.5F, 8.0F, "%.1f m");
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    gi.ddgi.probeSpacing = spacingDraft;
+                    giChanged = true;
+                }
+                giChanged |= ImGui::SliderFloat("Intensity##ddgi", &gi.ddgi.intensity, 0.0F, 4.0F, "%.2f");
+                const auto stats = renderer.ddgiStatistics();
+                ImGui::TextDisabled("Probes traced: %u / %u (others cached)", stats.tracedProbes, stats.totalProbes);
+                ImGui::TextDisabled("Clusters %u, displaced %u, RT scene %llu KiB", stats.clusters,
+                                    stats.displacedClusters,
+                                    static_cast<unsigned long long>(
+                                        (stats.compacted ? stats.sceneBytesCompacted : stats.sceneBytesBuilt) / 1024));
+            }
+            ImGui::PopItemWidth();
+            if (giChanged) {
+                renderer.setGlobalIllumination(gi);
+                // Saved with the scene (<scene>.gi), and applied in the Player too.
+                scene.setGlobalIllumination(gi);
+            }
+        }
+        menuSection("Camera");
+        if (beginSubMenu("Exposure & color###post-color", EditorUI::Icon::Camera)) {
+            auto post = renderer.postProcessSettings();
+            bool postChanged = false;
+            ImGui::PushItemWidth(180.0F);
+            postChanged |= ImGui::Checkbox("Auto exposure", &post.autoExposure);
+            postChanged |= ImGui::SliderFloat("Compensation", &post.exposureCompensation, -5.0F, 5.0F, "%+.1f EV");
+            if (post.autoExposure) {
+                postChanged |= ImGui::DragFloatRange2("Metered range", &post.minLuminanceEv, &post.maxLuminanceEv,
+                                                      0.1F, -12.0F, 16.0F, "%.1f EV", "%.1f EV");
+                postChanged |= ImGui::SliderFloat("Adapt to bright", &post.adaptationSpeedUp, 0.1F, 10.0F, "%.1f /s");
+                postChanged |= ImGui::SliderFloat("Adapt to dark", &post.adaptationSpeedDown, 0.1F, 10.0F, "%.1f /s");
+            }
+            ImGui::Separator();
+            constexpr std::array<const char*, 2> tonemapperLabels{"AgX", "ACES (hue-preserving)"};
+            int tonemapper = static_cast<int>(post.tonemapper);
+            if (ImGui::Combo("Display curve", &tonemapper, tonemapperLabels.data(),
+                             static_cast<int>(tonemapperLabels.size()))) {
+                post.tonemapper = static_cast<Engine::TonemapOperator>(tonemapper);
+                postChanged = true;
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("AgX fades overexposed colour to white like film; ACES keeps it saturated.");
+            postChanged |= ImGui::SliderFloat("Contrast", &post.contrast, 0.5F, 1.5F, "%.2f");
+            postChanged |= ImGui::SliderFloat("Saturation", &post.saturation, 0.0F, 2.0F, "%.2f");
+            postChanged |= ImGui::SliderFloat("Temperature", &post.temperature, -1.0F, 1.0F, "%+.2f");
+            postChanged |= ImGui::SliderFloat("Tint", &post.tint, -1.0F, 1.0F, "%+.2f");
+            ImGui::PopItemWidth();
+            if (menuItem("Reset to defaults")) {
+                post = Engine::PostProcessSettings{};
+                postChanged = true;
+            }
+            if (postChanged) {
+                renderer.setPostProcessSettings(post);
+                // Saved with the scene (<scene>.post), and applied in the Player too.
+                scene.setPostProcess(post);
+            }
+            ImGui::EndMenu();
+        }
+        if (beginSubMenu("Lens###post-lens", EditorUI::Icon::Focus)) {
+            auto post = renderer.postProcessSettings();
+            bool postChanged = false;
+            ImGui::PushItemWidth(180.0F);
+            postChanged |= ImGui::SliderFloat("Bloom", &post.bloom, 0.0F, 0.3F, "%.3f");
+            postChanged |= ImGui::SliderFloat("Vignette", &post.vignette, 0.0F, 1.0F, "%.2f");
+            postChanged |= ImGui::SliderFloat("Chromatic aberration", &post.chromaticAberration, 0.0F, 1.0F, "%.2f");
+            postChanged |= ImGui::SliderFloat("Motion blur", &post.motionBlur, 0.0F, 1.0F, "%.2f");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Fraction of the frame time the shutter stays open. Needs TAA.");
+            ImGui::Separator();
+            postChanged |= ImGui::Checkbox("Depth of field", &post.depthOfField);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Needs TAA, which provides the linear depth.");
+            if (post.depthOfField) {
+                postChanged |= ImGui::SliderFloat("Focus distance", &post.focusDistance, 0.1F, 200.0F, "%.1f m",
+                                                  ImGuiSliderFlags_Logarithmic);
+                postChanged |= ImGui::SliderFloat("Aperture", &post.aperture, 0.0F, 1.0F, "%.2f");
+                postChanged |= ImGui::SliderFloat("Max blur", &post.maxBlurPixels, 1.0F, 32.0F, "%.0f px");
+            }
+            ImGui::PopItemWidth();
+            if (postChanged) {
+                renderer.setPostProcessSettings(post);
+                scene.setPostProcess(post);
+            }
+            ImGui::EndMenu();
+        }
         menuSection("Debug views");
         const Engine::ShadowDebugView shadowView = renderer.shadowDebugView();
         if (beginSubMenu(shadowView != Engine::ShadowDebugView::Off ? "Shadows (active)###shadow-debug"
@@ -943,6 +1213,12 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             selectPbrDebugView("Disable Direct Specular", Engine::PbrDebugView::NoDirectSpecular);
             selectPbrDebugView("Disable GTAO", Engine::PbrDebugView::NoGtao);
             ImGui::Separator();
+            selectPbrDebugView("Albedo", Engine::PbrDebugView::Albedo);
+            selectPbrDebugView("Normals", Engine::PbrDebugView::Normals);
+            selectPbrDebugView("Roughness", Engine::PbrDebugView::Roughness);
+            selectPbrDebugView("Metallic", Engine::PbrDebugView::Metallic);
+            selectPbrDebugView("Ambient Occlusion", Engine::PbrDebugView::AmbientOcclusion);
+            ImGui::Separator();
             selectPbrDebugView("Geometric Direct Diffuse", Engine::PbrDebugView::GeometricDirectDiffuse);
             ImGui::EndMenu();
         }
@@ -954,6 +1230,10 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
     if (beginTopMenu("Help", "Shortcuts and editor information", titleBar)) {
         if (menuItem("Keyboard Shortcuts", nullptr, EditorUI::Icon::Info))
             showShortcuts = true;
+        if (menuItem("Open Project Folder", nullptr, EditorUI::Icon::Folder))
+            actions.openProjectFolderRequested = true;
+        if (menuItem("Open Log Folder", nullptr, EditorUI::Icon::Folder))
+            actions.openLogFolderRequested = true;
         ImGui::Separator();
         if (menuItem("About GamEngine Editor"))
             showAbout = true;
@@ -1127,7 +1407,8 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         const ImVec2 mouse = ImGui::GetMousePos();
         const float glyphHalfExtent = std::round(5.0F * titleBar.dpiScale());
         const bool activeWindow = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-        const ImU32 glyphColor = activeWindow ? IM_COL32(230, 235, 245, 255) : IM_COL32(230, 235, 245, 155);
+        const ImU32 glyphColor =
+            ImGui::GetColorU32(EditorUI::withAlpha(palette.textPrimary, activeWindow ? 1.0F : 0.6F));
 
         for (int index = 0; index < 3; ++index) {
             const ImVec2 minimum{captionButtons.left + buttonWidth * static_cast<float>(index), captionButtons.top};
@@ -1173,16 +1454,15 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         ImGui::OpenPopup("New Project");
         openNewProject = false;
     }
-    if (ImGui::BeginPopupModal("New Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Create a portable GamEngine project.");
-        ImGui::TextDisabled("The project manifest and starter scene are created automatically.");
-        ImGui::Spacing();
-        ImGui::SetNextItemWidth(420.0F);
-        ImGui::InputText("Name", newProjectName, sizeof(newProjectName));
-        ImGui::SetNextItemWidth(420.0F);
-        ImGui::InputTextWithHint("Location", "D:/Projects/MyGame", newProjectLocation, sizeof(newProjectLocation));
-        ImGui::TextDisabled("Template");
-        ImGui::SetNextItemWidth(420.0F);
+    if (EditorUI::beginDialog("New Project", 460.0F)) {
+        EditorUI::dialogHeader(EditorUI::Icon::Folder, EditorUI::colors().accent, "New Project",
+                               "Creates a portable GamEngine project with a manifest and a starter scene.");
+        EditorUI::fieldLabel("Name");
+        ImGui::InputText("##project-name", newProjectName, sizeof(newProjectName));
+        EditorUI::fieldLabel("Location");
+        ImGui::InputTextWithHint("##project-location", "D:/Projects/MyGame", newProjectLocation,
+                                 sizeof(newProjectLocation));
+        EditorUI::fieldLabel("Template");
         ImGui::BeginDisabled();
         char templateName[] = "3D Game";
         ImGui::InputText("##project-template", templateName, sizeof(templateName), ImGuiInputTextFlags_ReadOnly);
@@ -1191,22 +1471,24 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         if (!newProjectError.empty()) {
             EditorUI::iconLabel(EditorUI::Icon::Error, EditorUI::colors().error);
             ImGui::SameLine(0.0F, 6.0F);
+            ImGui::PushTextWrapPos(0.0F);
             ImGui::TextColored(EditorUI::colors().error, "%s", newProjectError.c_str());
+            ImGui::PopTextWrapPos();
         }
-        ImGui::Spacing();
+        EditorUI::dialogFooter(2);
         const bool valid = newProjectName[0] != '\0' && newProjectLocation[0] != '\0';
+        if (EditorButton("Cancel", {104.0F, 0.0F}).draw() || EditorUI::dialogEscapePressed()) {
+            newProjectError.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
         ImGui::BeginDisabled(!valid);
-        if (EditorUI::primaryButton("Create", {110.0F, 0.0F})) {
+        if (EditorUI::primaryButton("Create", {104.0F, 0.0F})) {
             createProject();
             if (newProjectError.empty())
                 ImGui::CloseCurrentPopup();
         }
         ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (EditorButton("Cancel", {110.0F, 0.0F}).draw()) {
-            newProjectError.clear();
-            ImGui::CloseCurrentPopup();
-        }
         ImGui::EndPopup();
     }
 
@@ -1221,16 +1503,20 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         openSceneSettings = false;
     }
 
-    if (ImGui::BeginPopupModal("Scene Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        constexpr const char* typeLabels[] = {"None", "MSAA", "FXAA (placeholder)", "TAA"};
+    if (EditorUI::beginDialog("Scene Settings", 420.0F)) {
+        constexpr const char* typeLabels[] = {"None", "MSAA", "FXAA", "TAA"};
         constexpr const char* sampleLabels[] = {"2x", "4x"};
+        EditorUI::dialogHeader(EditorUI::Icon::Gear, EditorUI::colors().accent, "Scene Settings",
+                               "Rendering options for the current scene.");
 
         ImGui::SeparatorText("Antialiasing");
-        ImGui::SetNextItemWidth(230.0F);
-        if (ImGui::BeginCombo("Type", typeLabels[antialiasingType])) {
+        EditorUI::fieldLabel("Method");
+        if (ImGui::BeginCombo("##aa-type", typeLabels[antialiasingType])) {
             for (int index = 0; index < 4; ++index) {
                 const bool isSelected = antialiasingType == index;
-                if (ImGui::Selectable(typeLabels[index], isSelected)) {
+                // FXAA is not implemented yet; keep it visible but unselectable.
+                ImGui::BeginDisabled(index == 2);
+                if (ImGui::Selectable(index == 2 ? "FXAA  (not available yet)" : typeLabels[index], isSelected)) {
                     antialiasingType = index;
                     if (antialiasingType == 0) {
                         renderer.setAntialiasingLevel(Engine::AntialiasingLevel::Off);
@@ -1244,6 +1530,7 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
                         antialiasingChanged = true;
                     }
                 }
+                ImGui::EndDisabled();
                 if (isSelected) {
                     ImGui::SetItemDefaultFocus();
                 }
@@ -1251,40 +1538,28 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             ImGui::EndCombo();
         }
 
-        ImGui::Spacing();
         if (antialiasingType == 1) {
-            ImGui::SetNextItemWidth(230.0F);
-            if (ImGui::BeginCombo("Samples", msaaSamples == 2 ? sampleLabels[0] : sampleLabels[1])) {
-                for (const int samples : {2, 4}) {
-                    const bool isSelected = msaaSamples == samples;
-                    if (ImGui::Selectable(samples == 2 ? sampleLabels[0] : sampleLabels[1], isSelected)) {
-                        msaaSamples = samples;
-                        renderer.setAntialiasingLevel(samples == 2 ? Engine::AntialiasingLevel::MSAA2x
-                                                                   : Engine::AntialiasingLevel::MSAA4x);
-                        antialiasingChanged = true;
-                    }
-                    if (isSelected) {
-                        ImGui::SetItemDefaultFocus();
-                    }
-                }
-                ImGui::EndCombo();
+            ImGui::TextDisabled("Samples");
+            int sampleSelection = msaaSamples == 2 ? 0 : 1;
+            if (EditorUI::segmentedControl("##msaa-samples", sampleLabels, sampleSelection)) {
+                msaaSamples = sampleSelection == 0 ? 2 : 4;
+                renderer.setAntialiasingLevel(msaaSamples == 2 ? Engine::AntialiasingLevel::MSAA2x
+                                                               : Engine::AntialiasingLevel::MSAA4x);
+                antialiasingChanged = true;
             }
-            ImGui::TextDisabled("MSAA is currently supported by the renderer.");
-        } else if (antialiasingType == 2) {
-            ImGui::BeginDisabled();
-            float placeholderValue = 1.0F;
-            Editor::Controls::sliderFloat("Quality", &placeholderValue, 0.0F, 1.0F);
-            ImGui::EndDisabled();
-            ImGui::TextDisabled("Placeholder: this antialiasing type is not implemented yet.");
+            ImGui::TextDisabled("Multisampling resolves geometry edges only.");
         } else if (antialiasingType == 3) {
             ImGui::TextDisabled("TAA uses jittered HDR history and resets after changes to this setting.");
+        } else if (antialiasingType == 2) {
+            ImGui::TextDisabled("This antialiasing type is not implemented yet.");
         } else {
             ImGui::TextDisabled("Antialiasing is disabled.");
         }
 
-        ImGui::Separator();
+        ImGui::Dummy({0.0F, 2.0F});
         ImGui::TextDisabled("Changes are applied after reloading the scene.");
-        if (EditorButton("Close").draw()) {
+        EditorUI::dialogFooter(1);
+        if (EditorUI::primaryButton("Close", {104.0F, 0.0F}) || EditorUI::dialogEscapePressed()) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1339,20 +1614,116 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         ImGui::End();
     }
 
+    if (showPreferences) {
+        ImGui::SetNextWindowSize({380.0F, 0.0F}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Editor Preferences", &showPreferences,
+                         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+            ImGuiIO& io = ImGui::GetIO();
+            ImGui::SeparatorText("Interface");
+            ImGui::SliderFloat("UI scale", &io.FontGlobalScale, 0.75F, 1.75F, "%.2fx");
+            bool scaleChanged = ImGui::IsItemDeactivatedAfterEdit();
+            if (ImGui::Button("Reset scale")) {
+                io.FontGlobalScale = 1.0F;
+                scaleChanged = true;
+            }
+            if (scaleChanged)
+                Editor::savePreferences({.uiScale = io.FontGlobalScale});
+            ImGui::TextDisabled("Saved automatically.");
+        }
+        ImGui::End();
+    }
+
+    if (showProjectSettings) {
+        ImGui::SetNextWindowSize({480.0F, 0.0F}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Project Settings", &showProjectSettings,
+                         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+            if (ImGui::BeginTable("##project-settings", 2, ImGuiTableFlags_SizingFixedFit)) {
+                ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, 110.0F);
+                ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+                const auto row = [](const char* label, const std::string& value) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextDisabled("%s", label);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextWrapped("%s", value.c_str());
+                };
+                row("Name", project.name());
+                row("Manifest", project.manifestPath().string());
+                row("Root", project.rootPath().string());
+                row("Assets", project.assetRoot().string());
+                row("Startup scene", project.startupScene().string());
+                row("Scenes", std::to_string(project.scenes().size()));
+                ImGui::EndTable();
+            }
+            ImGui::SeparatorText("Edit");
+            static char projectNameDraft[128]{};
+            static std::filesystem::path draftOwner;
+            if (draftOwner != project.manifestPath()) {
+                draftOwner = project.manifestPath();
+                std::snprintf(projectNameDraft, sizeof(projectNameDraft), "%s", project.name().c_str());
+            }
+            ImGui::InputText("Project name", projectNameDraft, sizeof(projectNameDraft));
+            const std::string startupLabel = project.startupScene().lexically_relative(project.rootPath()).string();
+            std::filesystem::path chosenStartup;
+            if (ImGui::BeginCombo("Startup scene", startupLabel.c_str())) {
+                for (const auto& scenePath : project.scenes()) {
+                    const std::string label = scenePath.lexically_relative(project.rootPath()).string();
+                    if (ImGui::Selectable(label.c_str(), scenePath == project.startupScene()))
+                        chosenStartup = scenePath;
+                }
+                ImGui::EndCombo();
+            }
+            const bool nameChanged = project.name() != projectNameDraft && projectNameDraft[0] != '\0';
+            if (nameChanged || !chosenStartup.empty()) {
+                try {
+                    if (nameChanged)
+                        project.setName(projectNameDraft);
+                    if (!chosenStartup.empty())
+                        project.setStartupScene(chosenStartup);
+                    project.save();
+                    Editor::ConsolePanel::info("Saved project settings.");
+                } catch (const std::exception& error) {
+                    Editor::ConsolePanel::error(std::string{"Could not save project settings: "} + error.what());
+                }
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("Open project folder"))
+                actions.openProjectFolderRequested = true;
+        }
+        ImGui::End();
+    }
+
     if (showAbout) {
         ImGui::SetNextWindowSize({420.0F, 0.0F}, ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("About GamEngine Editor", &showAbout, ImGuiWindowFlags_NoDocking)) {
-            EditorUI::iconLabel(EditorUI::Icon::Mesh, EditorUI::colors().accent, ImGui::GetFontSize() * 1.4F);
-            ImGui::SameLine();
+        if (ImGui::Begin("About GamEngine Editor", &showAbout,
+                         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse)) {
+            EditorUI::iconLabel(EditorUI::Icon::Mesh, EditorUI::colors().accent, ImGui::GetFontSize() * 1.6F);
+            ImGui::SameLine(0.0F, 10.0F);
+            ImGui::BeginGroup();
+            ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.15F);
             ImGui::TextUnformatted("GamEngine Editor");
+            ImGui::PopFont();
+            ImGui::TextDisabled("Vulkan 1.4 · SDL3 · Dear ImGui");
+            ImGui::EndGroup();
+            ImGui::Spacing();
+            ImGui::PushTextWrapPos(0.0F);
             ImGui::TextDisabled("Experimental GPU-driven 3D engine built on Vulkan 1.4 and SDL3.");
-            ImGui::Separator();
-            ImGui::TextDisabled("Project");
-            ImGui::SameLine(90.0F);
-            ImGui::TextUnformatted(project.name().c_str());
-            ImGui::TextDisabled("ImGui");
-            ImGui::SameLine(90.0F);
-            ImGui::TextUnformatted(IMGUI_VERSION);
+            ImGui::PopTextWrapPos();
+            ImGui::SeparatorText("Details");
+            if (ImGui::BeginTable("##about-details", 2, ImGuiTableFlags_SizingFixedFit)) {
+                ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, 90.0F);
+                ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+                const auto row = [](const char* label, const char* value) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextDisabled("%s", label);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(value);
+                };
+                row("Project", project.name().c_str());
+                row("Dear ImGui", IMGUI_VERSION);
+                ImGui::EndTable();
+            }
         }
         ImGui::End();
     }

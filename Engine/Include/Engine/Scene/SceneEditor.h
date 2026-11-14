@@ -35,6 +35,9 @@ class SceneEditor final {
     [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
         return scene_->mutationRevision();
     }
+    template <typename T> [[nodiscard]] std::uint64_t componentRevision() const noexcept {
+        return scene_->componentRevision<T>();
+    }
 
     template <typename T> [[nodiscard]] bool has(Entity entity) const {
         return scene_->edit(entity).has<T>();

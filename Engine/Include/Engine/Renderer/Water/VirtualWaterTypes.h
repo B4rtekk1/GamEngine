@@ -14,13 +14,19 @@ inline constexpr std::uint32_t PageCells = 8;
 inline constexpr std::uint32_t PageVertexAxis = PageCells + 1;
 inline constexpr std::uint32_t ClipmapResolution = PagesPerAxis * PageCells;
 inline constexpr std::uint32_t VirtualSlotsPerBody = ClipLevels * PagesPerAxis * PagesPerAxis;
-inline constexpr std::uint32_t ActivePagesPerBody = 64U + (ClipLevels - 1U) * 48U;
+// Coarse levels keep every page except the 3x3 core that the finer level covers
+// for both hole offsets; the remaining 4x4 hole is selected on the GPU from the
+// camera position (see waterClipPageCovered in VirtualWaterShared.slang).
+inline constexpr std::uint32_t RingPagesPerLevel = PagesPerAxis * PagesPerAxis - 9U;
+inline constexpr std::uint32_t ActivePagesPerBody = 64U + (ClipLevels - 1U) * RingPagesPerLevel;
 inline constexpr std::uint32_t StitchVariantCount = 16;
 inline constexpr std::uint32_t MaxVirtualWaterBodies = 16;
 inline constexpr std::uint32_t MaxPages = MaxVirtualWaterBodies * (ActivePagesPerBody + 1U);
 inline constexpr std::uint32_t MaxDrawBins = MaxVirtualWaterBodies * StitchVariantCount;
 inline constexpr std::uint32_t VisiblePagesPerBin = ActivePagesPerBody;
 inline constexpr std::uint32_t MaxVisiblePageSlots = MaxDrawBins * VisiblePagesPerBin;
+// Page ids are packed into 13 bits of the water metadata; 0x1fff is reserved.
+static_assert(MaxPages < 0x1fffU);
 
 // Persistent state intentionally uses a world-stable identity.  The current
 // baseline stores every physical slot as a 16x16 backing tile; resolution
@@ -307,11 +313,13 @@ struct alignas(16) GPUWaterCullConfig final {
     std::uint32_t occlusionGraceFrames{2U};
     std::uint32_t occludedFramesRequired{2U};
     std::uint32_t maxHighGeometryPages{128U};
-    std::uint32_t padding0{};
+    // Zero in dense tile-classification mode, where the candidate mask is unused.
+    std::uint32_t markCandidateTiles{1U};
     std::uint32_t padding1{};
     std::uint32_t padding2{};
 };
 static_assert(sizeof(GPUWaterCullConfig) == 64);
+inline constexpr std::uint32_t CandidateBlockTiles = 4U;
 
 struct alignas(16) GPUWaterStatePhysicalRef final {
     std::uint32_t tier{};

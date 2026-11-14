@@ -3,6 +3,7 @@
 #include "Editor/Build/GameBuildPipeline.h"
 #include "Editor/EditorConstants.h"
 #include "Editor/EditorPreferences.h"
+#include "ScreenshotWriter.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorUi.h"
 #include "Editor/Panels/AssetDragDrop.h"
@@ -404,6 +405,7 @@ int main(int argc, char** argv) {
                                    ? imguiIo.Fonts->AddFontDefault(&terminalFontConfig)
                                    : imguiIo.Fonts->AddFontFromFileTTF(terminalFontPath.string().c_str(), 16.0F);
         EditorStyle::apply();
+        imguiIo.FontGlobalScale = Editor::loadPreferences().uiScale;
         // Scale spacing and text on HiDPI displays. ImGui rasterises fonts at
         // the scaled size, so text stays sharp instead of being stretched.
         if (const float displayScale = SDL_GetWindowDisplayScale(window); displayScale > 1.0F) {
@@ -442,14 +444,13 @@ int main(int argc, char** argv) {
                                                                      "slangc"
 #endif
         );
-        if (configureScriptBuild(editorRoot, project.rootPath(), project.assetRoot())) {
-            scriptHotReload.emplace(project.assetRoot() / "Scripts", modulePath, scriptBuildDirectory, "Release");
-            scriptHotReload->requestBuild();
-            Editor::ConsolePanel::info("C++ script hot reload enabled.");
-        } else {
-            Editor::ConsolePanel::warning("C++ script toolchain is unavailable. Install CMake and a C++23 compiler "
-                                          "(MSVC on Windows, GCC or Clang on Linux), then reopen the project.");
-        }
+        // Configuring the script build spawns cmake and waits for it. Doing
+        // that before the window exists delayed every launch by seconds, so it
+        // runs in the background and hot reload is enabled once it finishes.
+        std::future<bool> scriptConfigure =
+            std::async(std::launch::async, [editorRoot, root = project.rootPath(), assets = project.assetRoot()] {
+                return configureScriptBuild(editorRoot, root, assets);
+            });
         if (!portableEditor) {
             if (const auto buildDirectory = findDevelopmentBuildDirectory(editorRoot)) {
                 if (const auto shaderDirectory = findEngineShaderDirectory(*buildDirectory)) {
@@ -509,10 +510,14 @@ int main(int argc, char** argv) {
         Editor::ConsolePanel::info("Editor started for project '" + project.name() + "'.");
         const bool restoreScene =
             !projectPath && !createProjectPath && std::filesystem::is_regular_file(previousSession.scenePath);
-        const auto initialScene = restoreScene ? previousSession.scenePath : project.startupScene();
-        const bool loadInitialSceneAsync = std::filesystem::is_regular_file(initialScene);
+        // Every scene the editor opens (startup, Open Scene, Open/New Project)
+        // is parsed on a worker; the UI keeps running while models decode and
+        // cook. pendingScenePath names the scene in flight.
+        std::filesystem::path pendingScenePath = restoreScene ? previousSession.scenePath : project.startupScene();
+        bool pendingSceneIsStartup = true;
+        const bool loadInitialSceneAsync = std::filesystem::is_regular_file(pendingScenePath);
         if (loadInitialSceneAsync) {
-            EditorSceneSession::setScenePath(initialScene);
+            EditorSceneSession::setScenePath(pendingScenePath);
         } else {
             EditorSceneSession::clearSavedScene();
         }
@@ -532,8 +537,11 @@ int main(int argc, char** argv) {
         renderer.initializeCore(scene, window);
         SceneHistory history;
         history.reset(scene);
-        std::optional<std::future<std::unique_ptr<Engine::ScenePreset>>> initialSceneLoad;
-        std::optional<Engine::AntialiasingLevel> initialSceneAntialiasing;
+        struct BackgroundSceneLoad final {
+            std::unique_ptr<Engine::ScenePreset> scene;
+            std::optional<Engine::AntialiasingLevel> antialiasing;
+        };
+        std::optional<std::future<BackgroundSceneLoad>> initialSceneLoad;
         bool startInitialSceneLoad = loadInitialSceneAsync;
         bool startEmptySceneResources = !loadInitialSceneAsync;
         bool initialSceneSyncPending = false;
@@ -580,6 +588,7 @@ int main(int argc, char** argv) {
         };
         constexpr auto targetFrame = EditorConstants::targetFrameMicroseconds;
         bool running = true;
+        int screenshotFramesLeft = 0;
         bool rendererReloadPending = false;
         bool playing = false;
         bool paused = false;
@@ -615,10 +624,13 @@ int main(int argc, char** argv) {
             const auto start = std::chrono::steady_clock::now();
             Engine::Profiler::beginFrame();
             Engine::Renderer::beginFrame();
-            if (initialSceneLoad &&
+            // A scene opened from the menu replaces the edited scene, never
+            // the Play Mode copy: adopt it once Play Mode has ended.
+            if (initialSceneLoad && !(playing && !pendingSceneIsStartup) &&
                 initialSceneLoad->wait_for(std::chrono::seconds::zero()) == std::future_status::ready) {
                 try {
-                    auto loadedScene = initialSceneLoad->get();
+                    auto loaded = initialSceneLoad->get();
+                    auto& loadedScene = loaded.scene;
                     if (initialSceneLoadStartedAt) {
                         reportSceneLoadStage("CPU scene load finished", *initialSceneLoadStartedAt);
                     }
@@ -629,9 +641,16 @@ int main(int argc, char** argv) {
                         requestFullSceneReload();
                         reportSceneLoadStage("Scene adopt", stageStartedAt);
                     }
-                    if (initialSceneAntialiasing) {
-                        renderer.setAntialiasingLevel(*initialSceneAntialiasing);
+                    if (loaded.antialiasing) {
+                        renderer.setAntialiasingLevel(*loaded.antialiasing);
                         rendererReloadPending = true;
+                    }
+                    if (!pendingSceneIsStartup) {
+                        // The startup scene's sky is resolved when the
+                        // renderer first builds its scene resources.
+                        EditorSceneSession::markSceneSaved(pendingScenePath);
+                        applyLoadedSceneEnvironment(scene, renderer, content, pendingScenePath);
+                        Editor::ConsolePanel::info("Loaded scene: " + pendingScenePath.string());
                     }
                     {
                         GE_PROFILE_SCOPE("SceneLoad.ShaderGraphResolve");
@@ -647,11 +666,26 @@ int main(int argc, char** argv) {
                     }
                     lastPersistedSceneRevision = scene.editor().mutationRevision();
                     initialSceneSyncPending = true;
-                    Editor::ConsolePanel::info("[SceneLoad] ECS ready: " + initialScene.string());
+                    Editor::ConsolePanel::info("[SceneLoad] ECS ready: " + pendingScenePath.string());
                 } catch (const std::exception& error) {
-                    Editor::ConsolePanel::error("Could not load startup scene: " + std::string{error.what()});
+                    Editor::ConsolePanel::error(std::string{pendingSceneIsStartup ? "Could not load startup scene: "
+                                                                                 : "Could not load scene: "} +
+                                                error.what());
                 }
                 initialSceneLoad.reset();
+            }
+            if (scriptConfigure.valid() &&
+                scriptConfigure.wait_for(std::chrono::seconds::zero()) == std::future_status::ready) {
+                if (scriptConfigure.get()) {
+                    scriptHotReload.emplace(project.assetRoot() / "Scripts", modulePath, scriptBuildDirectory,
+                                            "Release");
+                    scriptHotReload->requestBuild();
+                    Editor::ConsolePanel::info("C++ script hot reload enabled.");
+                } else {
+                    Editor::ConsolePanel::warning(
+                        "C++ script toolchain is unavailable. Install CMake and a C++23 compiler "
+                        "(MSVC on Windows, GCC or Clang on Linux), then reopen the project.");
+                }
             }
             const Engine::EditorEventState events = renderer.pollEditorEvents();
             if (events.quitRequested) {
@@ -710,18 +744,108 @@ int main(int argc, char** argv) {
             bool duplicateRequested = false;
             bool resetHistoryRequested = false;
             bool gameBuildRequested = false;
+            EditorMenuActions menuActions;
+            menuActions.currentGizmo = static_cast<int>(gizmoMode);
+            menuActions.currentSelectionTool = static_cast<int>(selectionTool);
             if (const Engine::Entity created = drawEditorMenuBar(
                     scene, renderer, content, project, editorRoot, titleBar, antialiasingChanged, sceneLoaded,
                     sceneSaved, sceneDeleted, playing, paused, playToggleRequested, pauseToggleRequested,
                     restartRequested, history.canUndo(), history.canRedo(), clipboard.canPaste(scene), undoRequested,
                     redoRequested, copyRequested, pasteRequested, duplicateRequested, resetHistoryRequested,
                     showHierarchy, showViewport, showInspector, showAssetManager, showTerrainTools, showConsole,
-                    showTerminal, showShaderGraph, showProfiler, gameBuildRequested);
+                    showTerminal, showShaderGraph, showProfiler, gameBuildRequested, menuActions);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
             if (resetHistoryRequested) {
                 history.reset(scene);
+            }
+            if (!menuActions.backgroundSceneLoad.empty()) {
+                if (initialSceneLoad || startInitialSceneLoad) {
+                    Editor::ConsolePanel::warning("A scene is still loading; try again when it has finished.");
+                } else {
+                    pendingScenePath = menuActions.backgroundSceneLoad;
+                    pendingSceneIsStartup = false;
+                    startInitialSceneLoad = true;
+                }
+            }
+            if (menuActions.setGizmo >= 0)
+                gizmoMode = static_cast<GizmoMode>(menuActions.setGizmo);
+            if (menuActions.setSelectionTool >= 0)
+                selectionTool = static_cast<SelectionTool>(menuActions.setSelectionTool);
+            if (menuActions.frameSelectedRequested)
+                frameSelectedRequest = true;
+            if (menuActions.renameRequested && !playing)
+                HierarchyPanel::requestRename(selectedEntity);
+            if (!playing && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F2, false))
+                HierarchyPanel::requestRename(selectedEntity);
+            if (menuActions.revealAssetsRequested)
+                SDL_OpenURL(("file://" + project.assetRoot().string()).c_str());
+            if (menuActions.screenshotRequested || (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F12, false))) {
+                if (showGameView || playing) {
+                    renderer.requestHdrCapture();
+                    screenshotFramesLeft = 120;
+                } else {
+                    Editor::ConsolePanel::warning("Screenshots capture the Game View. Switch to Game View or press Play.");
+                }
+            }
+            if (screenshotFramesLeft > 0) {
+                --screenshotFramesLeft;
+                std::uint32_t shotWidth = 0, shotHeight = 0;
+                std::vector<std::uint16_t> shotPixels;
+                if (renderer.takeHdrCapture(shotWidth, shotHeight, shotPixels)) {
+                    screenshotFramesLeft = 0;
+                    const auto stamp = std::chrono::duration_cast<std::chrono::seconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count();
+                    const auto shotPath = project.rootPath() / "Screenshots" / ("Screenshot_" + std::to_string(stamp) + ".png");
+                    if (Editor::writeHdrScreenshot(shotPath, shotWidth, shotHeight, shotPixels))
+                        Editor::ConsolePanel::info("Saved screenshot: " + shotPath.string());
+                    else
+                        Editor::ConsolePanel::error("Could not write screenshot: " + shotPath.string());
+                } else if (screenshotFramesLeft == 0) {
+                    Editor::ConsolePanel::error("Screenshot capture timed out.");
+                }
+            }
+            if (menuActions.exitRequested)
+                running = false;
+            if (menuActions.openLogFolderRequested)
+                SDL_OpenURL(("file://" + Platform::UserPaths::editorLogs().string()).c_str());
+            if (menuActions.saveLayoutRequested) {
+                ImGui::SaveIniSettingsToDisk((Platform::UserPaths::editorState() / "layout-saved.ini").string().c_str());
+                Editor::ConsolePanel::info("Saved editor layout.");
+            }
+            if (menuActions.loadLayoutRequested) {
+                const auto layoutPath = Platform::UserPaths::editorState() / "layout-saved.ini";
+                if (std::filesystem::is_regular_file(layoutPath))
+                    ImGui::LoadIniSettingsFromDisk(layoutPath.string().c_str());
+                else
+                    Editor::ConsolePanel::warning("No saved layout found. Use View > Save Layout first.");
+            }
+            if (menuActions.toggleFullscreenRequested ||
+                (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F11, false))) {
+                if (SDL_Window* focused = SDL_GetKeyboardFocus())
+                    SDL_SetWindowFullscreen(focused, (SDL_GetWindowFlags(focused) & SDL_WINDOW_FULLSCREEN) == 0);
+            }
+            if (menuActions.openProjectFolderRequested)
+                SDL_OpenURL(("file://" + project.rootPath().string()).c_str());
+            if (!playing) {
+                if (menuActions.selectAllRequested) {
+                    selectedEntities.clear();
+                    scene.editor().view<>([&](const Engine::Entity entity) { selectedEntities.push_back(entity); });
+                    selectedEntity = selectedEntities.empty() ? Engine::NullEntity : selectedEntities.back();
+                    renderer.setEditorSelection(selectedEntity);
+                }
+                if (menuActions.deselectRequested)
+                    setSelection(Engine::NullEntity);
+                if (selectedEntity != Engine::NullEntity && scene.editor().valid(selectedEntity)) {
+                    if (menuActions.cutRequested)
+                        clipboard.copy(scene, selectedEntity);
+                    if (menuActions.cutRequested || menuActions.deleteRequested) {
+                        deferEntityDestruction(selectedEntity);
+                        setSelection(Engine::NullEntity);
+                    }
+                }
             }
             if (gameBuildRequested && !gameBuildRunning) {
                 try {
@@ -765,6 +889,8 @@ int main(int argc, char** argv) {
                 scene.editorPlanes.clear();
                 scene.editorSpheres.clear();
                 scene.editorCapsules.clear();
+                scene.editorCylinders.clear();
+                scene.editorCones.clear();
                 scene.editorRamps.clear();
                 scene.editorLights.clear();
                 scene.editorTerrains.clear();
@@ -907,6 +1033,15 @@ int main(int argc, char** argv) {
                 drawTerrainToolsPanel(scene, content, selectedEntity, renderer, terrainSculpt, playing,
                                       showTerrainTools);
             }
+            for (const auto& loaded : Editor::AssetDragDrop::finishModelLoads(scene)) {
+                if (loaded.entity != Engine::NullEntity) {
+                    setSelection(loaded.entity);
+                    Editor::ConsolePanel::info("Added model: " + loaded.path.generic_string());
+                } else {
+                    Editor::ConsolePanel::error("Could not add model " + loaded.path.generic_string() + ": " +
+                                                loaded.error);
+                }
+            }
             if (viewportInteraction.createdEntity != Engine::NullEntity) {
                 setSelection(viewportInteraction.createdEntity);
             }
@@ -972,6 +1107,8 @@ int main(int argc, char** argv) {
                             scene.editorPlanes.clear();
                             scene.editorSpheres.clear();
                             scene.editorCapsules.clear();
+                scene.editorCylinders.clear();
+                scene.editorCones.clear();
                             scene.editorRamps.clear();
                             scene.editorLights.clear();
                             scene.editorTerrains.clear();
@@ -1021,7 +1158,18 @@ int main(int argc, char** argv) {
                     resolveShaderGraphMaterials();
                     requestFullSceneReload();
                 }
+                if (ImGui::IsKeyPressed(ImGuiKey_A) && !Editor::ConsolePanel::hasFocus()) {
+                    selectedEntities.clear();
+                    scene.editor().view<>([&](const Engine::Entity entity) { selectedEntities.push_back(entity); });
+                    selectedEntity = selectedEntities.empty() ? Engine::NullEntity : selectedEntities.back();
+                    renderer.setEditorSelection(selectedEntity);
+                }
                 if (selectedEntity != Engine::NullEntity && scene.editor().valid(selectedEntity)) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_X)) {
+                        clipboard.copy(scene, selectedEntity);
+                        deferEntityDestruction(selectedEntity);
+                        setSelection(Engine::NullEntity);
+                    }
                     if (ImGui::IsKeyPressed(ImGuiKey_C)) {
                         clipboard.copy(scene, selectedEntity);
                     }
@@ -1119,6 +1267,8 @@ int main(int argc, char** argv) {
             if (scriptProjectRoot != project.rootPath()) {
                 renderer.setProjectRoot(project.rootPath());
                 scriptModules.unload(scene);
+                if (scriptConfigure.valid())
+                    static_cast<void>(scriptConfigure.get());
                 if (configureScriptBuild(editorRoot, project.rootPath(), project.assetRoot())) {
                     if (!scriptHotReload) {
                         scriptHotReload.emplace(project.assetRoot() / "Scripts",
@@ -1219,11 +1369,13 @@ int main(int argc, char** argv) {
             if (startInitialSceneLoad) {
                 startInitialSceneLoad = false;
                 initialSceneLoadStartedAt = std::chrono::steady_clock::now();
-                Editor::ConsolePanel::info("Loading startup scene in background: " + initialScene.string());
-                initialSceneLoad.emplace(std::async(std::launch::async, [initialScene, &initialSceneAntialiasing] {
-                    auto loadedScene = std::make_unique<Engine::ScenePreset>();
-                    Engine::SceneSerializer::load(*loadedScene, initialScene, initialSceneAntialiasing);
-                    return loadedScene;
+                Editor::ConsolePanel::info(std::string{pendingSceneIsStartup ? "Loading startup scene in background: "
+                                                                             : "Loading scene in background: "} +
+                                           pendingScenePath.string());
+                initialSceneLoad.emplace(std::async(std::launch::async, [path = pendingScenePath] {
+                    BackgroundSceneLoad loaded{std::make_unique<Engine::ScenePreset>(), std::nullopt};
+                    Engine::SceneSerializer::load(*loaded.scene, path, loaded.antialiasing);
+                    return loaded;
                 }));
             }
             if (startEmptySceneResources) {
@@ -1241,6 +1393,9 @@ int main(int argc, char** argv) {
                 std::this_thread::sleep_for(targetFrame - elapsed);
             }
         }
+        // Background model loads reference `content`; let them finish first.
+        Editor::AssetDragDrop::pendingModelLoads().clear();
+        Editor::addRecentProject(project.manifestPath());
         Editor::saveSession({.projectManifest = project.manifestPath(), .scenePath = EditorSceneSession::scenePath()});
         terminal.shutdown();
         scriptModules.unload(scene);

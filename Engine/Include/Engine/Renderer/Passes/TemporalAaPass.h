@@ -27,6 +27,12 @@ class TemporalAaPass final {
     void reset() noexcept;
     /** Clears newly-created histories before the render graph takes ownership. */
     void prepareHistory(VkCommandBuffer commandBuffer);
+    /** Rebinds the virtual-water inputs (bindings 5-7 of the water sets) after
+     *  the water renderer replaced its images. The caller must have retired
+     *  every frame that uses the sets. */
+    void updateWaterInputs(VkImageView waterVelocityView, VkSampler waterVelocitySampler, VkImageView waterMetaView,
+                           VkSampler waterMetaSampler, VkImageView waterSurfaceView,
+                           VkSampler waterSurfaceSampler) noexcept;
     void setVirtualWaterEnabled(bool enabled) noexcept {
         virtualWaterEnabled_ = enabled;
     }
@@ -55,6 +61,10 @@ class TemporalAaPass final {
     [[nodiscard]] std::array<VkImageView, 2> historyViews() const noexcept {
         return {history_[0].imageView(), history_[1].imageView()};
     }
+    /** Linear view depth stored with each history image (R16F, shader-readable). */
+    [[nodiscard]] std::array<VkImageView, 2> historyDepthViews() const noexcept {
+        return {historyDepth_[0].imageView(), historyDepth_[1].imageView()};
+    }
 
   private:
     void initializeHistory(VkCommandBuffer commandBuffer);
@@ -71,7 +81,7 @@ class TemporalAaPass final {
     std::array<HdrBuffer, 2> history_;
     // A sampled copy of the depth that produced each HDR history image.
     // It is stored by the resolve itself, so the two ping-pong histories
-    // always refer to exactly the same frame. Negative depth marks glass.
+    // always refer to exactly the same frame.
     std::array<HdrBuffer, 2> historyDepth_;
     std::uint32_t historyIndex_ = 0;
     bool initialized_ = false;

@@ -71,6 +71,17 @@ class GPUCullingPass {
     void recordCandidates(VkCommandBuffer commandBuffer, std::uint32_t objectCount, const Mat4& clipMatrix,
                           std::uint32_t clipLevel) const;
 
+    /// Builds the caster-ID lists of several clip levels in one pass over the
+    /// objects. Each entry of @p levels supplies a clip matrix and clipLevel;
+    /// they are uploaded to the page-work buffer at @p firstEntry, after the
+    /// page entries. Counters must already be cleared (clearCandidateCounts).
+    void recordCandidateLevels(VkCommandBuffer commandBuffer, std::uint32_t objectCount,
+                               std::span<const ShadowPageWork> levels, std::uint32_t firstEntry) const;
+
+    /// Zeroes every clip level's candidate counter. Transfer write only; the
+    /// caller orders it before recordCandidateLevels().
+    void clearCandidateCounts(VkCommandBuffer commandBuffer) const;
+
     /// Makes all clip-level candidate streams visible to page-culling dispatches.
     void prepareCandidateReads(VkCommandBuffer commandBuffer) const;
 
@@ -86,6 +97,16 @@ class GPUCullingPass {
     /// that page's compact clip-level candidate list.
     void recordCandidatesForPages(VkCommandBuffer commandBuffer, std::uint32_t objectCount,
                                   std::span<const ShadowPageWork> pages) const;
+
+    // recordCandidatesForPages() split into barrier-free phases, so a caller
+    // driving several culling streams can share one barrier per phase:
+    //   preparePageCull     host/transfer writes  -> compute
+    //   recordPageDispatchArgs  compute writes    -> indirect + compute
+    //   recordPageCull      emits its own trailing barrier to the draws.
+    void preparePageCull(VkCommandBuffer commandBuffer, std::span<const ShadowPageWork> pages) const;
+    void recordPageDispatchArgs(VkCommandBuffer commandBuffer, std::span<const ShadowPageWork> pages) const;
+    void recordPageCull(VkCommandBuffer commandBuffer, std::uint32_t objectCount,
+                        std::span<const ShadowPageWork> pages) const;
 
     /** @brief Returns the generated indirect draw-command buffer. */
     [[nodiscard]] VkBuffer indirectBuffer() const noexcept {

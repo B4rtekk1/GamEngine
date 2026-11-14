@@ -159,7 +159,16 @@ bool foliage_name(const ufbx_string name) {
         return false;
     std::string label{name.data, name.length};
     std::ranges::transform(label, label.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return label.find("foliage") != std::string::npos || label.find("leaves") != std::string::npos ||
+    if (label.find("foliage") != std::string::npos)
+        return true;
+    // A tiled ground strewn with leaves (Bistro's "Pavement_Cobblestone_Wet_
+    // Leaves") is a surface, not a card: as foliage it became double-sided,
+    // alpha-tested and lit with card normals.
+    for (const std::string_view surface : {"pavement", "cobble", "ground", "floor", "road", "street", "asphalt",
+                                           "terrain", "brick", "sidewalk"})
+        if (label.find(surface) != std::string::npos)
+            return false;
+    return label.find("leaves") != std::string::npos ||
            label.find("leaf") != std::string::npos || label.find("plant") != std::string::npos ||
            label.find("grass") != std::string::npos;
 }
@@ -295,6 +304,27 @@ void finish_tangents(Mesh& mesh, std::size_t vertexStart, const std::vector<glm:
         const float sign = glm::dot(glm::cross(normal, t), bitangents[i]) < 0 ? -1.0F : 1.0F;
         vertex.tangent = Vec4{t.x, t.y, t.z, sign};
     }
+}
+
+// BistroInterior*.fbx ships its own copy of the shop front (door, window
+// frames and glass under "Bistro_Research_Exterior_*" nodes) a few
+// centimetres off the one in BistroExterior.fbx. Opaque panes hid the second
+// copy; through transmissive glass both frames show. The interior is
+// assembled with the exterior, so its copy of the facade is dropped. Its
+// concrete wall pieces stay: the exterior's walls face the street only.
+[[nodiscard]] bool bistro_interior_facade_duplicate(const ufbx_node& node) {
+    const std::string_view name{node.name.data ? node.name.data : "", node.name.length};
+    if (name.find("Bistro_Research_Exterior") == std::string_view::npos)
+        return false;
+    for (std::size_t slot = 0; slot < node.materials.count; ++slot) {
+        const ufbx_material* material = node.materials.data[slot];
+        if (material == nullptr)
+            continue;
+        const std::string_view materialName{material->name.data ? material->name.data : "", material->name.length};
+        if (materialName.find("Concrete") != std::string_view::npos)
+            return false;
+    }
+    return true;
 }
 
 bool append_node(const ufbx_node& node, const ufbx_scene& scene, Mesh& result) {
@@ -528,6 +558,31 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
             material.normalTexture = image_index(source.fbx.normal_map, imageIndices);
         material.aoTexture = image_index(source.pbr.ambient_occlusion, imageIndices);
         material.emissiveTexture = image_index(source.pbr.emission_color, imageIndices);
+        // Emission used to keep the texture with a zero intensity, so glowing
+        // surfaces (lamp glass, signs) imported dark. An emission map is the
+        // colour itself; a stated non-black colour tints it.
+        const auto& emissionColor = source.pbr.emission_color;
+        const bool explicitEmissionColor =
+            emissionColor.has_value && (emissionColor.value_vec3.x > 0.0 || emissionColor.value_vec3.y > 0.0 ||
+                                        emissionColor.value_vec3.z > 0.0);
+        const float emissionFactor =
+            source.pbr.emission_factor.has_value ? static_cast<float>(source.pbr.emission_factor.value_real) : 1.0F;
+        if ((material.emissiveTexture >= 0 || explicitEmissionColor) && emissionFactor > 0.0F) {
+            material.emissiveColor = explicitEmissionColor
+                                         ? Math::Color{static_cast<float>(emissionColor.value_vec3.x),
+                                                       static_cast<float>(emissionColor.value_vec3.y),
+                                                       static_cast<float>(emissionColor.value_vec3.z)}
+                                         : Math::Color::white();
+            material.emissiveIntensity = emissionFactor;
+            // Bistro's emission maps encode lamp glass at a fraction of its
+            // brightness relative to the lights the lamps carry. Coloured
+            // string-light bulbs stay a little dimmer so the display transform
+            // keeps their hue instead of clipping them to white.
+            if (bistro) {
+                const std::string_view materialName{source.name.data ? source.name.data : "", source.name.length};
+                material.emissiveIntensity *= materialName.find("StringLights") != std::string_view::npos ? 3.0F : 1.5F;
+            }
+        }
         if (opacitySource.image >= 0 && opacitySource.image == material.baseColorTexture) {
             const std::string_view name{source.name.data ? source.name.data : "", source.name.length};
             std::clog << "FBX material '" << name << "': BaseColor and opacity reference the same image"
@@ -590,11 +645,60 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
                 material.alphaCutoff = 0.3F;
             }
         }
+        // Bistro's glass is authored for specular transmission, which the
+        // FBX material does not carry: its BaseColor maps are flat dark
+        // greys (frosted panes mid grey) and FBX transparency marks every
+        // pane as blended. Render each one as transmissive glass (GlassPass),
+        // chosen by name. The emissive lamp glass stays an opaque emitter
+        // and the *_MASKED panes, fully transparent in BaseColor.A, stay cut
+        // out as authored.
+        const bool glass = name.find("Glass") != std::string_view::npos ||
+                           name.find("glass") != std::string_view::npos;
+        if (bistro && glass && material.emissiveIntensity <= 0.0F &&
+            name.find("MASKED") == std::string_view::npos) {
+            const bool frosted = name.find("Frosted") != std::string_view::npos ||
+                                 name.find("Frozen") != std::string_view::npos;
+            const bool bottle = name.find("Bottle") != std::string_view::npos;
+            material.baseColorTexture = -1;
+            material.opacityTexture = -1;
+            material.metallicRoughnessTexture = -1;
+            material.emissiveTexture = -1;
+            material.alphaMode = AlphaMode::Opaque;
+            material.shadingModel = MaterialShadingModel::Standard;
+            material.vertexColorUsage = VertexColorUsage::None;
+            // Window panes are single quads seen from the street and the room.
+            material.doubleSided = true;
+            material.metallic = 0.0F;
+            material.roughness = frosted ? 0.3F : 0.02F;
+            material.transmission = 1.0F;
+            material.ior = 1.52F;
+            // Glass reflectivity (F0 scale): shop windows read as mirrors of
+            // the street at night, which physical F0 alone undersells.
+            material.specular = frosted ? 1.5F : 2.5F;
+            material.baseColor = Math::Color{1.0F, 1.0F, 1.0F, 1.0F};
+            if (bottle) {
+                // Coloured bottle glass: green, wine bottles nearly opaque.
+                const bool wine = name.find("Wine") != std::string_view::npos;
+                material.thickness = 0.004F;
+                material.attenuationColor =
+                    wine ? Math::Color{0.18F, 0.32F, 0.12F, 1.0F} : Math::Color{0.55F, 0.75F, 0.45F, 1.0F};
+                material.attenuationDistance = wine ? 0.004F : 0.008F;
+            } else {
+                // ~5 mm float glass with its faint green tint.
+                material.thickness = 0.005F;
+                material.attenuationColor = Math::Color{0.85F, 0.95F, 0.9F, 1.0F};
+                material.attenuationDistance = 0.08F;
+                material.dirtIntensity = frosted ? 0.0F : 0.04F;
+            }
+        }
         result.materials.push_back(material);
     }
     result.materials.emplace_back();
     result.materials.back().vertexColorUsage = VertexColorUsage::None;
+    const bool bistroInterior = bistro && path.stem().string().starts_with("BistroInterior");
     for (std::size_t i = 0; i < scene->nodes.count; ++i) {
+        if (bistroInterior && bistro_interior_facade_duplicate(*scene->nodes.data[i]))
+            continue;
         if (!append_node(*scene->nodes.data[i], *scene, result))
             return {};
     }

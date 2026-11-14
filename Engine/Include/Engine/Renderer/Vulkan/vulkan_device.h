@@ -123,6 +123,25 @@ class VulkanDevice final {
         return rayQuerySupported_;
     }
 
+    /**
+     * Whether ray tracing pipelines can trace cluster BLASes in a partitioned
+     * TLAS with shader execution reordering (VK_KHR_ray_tracing_pipeline,
+     * VK_NV_cluster/partitioned_acceleration_structure and
+     * VK_EXT_ray_tracing_invocation_reorder). DDGI is available only then.
+     */
+    [[nodiscard]] bool supportsClusterRayTracing() const noexcept {
+        return clusterRayTracingSupported_;
+    }
+
+    /**
+     * Whether triangle BLASes can carry opacity micromaps (VK_EXT_opacity_micromap
+     * with 64-bit shader integers for the baking kernel), so alpha-tested
+     * geometry joins the ray query TLAS without any-hit shading.
+     */
+    [[nodiscard]] bool supportsOpacityMicromaps() const noexcept {
+        return opacityMicromapSupported_;
+    }
+
     [[nodiscard]] const MemoryBudgetManager& memoryBudgetManager() const noexcept {
         return memoryBudgetManager_;
     }
@@ -145,6 +164,8 @@ class VulkanDevice final {
     bool rayQueryExtensionSupported_ = false;
     bool deferredHostOperationsExtensionSupported_ = false;
     bool rayQuerySupported_ = false;
+    bool clusterRayTracingSupported_ = false;
+    bool opacityMicromapSupported_ = false;
     MemoryBudgetManager memoryBudgetManager_{};
 
     [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;

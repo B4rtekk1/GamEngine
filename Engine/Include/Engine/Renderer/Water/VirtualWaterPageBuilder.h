@@ -60,10 +60,15 @@ struct SpectrumLODEntry final {
 };
 
 [[nodiscard]] float spectralWeight(float wavelength, float cellSize) noexcept;
+/** True for the 3x3 coarse-level core that the finer level covers for every hole offset. */
 [[nodiscard]] bool pageIsInactive(std::uint32_t level, std::uint32_t x, std::uint32_t z) noexcept;
-[[nodiscard]] std::uint32_t pageStitchMask(std::uint32_t level, std::uint32_t x, std::uint32_t z) noexcept;
+/** True when the finer level covers this coarse page for the given camera-dependent hole offset (0 or 1). */
+[[nodiscard]] bool pageIsCovered(std::uint32_t level, std::uint32_t x, std::uint32_t z, std::uint32_t holeOffsetX,
+                                 std::uint32_t holeOffsetZ) noexcept;
+[[nodiscard]] std::uint32_t pageStitchMask(std::uint32_t level, std::uint32_t x, std::uint32_t z,
+                                           std::uint32_t holeOffsetX = 0U, std::uint32_t holeOffsetZ = 0U) noexcept;
 
-/** Builds the 448 logical pages of one ocean. No geometry is duplicated here. */
+/** Builds the logical pages of one ocean (ActivePagesPerBody at most). No geometry is duplicated here. */
 [[nodiscard]] SpectrumLODEntry spectrumLOD(std::span<const WaterGerstnerWave> waves, std::uint32_t waveCount,
                                            std::uint32_t spectrumRevision, float cellSize);
 [[nodiscard]] std::vector<GPUVirtualWaterPage> buildOceanPageDomain(const OceanDomainConfig& config);

@@ -29,20 +29,31 @@ enum class MaterialShaderSource : std::uint8_t {
 };
 
 inline constexpr std::size_t MaterialShaderCount = 9;
-/** GPU-culling bins: eight built-ins plus room for cooked Shader Graphs. */
+/** GPU-culling bins: nine built-ins plus room for cooked Shader Graphs. */
 inline constexpr std::size_t MaterialProgramSlotCount = 32;
 inline constexpr std::size_t PbrNormalProgramSlot = 4;
 inline constexpr std::size_t PbrExtendedProgramSlot = 5;
 inline constexpr std::size_t PbrFoliageProgramSlot = 6;
 inline constexpr std::size_t PbrTerrainProgramSlot = 7;
-inline constexpr std::size_t GlassThinProgramSlot = 8;
-
-[[nodiscard]] constexpr bool usesGlassThin(const PBRMaterial& material) noexcept {
-    return material.transmission > 0.0F && material.metallic < 1.0F;
-}
+/** Transmissive PBR materials; drawn by GlassPass after the opaque scene. */
+inline constexpr std::size_t GlassProgramSlot = 8;
 
 [[nodiscard]] constexpr std::size_t materialShaderIndex(const MaterialShader shader) noexcept {
     return static_cast<std::size_t>(shader);
+}
+
+/** A PBR material that refracts the scene behind it instead of being opaque. */
+[[nodiscard]] constexpr bool usesGlass(const PBRMaterial& material) noexcept {
+    return material.transmission > 0.0F && material.metallic < 1.0F;
+}
+
+/**
+ * Program slots composited over the finished opaque scene by their own
+ * passes (WaterPass / Virtual Water, GlassPass). The depth prepass and the
+ * opaque lighting pass never draw them.
+ */
+[[nodiscard]] constexpr bool isCompositedProgramSlot(const std::size_t slot) noexcept {
+    return slot == static_cast<std::size_t>(MaterialShader::Water) || slot == GlassProgramSlot;
 }
 
 /** Pipeline-relevant state authored with a surface material. */

@@ -85,7 +85,9 @@ void linkNeighbours(std::vector<GPUVirtualWaterPage>& pages, const std::uint32_t
     };
 
     for (GPUVirtualWaterPage& page : pages) {
-        if ((page.flags & PageSpline) != 0U)
+        // Links are only consumed by the sparse state passes (border sampling
+        // and update-rate tightening), so stateless pages skip the O(n) search.
+        if ((page.flags & PageSpline) != 0U || (page.executionFlags & ExecutionSparseState) == 0U)
             continue;
         const float spanX = page.maxX - page.minX;
         const float spanZ = page.maxZ - page.minZ;
@@ -113,10 +115,10 @@ void addStitchedCellIndices(Mesh& mesh, const std::uint32_t a, const std::uint32
         mesh.indices.insert(mesh.indices.end(), {b, midpoint, a, midpoint, d, a, midpoint, c, d});
         break;
     case StitchEdge::Top:
-        mesh.indices.insert(mesh.indices.end(), {d, midpoint, a, midpoint, b, a, midpoint, c, b});
+        mesh.indices.insert(mesh.indices.end(), {a, b, midpoint, a, midpoint, d, b, c, midpoint});
         break;
     case StitchEdge::Left:
-        mesh.indices.insert(mesh.indices.end(), {a, midpoint, b, midpoint, c, b, midpoint, d, c});
+        mesh.indices.insert(mesh.indices.end(), {a, b, midpoint, midpoint, b, c, midpoint, c, d});
         break;
     }
 }
@@ -129,19 +131,28 @@ float spectralWeight(const float wavelength, const float cellSize) noexcept {
 }
 
 bool pageIsInactive(const std::uint32_t level, const std::uint32_t x, const std::uint32_t z) noexcept {
-    return level != 0U && x >= 2U && x < 6U && z >= 2U && z < 6U;
+    return level != 0U && x >= 3U && x < 6U && z >= 3U && z < 6U;
 }
 
-std::uint32_t pageStitchMask(const std::uint32_t level, const std::uint32_t x, const std::uint32_t z) noexcept {
+bool pageIsCovered(const std::uint32_t level, const std::uint32_t x, const std::uint32_t z,
+                   const std::uint32_t holeOffsetX, const std::uint32_t holeOffsetZ) noexcept {
+    return level != 0U && x >= 2U + holeOffsetX && x < 6U + holeOffsetX && z >= 2U + holeOffsetZ &&
+           z < 6U + holeOffsetZ;
+}
+
+std::uint32_t pageStitchMask(const std::uint32_t level, const std::uint32_t x, const std::uint32_t z,
+                             const std::uint32_t holeOffsetX, const std::uint32_t holeOffsetZ) noexcept {
     if (level == 0U)
         return 0U;
-    if (x == 6U && z >= 2U && z < 6U)
+    const bool holeRows = z >= 2U + holeOffsetZ && z < 6U + holeOffsetZ;
+    const bool holeColumns = x >= 2U + holeOffsetX && x < 6U + holeOffsetX;
+    if (x == 6U + holeOffsetX && holeRows)
         return StitchLeft;
-    if (x == 1U && z >= 2U && z < 6U)
+    if (x == 1U + holeOffsetX && holeRows)
         return StitchRight;
-    if (z == 6U && x >= 2U && x < 6U)
+    if (z == 6U + holeOffsetZ && holeColumns)
         return StitchBottom;
-    if (z == 1U && x >= 2U && x < 6U)
+    if (z == 1U + holeOffsetZ && holeColumns)
         return StitchTop;
     return 0U;
 }
@@ -208,6 +219,8 @@ std::vector<GPUVirtualWaterPage> buildOceanPageDomain(const OceanDomainConfig& c
                 page.maxX = page.originX + pageSize;
                 page.maxZ = page.originZ + pageSize;
                 page.level = level;
+                // Coarse-level hole placement and stitching follow the camera
+                // (waterClipStitchMask); the stored mask is the centred layout.
                 page.stitchMask = pageStitchMask(level, x, z);
                 page.flags = PageActive | PageCameraRelative;
                 page.instanceIndex = config.instanceIndex;

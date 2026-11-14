@@ -18,7 +18,13 @@ struct ShaderGraphProgram final {
     std::filesystem::path spirvPath;
     /// Color-only module used by passes without a velocity attachment.
     std::filesystem::path noVelocitySpirvPath;
+    /// VK_EXT_mesh_shader twins of the two modules above.
+    std::filesystem::path meshSpirvPath;
+    std::filesystem::path meshNoVelocitySpirvPath;
 };
+
+/** Mesh-shader twin of a cooked graph module: `<stem>_meshshader.spv` beside it. */
+[[nodiscard]] std::filesystem::path meshShaderGraphModule(const std::filesystem::path& module);
 
 /**
  * Turns a graph into a complete forward shader module. The graph controls
@@ -52,7 +58,9 @@ class ShaderGraphMaterialCompiler final {
 /** Render-thread owned cache. One graph program creates one VkPipeline per render state. */
 class ShaderGraphPipelineCache final {
   public:
-    void initialize(VkDevice device, GraphicsPipelineOptions baseOptions);
+    /// @p meshletDrawLayout: set 1 of the mesh-shader twins; null builds none.
+    void initialize(VkDevice device, GraphicsPipelineOptions baseOptions,
+                    VkDescriptorSetLayout meshletDrawLayout = VK_NULL_HANDLE);
     // Releases Vulkan pipelines but preserves program-to-slot mappings
     // across render-pass recreation.
     void destroy() noexcept;
@@ -60,6 +68,8 @@ class ShaderGraphPipelineCache final {
     [[nodiscard]] std::uint32_t getOrCreate(ShaderProgramId program, const std::filesystem::path& spirv,
                                             const MaterialRenderState& state);
     [[nodiscard]] const GraphicsPipeline* find(std::uint32_t slot) const noexcept;
+    /// Mesh-shader twin of the slot's pipeline, or null when it has none.
+    [[nodiscard]] const GraphicsPipeline* findMesh(std::uint32_t slot, bool* doubleSided = nullptr) const noexcept;
 
   private:
     struct Entry final {
@@ -67,12 +77,14 @@ class ShaderGraphPipelineCache final {
         MaterialRenderState state{};
         std::uint32_t slot{};
         std::unique_ptr<GraphicsPipeline> pipeline;
+        std::unique_ptr<GraphicsPipeline> meshPipeline;
     };
 
     void createPipeline(Entry& entry);
 
     VkDevice device_{VK_NULL_HANDLE};
     GraphicsPipelineOptions baseOptions_{};
+    VkDescriptorSetLayout meshletDrawLayout_{VK_NULL_HANDLE};
     std::unordered_map<ShaderProgramId, Entry> entries_;
 };
 } // namespace Engine

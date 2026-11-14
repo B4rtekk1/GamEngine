@@ -1,138 +1,9 @@
-void synchronizeGlassAtlasSlots() {
-    const Registry& readRegistry = registry;
-    const std::uint64_t structureRevision = readRegistry.structuralRevision();
-    const std::uint64_t glassRevision = readRegistry.componentRevision<GlassDestructionComponent>();
-    const std::uint64_t meshRevision = readRegistry.componentRevision<MeshRendererComponent>();
-    const std::uint64_t uuidRevision = readRegistry.componentRevision<UUIDComponent>();
-    if (glassAtlasSyncedRegistry == &registry && glassAtlasStructureRevision == structureRevision &&
-        glassAtlasComponentRevision == glassRevision && glassAtlasMeshRevision == meshRevision &&
-        glassAtlasUuidRevision == uuidRevision) {
-        return;
-    }
-    std::array<GlassAtlasOwner, 512> owners{};
-    std::unordered_map<Entity, unsigned> slots;
-    unsigned count = 0;
-    // Keep surviving panes in their previous order, then fill new slots.
-    for (const auto& owner : glassAtlasOwners) {
-        if (!readRegistry.valid(owner.entity) || !readRegistry.has<GlassDestructionComponent>(owner.entity) ||
-            !readRegistry.has<MeshRendererComponent>(owner.entity) || !readRegistry.has<UUIDComponent>(owner.entity) ||
-            readRegistry.get<UUIDComponent>(owner.entity).value != owner.uuid)
-            continue;
-        slots.emplace(owner.entity, count);
-        owners[count++] = owner;
-    }
-    readRegistry.view<GlassDestructionComponent, MeshRendererComponent, UUIDComponent>(
-        [&](Entity entity, const auto&, const auto&, const auto& uuid) {
-            if (count >= owners.size() || slots.contains(entity))
-                return;
-            slots.emplace(entity, count);
-            owners[count++] = {entity, uuid.value};
-        });
-    glassAtlasOwners = owners;
-    glassAtlasPaneCount = count;
-    readRegistry.view<GlassDestructionComponent, MeshRendererComponent, UUIDComponent>(
-        [&](Entity entity, const auto& glass, const auto&, const auto&) {
-            const auto entry = slots.find(entity);
-            const unsigned slot = entry == slots.end() ? ~0U : entry->second;
-            if (glass.crackAtlasIndex == slot)
-                return;
-            glass.crackAtlasIndex = slot;
-            registry.markChanged<GlassDestructionComponent>(entity);
-            const auto records = sceneGpu.renderableIndices.find(entity);
-            if (records == sceneGpu.renderableIndices.end())
-                return;
-            for (auto index : records->second) {
-                instanceModels[index].scaleBase.w = slot == ~0U ? 0.0F : std::bit_cast<float>(slot + 1U);
-                markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
-            }
-        });
-    glassAtlasSyncedRegistry = &registry;
-    glassAtlasStructureRevision = structureRevision;
-    glassAtlasComponentRevision = glassRevision;
-    glassAtlasMeshRevision = meshRevision;
-    glassAtlasUuidRevision = uuidRevision;
-}
-
-[[nodiscard]] float glassCrackSlot(Entity entity) {
-    const Registry& readRegistry = registry;
-    if (!readRegistry.has<GlassDestructionComponent>(entity))
-        return 0.0F;
-    const auto& glass = readRegistry.get<GlassDestructionComponent>(entity);
-    const unsigned slot = glass.crackAtlasIndex;
-    if (slot >= glassAtlasPaneCount)
-        return 0.0F;
-    const auto& owner = glassAtlasOwners[slot];
-    if (owner.entity != entity || owner.uuid != readRegistry.get<UUIDComponent>(entity).value)
-        return 0.0F;
-    return std::bit_cast<float>(slot + 1U);
-}
-
-// Each glass mesh version keeps immutable packed geometry. Local impact
-// refinement replaces the handle while preserving detached section IDs.
-// Detached sections are inactive
-// GPU objects; compute culling compacts only the live indirect commands.
-[[nodiscard]] bool glassSectionVisible(const RenderableRecord& record) const {
-    if (!scene.registry().has<GlassDestructionComponent>(record.entity))
-        return true;
-    const auto& glass = scene.registry().get<GlassDestructionComponent>(record.entity);
-    // Fragment slots and the final intact slot are reserved at load time.
-    // Legacy unprepared meshes still draw normally until preparation.
-    const auto& sections =
-        scene.registry().get<MeshRendererComponent>(record.entity).mesh.resource()->metadata.sections;
-    if (sections.size() != glass.fragments.size() + 1)
-        return !glass.fractured;
-    if (record.sectionIndex >= glass.fragments.size())
-        return !glass.fractured;
-    if (!glass.fractured)
-        return false;
-    const auto& fragment = glass.fragments[record.sectionIndex];
-    return fragment.attached || scene.registry().valid(fragment.debrisEntity);
-}
-
-[[nodiscard]] Entity glassSectionEntity(const RenderableRecord& record) const {
-    if (scene.registry().has<GlassDestructionComponent>(record.entity)) {
-        const auto& glass = scene.registry().get<GlassDestructionComponent>(record.entity);
-        if (glass.fractured && record.sectionIndex < glass.fragments.size()) {
-            const auto& fragment = glass.fragments[record.sectionIndex];
-            if (!fragment.attached && scene.registry().valid(fragment.debrisEntity))
-                return fragment.debrisEntity;
-        }
-    }
-    return record.entity;
-}
-
-[[nodiscard]] glm::mat4 glassSectionModel(const RenderableRecord& record) const {
-    const auto source = glassSectionEntity(record);
-    const auto model = scene.registry().get<Transform>(source).worldMatrix().native();
-    if (source == record.entity)
-        return model;
-    const auto& fragment =
-        scene.registry().get<GlassDestructionComponent>(record.entity).fragments[record.sectionIndex];
-    return glm::translate(model, glm::vec3{-fragment.center, 0.0F});
-}
-
-[[nodiscard]] std::uint32_t liveBatchIndexCount(std::size_t batchIndex) const {
-    const auto& batch = instanceBatches[batchIndex];
-    const auto& indices = sceneGpu.batchRenderableIndices[batchIndex];
-    if (indices.empty() || !scene.registry().has<GlassDestructionComponent>(renderables[indices.front()].entity))
-        return batch.indexCount;
-    for (auto index : sceneGpu.batchRenderableIndices[batchIndex])
-        if (renderables[index].visible) {
-            const auto* resource = static_cast<const MeshGpuResource*>(batch.mesh);
-            const auto& sections = resource->metadata.sections;
-            const auto section = renderables[index].sectionIndex;
-            return section < sections.size() ? sections[section].indexCount : resource->metadata.indexCount;
-        }
-    return 0;
-}
-
 void refreshCullingBatchObjects() {
     constexpr std::size_t modelDiagonalStride = 5;
     const std::uint32_t objectCount = static_cast<std::uint32_t>(instanceBatches.size());
     gpuObjects.resize(objectCount);
     for (std::uint32_t i = 0; i < objectCount; ++i) {
         InstanceBatch& batch = instanceBatches[i];
-        batch.indexCount = liveBatchIndexCount(i);
         auto& object = gpuObjects[i];
         object.model = {};
         object.model.data[0] = 1.0F;
@@ -155,6 +26,34 @@ void refreshCullingBatchObjects() {
         object.lod2IndexCount = batch.lod2IndexCount;
         object.lod1DistanceSq = batch.lod1Distance * batch.lod1Distance;
         object.lod2DistanceSq = batch.lod2Distance * batch.lod2Distance;
+        // Per-meshlet VSM rasterization: undisplaced sections, opaque
+        // one-sided or foliage, whose meshlet triangles are exactly their
+        // LOD0 indices in the shared index heap.
+        // Foliage batches form the two-sided stream, whose casters keep the
+        // alpha test (shadow_meshlet_mesh.slang, SHADOW_MESH_ALPHA_TEST).
+        const bool meshletShadows = batch.meshletCount != 0 && meshletIndexedDrawsSupported() &&
+                                    !batch.displacedGeometry &&
+                                    (batch.foliagePipeline || batch.alphaMode == AlphaMode::Opaque);
+        object.firstMeshlet = meshletShadows ? batch.firstMeshlet : 0U;
+        object.meshletCount = meshletShadows ? batch.meshletCount : 0U;
+    }
+    // Instances may have changed slots on a reused allocation.
+    if (meshletBinBudget != 0) {
+        computeMeshletBinOffsets();
+        uploadMeshletBinOffsets();
+    }
+    // Pack the binned streams: each slot holds exactly its objects.
+    std::array<std::array<std::uint32_t, Culling::DrawBinCount>, 2> binCounts{};
+    for (const auto& object : gpuObjects)
+        if (object.shader < Culling::DrawBinCount)
+            ++binCounts[object.twoSided != 0U ? 1 : 0][object.shader];
+    for (std::size_t stream = 0; stream < drawBinOffsets.size(); ++stream) {
+        std::uint32_t offset = 0;
+        for (std::uint32_t bin = 0; bin < Culling::DrawBinOffsetCount; ++bin) {
+            drawBinOffsets[stream][bin] = offset;
+            if (bin < Culling::DrawBinCount)
+                offset += binCounts[stream][bin];
+        }
     }
     const Culling::GPUObjectData emptyObject{};
     for (Buffer& buffer : cullingObjectBuffers) {
@@ -165,6 +64,87 @@ void refreshCullingBatchObjects() {
     }
     for (RenderableRecord& record : renderables)
         record.cullingDirtyFrames = 0;
+}
+
+struct ShadowPageRequirements {
+    std::array<std::uint32_t, 2> casters{};
+    std::array<std::uint32_t, 2> instances{};
+};
+
+// What one VSM page can receive per category: culling keeps only shadow
+// casters of the pass's category (gpu_culling.slang), and the compact
+// transforms fall back to the scene streams beyond MaxCasterInstancesPerPage.
+[[nodiscard]] ShadowPageRequirements shadowPageRequirements() const {
+    std::array<std::uint64_t, 2> casters{};
+    std::array<std::uint64_t, 2> instances{};
+    for (const InstanceBatch& batch : instanceBatches) {
+        if (!batch.castShadow)
+            continue;
+        const std::size_t category = batch.foliagePipeline ? 1 : 0;
+        ++casters[category];
+        instances[category] += batch.instanceCount;
+    }
+    ShadowPageRequirements result;
+    for (std::size_t category = 0; category < 2; ++category) {
+        result.casters[category] = static_cast<std::uint32_t>(std::max<std::uint64_t>(1, casters[category]));
+        result.instances[category] = static_cast<std::uint32_t>(std::clamp<std::uint64_t>(
+            instances[category], 1, ShadowMap::MaxCasterInstancesPerPage));
+    }
+    return result;
+}
+
+// Binned indirect buffers hold twice the object count (see createCullingResources).
+static constexpr std::size_t BinnedIndirectSlack = 2;
+
+// Packs the meshlet draw stream: each material slot reserves the meshlets of
+// the instances drawn with it (plus headroom for merged/added instances),
+// instead of every visible meshlet per slot (x32).
+void computeMeshletBinOffsets() {
+    std::array<std::uint64_t, Culling::DrawBinCount> counts{};
+    const auto& meshes = sceneGpu.database.meshes();
+    const auto& databaseMaterials = sceneGpu.database.materials();
+    for (const auto& instance : sceneGpu.database.instances()) {
+        if (!instance.alive || instance.meshId >= meshes.size() || instance.materialId >= databaseMaterials.size())
+            continue;
+        const std::uint32_t slot = databaseMaterials[instance.materialId].shaderSlot;
+        if (slot < Culling::DrawBinCount)
+            counts[slot] += meshes[instance.meshId].meshletCount;
+    }
+    const auto pack = [&](const bool headroom) {
+        std::uint64_t offset = 0;
+        for (std::uint32_t bin = 0; bin < Culling::DrawBinOffsetCount; ++bin) {
+            meshletBinOffsets[bin] = static_cast<std::uint32_t>(std::min<std::uint64_t>(offset, meshletBinBudget));
+            if (bin < Culling::DrawBinCount)
+                offset += counts[bin] + (headroom && counts[bin] != 0 ? counts[bin] / 8U + 64U : 0U);
+        }
+        return offset <= meshletBinBudget;
+    };
+    if (!pack(true))
+        static_cast<void>(pack(false));
+}
+
+[[nodiscard]] VkDeviceSize meshletCommandOffset(const std::uint32_t slot) const noexcept {
+    if (slot >= Culling::DrawBinCount)
+        return 0;
+    return static_cast<VkDeviceSize>(meshletBinOffsets[slot]) * sizeof(VkDrawIndexedIndirectCommand);
+}
+
+void uploadMeshletBinOffsets() {
+    for (Buffer& buffer : meshletIndexedDrawCountBuffers) {
+        if (buffer.handle() == VK_NULL_HANDLE)
+            continue;
+        buffer.uploadDeviceLocal(meshletBinOffsets.data(), sizeof(meshletBinOffsets),
+                                 sizeof(std::uint32_t) * MaterialProgramSlotCount, commandPool,
+                                 vulkanDevice.graphicsQueue());
+    }
+}
+
+// Byte offset of a material program slot's commands in a binned stream
+// (indirectDraws / sceneIndirectDraws: single-sided, foliage lists: two-sided).
+[[nodiscard]] VkDeviceSize binnedCommandOffset(const std::uint32_t slot, const bool twoSided) const noexcept {
+    if (slot >= Culling::DrawBinCount)
+        return 0;
+    return static_cast<VkDeviceSize>(drawBinOffsets[twoSided ? 1 : 0][slot]) * sizeof(VkDrawIndexedIndirectCommand);
 }
 
 [[nodiscard]] bool canReuseCullingResources() const {
@@ -189,37 +169,16 @@ void refreshCullingBatchObjects() {
             return false;
     }
     const VkDeviceSize indirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
-                                       std::max<std::size_t>(1, instanceBatches.size()) * MaterialProgramSlotCount;
-    const VkDeviceSize shadowIndirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
-                                             std::max<std::size_t>(1, instanceBatches.size()) *
-                                             ShadowMap::MaxPageUpdatesPerFrame;
-    const VkDeviceSize shadowCandidateBytes =
-        sizeof(std::uint32_t) * std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::ClipLevelCount;
-    const VkDeviceSize shadowTransformBytes =
-        sizeof(RendererInstanceData) *
-        std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()), ShadowMap::MaxCasterInstancesPerPage) *
-        ShadowMap::MaxPageUpdatesPerFrame;
-    const VkDeviceSize shadowVisibleBytes =
-        sizeof(Culling::ShadowVisibleInstance) *
-        std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()), ShadowMap::MaxCasterInstancesPerPage) *
-        ShadowMap::MaxPageUpdatesPerFrame;
-    const VkDeviceSize shadowMaterialBytes =
-        sizeof(std::uint32_t) *
-        std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()), ShadowMap::MaxCasterInstancesPerPage) *
-        ShadowMap::MaxPageUpdatesPerFrame;
+                                       std::max<std::size_t>(1, instanceBatches.size()) * BinnedIndirectSlack;
+    // Page strides are fixed when the culling passes are created.
+    const ShadowPageRequirements shadowRequired = shadowPageRequirements();
+    for (std::size_t category = 0; category < 2; ++category)
+        if (shadowRequired.casters[category] > shadowPageCasterCapacity[category] ||
+            shadowRequired.instances[category] > shadowPageInstanceCapacity[category])
+            return false;
     for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
         if (cullingObjectBuffers[frame].size() < objectBytes || visibleInstanceBuffers[frame].size() < visibleBytes ||
-            indirectBuffers[frame].size() < indirectBytes || foliageIndirectBuffers[frame].size() < indirectBytes ||
-            shadowIndirectBuffers[frame].size() < shadowIndirectBytes ||
-            shadowTwoSidedIndirectBuffers[frame].size() < shadowIndirectBytes ||
-            shadowCandidateBuffers[frame].size() < shadowCandidateBytes ||
-            shadowTwoSidedCandidateBuffers[frame].size() < shadowCandidateBytes ||
-            shadowInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
-            shadowTwoSidedInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
-            shadowVisibleInstanceBuffers[frame].size() < shadowVisibleBytes ||
-            shadowTwoSidedVisibleInstanceBuffers[frame].size() < shadowVisibleBytes ||
-            shadowInstanceMaterialBuffers[frame].size() < shadowMaterialBytes ||
-            shadowTwoSidedInstanceMaterialBuffers[frame].size() < shadowMaterialBytes)
+            indirectBuffers[frame].size() < indirectBytes || foliageIndirectBuffers[frame].size() < indirectBytes)
             return false;
     }
     return true;
@@ -277,9 +236,27 @@ void initializeHiZLayouts() {
         throw std::runtime_error("Could not initialize Hi-Z layouts");
 }
 
+// Set 1 of the mesh-shader forward pipelines; see MeshletDraw.slang. Outlives
+// the per-scene culling resources because the forward passes embed it.
+void ensureMeshletDrawLayout() {
+    if (meshletDrawDescriptorSetLayout != VK_NULL_HANDLE || !vulkanDevice.supportsMeshShaders())
+        return;
+    VkDescriptorSetLayoutBinding bindings[6]{};
+    for (std::uint32_t binding = 0; binding < std::size(bindings); ++binding)
+        // Compute: the visibility-buffer resolve fetches the same meshlets.
+        bindings[binding] = {binding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                             VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    const VkDescriptorSetLayoutCreateInfo info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                                               .bindingCount = static_cast<std::uint32_t>(std::size(bindings)),
+                                               .pBindings = bindings};
+    if (vkCreateDescriptorSetLayout(device, &info, nullptr, &meshletDrawDescriptorSetLayout) != VK_SUCCESS)
+        throw std::runtime_error("Could not create mesh-shader meshlet descriptor-set layout");
+}
+
 void createCullingResources() {
+    ensureMeshletDrawLayout();
     auto uploadBatch = uploadContext.beginBatch();
-    constexpr std::size_t cullingDescriptorBindingCount = 15;
+    constexpr std::size_t cullingDescriptorBindingCount = 17;
     const std::uint32_t grassBinCount =
         std::max(1u, static_cast<std::uint32_t>(sceneGpu.database.meshes().size() * 3u));
 
@@ -298,6 +275,10 @@ void createCullingResources() {
     const std::uint32_t meshletCapacity =
         static_cast<std::uint32_t>(std::max<std::uint64_t>(1, requiredVisibleMeshlets));
     meshletVisibleCapacity = meshletCapacity;
+    // Packed slots: the meshlets with 1/8 headroom per slot, then the
+    // maxDrawCount (meshletCapacity) tail the indirect-count draw may span.
+    meshletBinBudget = meshletCapacity + meshletCapacity / 8U + 64U * Culling::DrawBinCount;
+    computeMeshletBinOffsets();
     // An empty ECS scene still renders the sky, editor UI, and fallback
     // camera.  Keep the per-view UBOs and descriptor-backed culling
     // resources alive with inert storage entries; logical draw counts
@@ -309,7 +290,18 @@ void createCullingResources() {
     // Passes and indirect draws require a non-zero physical capacity.
     // Runtime culling still receives objectCount, which may be zero.
     const auto passCapacity = genericCapacity;
-    const auto shadowPassCapacity = passCapacity;
+    // VSM page lists: per category, the casters with the same 1.5x headroom
+    // the camera lists use, instead of every object for both categories.
+    const ShadowPageRequirements shadowRequired = shadowPageRequirements();
+    for (std::size_t category = 0; category < 2; ++category) {
+        const std::uint32_t casters = shadowRequired.casters[category];
+        shadowPageCasterCapacity[category] = casters + casters / 2U + 1U;
+        const std::uint32_t instances = shadowRequired.instances[category];
+        shadowPageInstanceCapacity[category] =
+            std::min<std::uint32_t>(instances + instances / 2U + 1U, ShadowMap::MaxCasterInstancesPerPage);
+    }
+    const auto shadowPassCapacity = shadowPageCasterCapacity[0];
+    const auto shadowTwoSidedPassCapacity = shadowPageCasterCapacity[1];
     const auto clusterCountFor = [](const VkExtent2D extent) {
         const std::uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
         const std::uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
@@ -385,12 +377,23 @@ void createCullingResources() {
         {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     };
     layoutInfo.bindingCount = std::size(cullBindings);
     layoutInfo.pBindings = cullBindings;
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &cullingDescriptorSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("Could not create culling descriptor-set layout");
     }
+    // Binding 9: the mesh-task commands of shadow_meshlet_build_mesh_commands.
+    std::array<VkDescriptorSetLayoutBinding, 10> refineBindings{};
+    for (std::uint32_t binding = 0; binding < refineBindings.size(); ++binding)
+        refineBindings[binding] = {binding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    layoutInfo.bindingCount = static_cast<std::uint32_t>(refineBindings.size());
+    layoutInfo.pBindings = refineBindings.data();
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &shadowMeshletRefineDescriptorSetLayout) !=
+        VK_SUCCESS)
+        throw std::runtime_error("Could not create VSM meshlet-refine descriptor-set layout");
     const VkDescriptorSetLayoutBinding instanceCullBindings[] = {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -586,7 +589,8 @@ void createCullingResources() {
         {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
     layoutInfo.bindingCount = std::size(clusteredLightingBindings);
     layoutInfo.pBindings = clusteredLightingBindings;
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &clusteredLightingDescriptorSetLayout) != VK_SUCCESS)
@@ -608,6 +612,8 @@ void createCullingResources() {
     createLayout(hiZReduceDescriptorSetLayout, hiZReducePipelineLayout);
     createLayout(vsmPageMarkingDescriptorSetLayout, vsmPageMarkingPipelineLayout);
     createLayout(vsmPageCompactDescriptorSetLayout, vsmPageCompactPipelineLayout);
+    const VkPushConstantRange refinePushConstants{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(std::uint32_t) * 4};
+    createLayout(shadowMeshletRefineDescriptorSetLayout, shadowMeshletRefinePipelineLayout, &refinePushConstants);
     // mat4 plus page-culling control fields. Keep this synchronized
     // with CullingPushConstants in GPUCullingPass.cpp/.slang.
     const VkPushConstantRange cullingPushConstants{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Mat4) + 28};
@@ -633,12 +639,24 @@ void createCullingResources() {
     hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.spv", hiZReducePipelineLayout);
     vsmPageMarkingPipeline = createComputePipeline("shaders/vsm_page_marking.spv", vsmPageMarkingPipelineLayout);
     vsmPageCompactPipeline = createComputePipeline("shaders/vsm_page_compact.spv", vsmPageCompactPipelineLayout);
+    shadowMeshletRefinePipeline =
+        createComputePipeline("shaders/shadow_meshlet_refine.spv", shadowMeshletRefinePipelineLayout);
     cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
     instanceCullingPipeline = createComputePipeline("shaders/gpu_instance_culling.spv", instanceCullingPipelineLayout);
     meshletCullingPipeline = createComputePipeline("shaders/meshlet_culling.spv", meshletCullingPipelineLayout);
     meshletDispatchPipeline =
         createComputePipeline("shaders/meshlet_build_dispatch.spv", meshletDispatchPipelineLayout);
     meshletIndirectPipeline = createComputePipeline("shaders/meshlet_build_indexed.spv", meshletIndirectPipelineLayout);
+    if (meshletDrawDescriptorSetLayout != VK_NULL_HANDLE) {
+        meshletDrawBinPipeline =
+            createComputePipeline("shaders/meshlet_build_mesh_draws.spv", meshletIndirectPipelineLayout);
+        meshletDrawCommandPipeline =
+            createComputePipeline("shaders/meshlet_build_mesh_commands.spv", meshletDispatchPipelineLayout);
+        shadowMeshletMeshRefinePipeline =
+            createComputePipeline("shaders/shadow_meshlet_refine_mesh.spv", shadowMeshletRefinePipelineLayout);
+        shadowMeshletMeshCommandPipeline = createComputePipeline("shaders/shadow_meshlet_build_mesh_commands.spv",
+                                                                 shadowMeshletRefinePipelineLayout);
+    }
     grassBuildPipeline = createComputePipeline("shaders/grass_build_indirect.spv", grassBuildPipelineLayout);
     grassDispatchBuildPipeline =
         createComputePipeline("shaders/grass_build_dispatch.spv", grassDispatchBuildPipelineLayout);
@@ -678,6 +696,9 @@ void createCullingResources() {
         clusteredLightingUniformBuffers[frame].createHostVisible(
             vulkanDevice.physical(), device, sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             vulkanDevice.allocator());
+        localLightBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                                                   sizeof(LocalLightGPU) * MaxClusteredLocalLights,
+                                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
         sceneClusteredLightingUniformBuffers[frame].createHostVisible(
             vulkanDevice.physical(), device, sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             vulkanDevice.allocator());
@@ -747,16 +768,29 @@ void createCullingResources() {
             vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
         meshletIndexedIndirectBuffers[frame].createDeviceLocalEmpty(
             device,
-            sizeof(VkDrawIndexedIndirectCommand) * static_cast<VkDeviceSize>(meshletCapacity) *
-                MaterialProgramSlotCount,
+            sizeof(VkDrawIndexedIndirectCommand) *
+                (static_cast<VkDeviceSize>(meshletBinBudget) + static_cast<VkDeviceSize>(meshletCapacity)),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, vulkanDevice.allocator());
-        std::array<std::uint32_t, MaterialProgramSlotCount> emptyMeshletCounts{};
+        // 32 per-slot draw counts (cleared every frame), then the packed slot offsets.
+        std::array<std::uint32_t, MaterialProgramSlotCount + Culling::DrawBinOffsetCount> emptyMeshletCounts{};
+        std::ranges::copy(meshletBinOffsets, emptyMeshletCounts.begin() + MaterialProgramSlotCount);
         meshletIndexedDrawCountBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, emptyMeshletCounts.data(), sizeof(emptyMeshletCounts),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
         meshletIndexedIndirectDraws[frame].create(meshletIndexedIndirectBuffers[frame].handle(),
                                                   meshletIndexedDrawCountBuffers[frame].handle(), meshletCapacity);
+        if (meshletDrawDescriptorSetLayout != VK_NULL_HANDLE) {
+            meshletDrawListBuffers[frame].createDeviceLocalEmpty(
+                device, sizeof(std::uint32_t) * 2U * std::max<VkDeviceSize>(1, meshletBinBudget),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+            const std::array<VkDrawMeshTasksIndirectCommandEXT, MaterialProgramSlotCount> emptyMeshTasks{};
+            meshletDrawCommandBuffers[frame].createDeviceLocal(
+                vulkanDevice.physical(), device, emptyMeshTasks.data(), sizeof(emptyMeshTasks),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+        }
         std::vector<std::uint32_t> emptyGrassBins(grassBinCount, 0U);
         grassBinCountBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, emptyGrassBins.data(), sizeof(std::uint32_t) * emptyGrassBins.size(),
@@ -832,10 +866,16 @@ void createCullingResources() {
         grassPrefixUniformBuffers[frame].createHostVisible(
             vulkanDevice.physical(), device, sizeof(GrassPrefixUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             vulkanDevice.allocator());
-        std::vector<VkDrawIndexedIndirectCommand> emptyCommands(genericCapacity * MaterialProgramSlotCount);
+        // Binned streams pack every material slot back to back
+        // (drawBinOffsets), so all slots together hold at most the object
+        // count. The second half keeps offset + maxDrawCount commands
+        // inside the buffer for any slot, as vkCmdDrawIndexedIndirectCount
+        // requires. Reserving a full object range per slot (x32) made these
+        // the largest buffers on dense scenes.
+        std::vector<VkDrawIndexedIndirectCommand> emptyCommands(genericCapacity * BinnedIndirectSlack);
         indirectBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, emptyCommands.data(),
-            sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
+            sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * BinnedIndirectSlack,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
         auto& lists = grassRenderLists[frame];
@@ -925,18 +965,20 @@ void createCullingResources() {
         // above for Game View; only descriptor-set identities differ.
         foliageIndirectBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, emptyCommands.data(),
-            sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
+            sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * BinnedIndirectSlack,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-        std::vector<std::uint32_t> emptyShadowCandidates(genericCapacity * ShadowMap::ClipLevelCount);
+        // Candidates are strided by each pass's maxDrawCount (its category capacity).
+        std::vector<std::uint32_t> emptyShadowCandidates(
+            std::max(shadowPassCapacity, shadowTwoSidedPassCapacity) * ShadowMap::ClipLevelCount);
         shadowCandidateBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, emptyShadowCandidates.data(),
-            sizeof(std::uint32_t) * emptyShadowCandidates.size(),
+            sizeof(std::uint32_t) * shadowPassCapacity * ShadowMap::ClipLevelCount,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
             vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
         shadowTwoSidedCandidateBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, emptyShadowCandidates.data(),
-            sizeof(std::uint32_t) * emptyShadowCandidates.size(),
+            sizeof(std::uint32_t) * shadowTwoSidedPassCapacity * ShadowMap::ClipLevelCount,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
             vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
         std::array<std::uint32_t, ShadowMap::ClipLevelCount> zeroCandidateCounts{};
@@ -960,13 +1002,48 @@ void createCullingResources() {
         shadowIndirectBuffers[frame].createDeviceLocalEmpty(
             device, sizeof(VkDrawIndexedIndirectCommand) * shadowPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, vulkanDevice.allocator());
-        std::array<Culling::ShadowPageWork, ShadowMap::MaxPageUpdatesPerFrame> emptyPageWork{};
+        // Meshlet refinement: one object list and one bounded meshlet draw
+        // list per page; the counters are cleared before every page cull.
+        // The one-sided [0] and two-sided [1] streams keep separate lists.
+        const auto createMeshletLists = [&](Buffer& objects, Buffer& objectCounts, Buffer& commands,
+                                            Buffer& taskCommands, Buffer& commandCounts,
+                                            const std::uint32_t passCapacity) {
+            objects.createDeviceLocalEmpty(
+                device, sizeof(std::uint32_t) * 4 * passCapacity * ShadowMap::MaxPageUpdatesPerFrame,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+            objectCounts.createDeviceLocalEmpty(
+                device, sizeof(std::uint32_t) * ShadowMap::MaxPageUpdatesPerFrame,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, vulkanDevice.allocator());
+            commands.createDeviceLocalEmpty(device,
+                                            sizeof(VkDrawIndexedIndirectCommand) * ShadowPass::MeshletDrawsPerPage *
+                                                ShadowMap::MaxPageUpdatesPerFrame,
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                                            vulkanDevice.allocator());
+            taskCommands.createDeviceLocalEmpty(
+                device, sizeof(VkDrawMeshTasksIndirectCommandEXT) * ShadowMap::MaxPageUpdatesPerFrame,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, vulkanDevice.allocator());
+            commandCounts.createDeviceLocalEmpty(
+                device, sizeof(std::uint32_t) * ShadowMap::MaxPageUpdatesPerFrame,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                vulkanDevice.allocator());
+        };
+        createMeshletLists(shadowMeshletObjectBuffers[frame], shadowMeshletObjectCountBuffers[frame],
+                           shadowMeshletCommandBuffers[frame], shadowMeshletTaskCommandBuffers[frame],
+                           shadowMeshletCommandCountBuffers[frame], shadowPassCapacity);
+        createMeshletLists(shadowTwoSidedMeshletObjectBuffers[frame], shadowTwoSidedMeshletObjectCountBuffers[frame],
+                           shadowTwoSidedMeshletCommandBuffers[frame], shadowTwoSidedMeshletTaskCommandBuffers[frame],
+                           shadowTwoSidedMeshletCommandCountBuffers[frame], shadowTwoSidedPassCapacity);
+        // Page entries, then one candidate-cull entry per clip level.
+        std::array<Culling::ShadowPageWork, ShadowMap::MaxPageUpdatesPerFrame + ShadowMap::ClipLevelCount>
+            emptyPageWork{};
         shadowPageWorkBuffers[frame].createHostVisible(vulkanDevice.physical(), device, sizeof(emptyPageWork),
                                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
         constexpr std::uint32_t vsmRequestWordCount = (ShadowMap::VirtualPageCount + 31U) / 32U;
-        const std::array<std::uint32_t, vsmRequestWordCount> emptyVsmRequests{};
-        vsmRequestedPageBuffers[frame].createHostVisible(
-            vulkanDevice.physical(), device, sizeof(emptyVsmRequests),
+        // Only the GPU touches the request bitset (marking, then compaction):
+        // in host-visible memory every marking atomic would cross PCIe.
+        vsmRequestedPageBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(std::uint32_t) * vsmRequestWordCount,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, vulkanDevice.allocator());
         const std::array<std::uint32_t, ShadowMap::VirtualPageCount> emptyVsmPageKeys{};
         const std::uint32_t emptyVsmPageCount = 0;
@@ -979,20 +1056,27 @@ void createCullingResources() {
             vulkanDevice.physical(), device, sizeof(VsmPageMarkingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             vulkanDevice.allocator());
         shadowTwoSidedIndirectBuffers[frame].createDeviceLocalEmpty(
-            device, sizeof(VkDrawIndexedIndirectCommand) * shadowPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
+            device,
+            sizeof(VkDrawIndexedIndirectCommand) * shadowTwoSidedPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, vulkanDevice.allocator());
         std::array<std::uint32_t, ShadowMap::MaxPageUpdatesPerFrame> zeroShadowCounts{};
         // One independent compact range per page lets the 2D page
         // culling dispatch write transforms without cross-page atomics.
-        const std::size_t shadowTransformCount = std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
-                                                                       ShadowMap::MaxCasterInstancesPerPage) *
-                                                 ShadowMap::MaxPageUpdatesPerFrame;
-        for (Buffer* buffer : {&shadowInstanceTransformBuffers[frame], &shadowTwoSidedInstanceTransformBuffers[frame]})
-            buffer->createDeviceLocalEmpty(device, sizeof(RendererInstanceData) * shadowTransformCount,
-                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-        for (Buffer* buffer : {&shadowVisibleInstanceBuffers[frame], &shadowTwoSidedVisibleInstanceBuffers[frame]})
-            buffer->createDeviceLocalEmpty(device, sizeof(Culling::ShadowVisibleInstance) * shadowTransformCount,
-                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        const std::array<std::size_t, 2> shadowTransformCounts{
+            std::size_t{shadowPageInstanceCapacity[0]} * ShadowMap::MaxPageUpdatesPerFrame,
+            std::size_t{shadowPageInstanceCapacity[1]} * ShadowMap::MaxPageUpdatesPerFrame};
+        shadowInstanceTransformBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(RendererInstanceData) * shadowTransformCounts[0], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vulkanDevice.allocator());
+        shadowTwoSidedInstanceTransformBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(RendererInstanceData) * shadowTransformCounts[1], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vulkanDevice.allocator());
+        shadowVisibleInstanceBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(Culling::ShadowVisibleInstance) * shadowTransformCounts[0],
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        shadowTwoSidedVisibleInstanceBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(Culling::ShadowVisibleInstance) * shadowTransformCounts[1],
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
         shadowInstanceTransformCountBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, zeroShadowCounts.data(), sizeof(zeroShadowCounts),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
@@ -1001,9 +1085,12 @@ void createCullingResources() {
             vulkanDevice.physical(), device, zeroShadowCounts.data(), sizeof(zeroShadowCounts),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
             vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-        for (Buffer* buffer : {&shadowInstanceMaterialBuffers[frame], &shadowTwoSidedInstanceMaterialBuffers[frame]})
-            buffer->createDeviceLocalEmpty(device, sizeof(std::uint32_t) * shadowTransformCount,
-                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        shadowInstanceMaterialBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(std::uint32_t) * shadowTransformCounts[0], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vulkanDevice.allocator());
+        shadowTwoSidedInstanceMaterialBuffers[frame].createDeviceLocalEmpty(
+            device, sizeof(std::uint32_t) * shadowTransformCounts[1], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vulkanDevice.allocator());
         const std::array<std::uint32_t, MaterialProgramSlotCount> zeroMaterialDrawCounts{};
         drawCountBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
@@ -1035,13 +1122,16 @@ void createCullingResources() {
     const VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors + MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-         cullingSetCount * 12 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 152},
+         // The trailing 15: mesh-shader bin (7), command (2) and draw (6) sets;
+         // then the VSM mesh-task commands (1) and caster draw set (6), and
+         // the two-sided stream's refine (10) and caster draw (6) sets.
+         cullingSetCount * 14 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * (152 + 9 + 2 + 15 + 7 + 16)},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 31},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZDescriptorSetCount},
     };
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.maxSets =
-        hiZDescriptorSetCount + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 7;
+        hiZDescriptorSetCount + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 14;
     poolInfo.poolSizeCount = allocateHiZ ? std::size(poolSizes) : std::size(poolSizes) - 1;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
@@ -1080,6 +1170,15 @@ void createCullingResources() {
     if (vkAllocateDescriptorSets(device, &allocateInfo, vsmPageCompactSets.data()) != VK_SUCCESS) {
         throw std::runtime_error("Could not allocate VSM page-compaction descriptor sets");
     }
+    std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> refineLayouts{};
+    refineLayouts.fill(shadowMeshletRefineDescriptorSetLayout);
+    allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocateInfo.pSetLayouts = refineLayouts.data();
+    if (vkAllocateDescriptorSets(device, &allocateInfo, shadowMeshletRefineSets.data()) != VK_SUCCESS ||
+        vkAllocateDescriptorSets(device, &allocateInfo, shadowTwoSidedMeshletRefineSets.data()) != VK_SUCCESS)
+        throw std::runtime_error("Could not allocate VSM meshlet-refine descriptor sets");
+    shadowMeshletPassCapacity = shadowPassCapacity;
+    shadowTwoSidedMeshletPassCapacity = shadowTwoSidedPassCapacity;
     std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> instanceCullLayouts{};
     instanceCullLayouts.fill(instanceCullingDescriptorSetLayout);
     allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
@@ -1106,6 +1205,20 @@ void createCullingResources() {
     if (vkAllocateDescriptorSets(device, &allocateInfo, meshletIndirectSets.data()) != VK_SUCCESS) {
         throw std::runtime_error("Could not allocate meshlet-indirect descriptor sets");
     }
+    if (meshletDrawDescriptorSetLayout != VK_NULL_HANDLE) {
+        std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> meshletDrawLayouts{};
+        meshletDrawLayouts.fill(meshletDrawDescriptorSetLayout);
+        const auto allocateMeshletDrawSets = [&](const auto& layouts, auto& sets) {
+            allocateInfo.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &allocateInfo, sets.data()) != VK_SUCCESS)
+                throw std::runtime_error("Could not allocate mesh-shader meshlet descriptor sets");
+        };
+        allocateMeshletDrawSets(meshletIndirectLayouts, meshletDrawBinSets);
+        allocateMeshletDrawSets(meshletDispatchLayouts, meshletDrawCommandSets);
+        allocateMeshletDrawSets(meshletDrawLayouts, meshletDrawSets);
+        allocateMeshletDrawSets(meshletDrawLayouts, shadowMeshletDrawSets);
+        allocateMeshletDrawSets(meshletDrawLayouts, shadowTwoSidedMeshletDrawSets);
+    }
     std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> clusteredLayouts{};
     clusteredLayouts.fill(clusteredLightingDescriptorSetLayout);
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 2> clusteredSets{};
@@ -1122,9 +1235,10 @@ void createCullingResources() {
                                                     {ranges, 0, VK_WHOLE_SIZE},
                                                     {indices, 0, VK_WHOLE_SIZE},
                                                     {clusteredUniform, 0, sizeof(ClusteredLightingUniforms)},
-                                                    {probes, 0, VK_WHOLE_SIZE}};
-            VkWriteDescriptorSet writes[5]{};
-            for (uint32_t binding = 0; binding < 5; ++binding) {
+                                                    {probes, 0, VK_WHOLE_SIZE},
+                                                    {localLightBuffers[frame].handle(), 0, VK_WHOLE_SIZE}};
+            VkWriteDescriptorSet writes[6]{};
+            for (uint32_t binding = 0; binding < 6; ++binding) {
                 writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                    nullptr,
                                    set,
@@ -1137,7 +1251,7 @@ void createCullingResources() {
                                    &infos[binding],
                                    nullptr};
             }
-            vkUpdateDescriptorSets(device, 5, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device, 6, writes, 0, nullptr);
         };
         updateClusterSet(clusteredLightingSets[frame], uniformBuffers[frame].handle(),
                          clusteredLightRangeBuffers[frame].handle(), clusteredLightIndexBuffers[frame].handle(),
@@ -1401,6 +1515,8 @@ void createCullingResources() {
             const Buffer& shadowTransformCountBuffer;
             const Buffer& shadowMaterialBuffer;
             const Buffer& shadowVisibleInstanceBuffer;
+            const Buffer& meshletObjectBuffer;
+            const Buffer& meshletObjectCountBuffer;
         };
         const auto updateCullingSet = [&](const CullingSetUpdate& update) {
             const VkDescriptorBufferInfo objectInfo{cullingObjectBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
@@ -1459,6 +1575,15 @@ void createCullingResources() {
             writes[13].pBufferInfo = &shadowMaterialInfo;
             writes[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[14].pBufferInfo = &shadowVisibleInstanceInfo;
+            // Only the two VSM streams write these, each into its own lists;
+            // the camera sets bind the one-sided lists to keep the layout complete.
+            const VkDescriptorBufferInfo meshletObjectInfo{update.meshletObjectBuffer.handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo meshletObjectCountInfo{update.meshletObjectCountBuffer.handle(), 0,
+                                                                VK_WHOLE_SIZE};
+            writes[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[15].pBufferInfo = &meshletObjectInfo;
+            writes[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[16].pBufferInfo = &meshletObjectCountInfo;
             vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         };
         VkDescriptorSet cameraCullSet = cullSets[frame];
@@ -1479,29 +1604,29 @@ void createCullingResources() {
         const auto& shadowTwoSidedMaterials = shadowTwoSidedInstanceMaterialBuffers[frame];
         updateCullingSet({cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame], cullingUniformBuffers[frame],
                           candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms,
-                          shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
+                          shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame], shadowMeshletObjectBuffers[frame], shadowMeshletObjectCountBuffers[frame]});
         updateCullingSet({foliageCullSet, foliageIndirectBuffers[frame], foliageDrawCountBuffers[frame],
                           foliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches,
                           pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials,
-                          shadowVisibleInstanceBuffers[frame]});
+                          shadowVisibleInstanceBuffers[frame], shadowMeshletObjectBuffers[frame], shadowMeshletObjectCountBuffers[frame]});
         updateCullingSet({shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
                           shadowCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches,
                           pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials,
-                          shadowVisibleInstanceBuffers[frame]});
+                          shadowVisibleInstanceBuffers[frame], shadowMeshletObjectBuffers[frame], shadowMeshletObjectCountBuffers[frame]});
         updateCullingSet({shadowTwoSidedCullSet, shadowTwoSidedIndirectBuffers[frame],
                           shadowTwoSidedDrawCountBuffers[frame], shadowTwoSidedCullingUniformBuffers[frame],
                           shadowTwoSidedCandidateBuffers[frame], shadowTwoSidedCandidateCountBuffers[frame],
                           shadowTwoSidedCandidateDispatchBuffers[frame], pageWork, shadowTwoSidedTransforms,
                           shadowTwoSidedTransformCounts, shadowTwoSidedMaterials,
-                          shadowTwoSidedVisibleInstanceBuffers[frame]});
+                          shadowTwoSidedVisibleInstanceBuffers[frame], shadowTwoSidedMeshletObjectBuffers[frame], shadowTwoSidedMeshletObjectCountBuffers[frame]});
         updateCullingSet({sceneCullSet, sceneIndirectBuffers[frame], sceneDrawCountBuffers[frame],
                           sceneCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork,
                           shadowTransforms, shadowTransformCounts, shadowMaterials,
-                          shadowVisibleInstanceBuffers[frame]});
+                          shadowVisibleInstanceBuffers[frame], shadowMeshletObjectBuffers[frame], shadowMeshletObjectCountBuffers[frame]});
         updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
                           sceneFoliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches,
                           pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials,
-                          shadowVisibleInstanceBuffers[frame]});
+                          shadowVisibleInstanceBuffers[frame], shadowMeshletObjectBuffers[frame], shadowMeshletObjectCountBuffers[frame]});
         // Keep this indexed by descriptor binding. Binding 8 is the
         // Hi-Z image, while binding 9 is the cluster hierarchy; the
         // previous compact initializer put the hierarchy at index 8
@@ -1593,11 +1718,11 @@ void createCullingResources() {
         shadowTwoSidedCullingPasses[frame].create(
             device, cullingPipeline, cullingPipelineLayout, shadowTwoSidedCullSet,
             shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(),
-            shadowPassCapacity, shadowTwoSidedCandidateCountBuffers[frame].handle(),
+            shadowTwoSidedPassCapacity, shadowTwoSidedCandidateCountBuffers[frame].handle(),
             shadowTwoSidedCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame],
             shadowTwoSidedInstanceTransformCountBuffers[frame].handle());
         shadowTwoSidedIndirectDraws[frame].create(shadowTwoSidedIndirectBuffers[frame].handle(),
-                                                  shadowTwoSidedDrawCountBuffers[frame].handle(), shadowPassCapacity);
+                                                  shadowTwoSidedDrawCountBuffers[frame].handle(), shadowTwoSidedPassCapacity);
     }
     for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
         refreshGPUSceneDescriptors(frame);
@@ -1654,6 +1779,19 @@ void destroyCullingResources() noexcept {
         buffer.destroy();
     for (Buffer& buffer : shadowInstanceTransformBuffers)
         buffer.destroy();
+    for (auto* buffers : {&shadowMeshletObjectBuffers, &shadowMeshletObjectCountBuffers, &shadowMeshletCommandBuffers,
+                          &shadowMeshletCommandCountBuffers, &shadowMeshletTaskCommandBuffers,
+                          &shadowTwoSidedMeshletObjectBuffers, &shadowTwoSidedMeshletObjectCountBuffers,
+                          &shadowTwoSidedMeshletCommandBuffers, &shadowTwoSidedMeshletCommandCountBuffers,
+                          &shadowTwoSidedMeshletTaskCommandBuffers})
+        for (Buffer& buffer : *buffers)
+            buffer.destroy();
+    shadowMeshletRefineSets.fill(VK_NULL_HANDLE);
+    shadowMeshletDrawSets.fill(VK_NULL_HANDLE);
+    shadowTwoSidedMeshletRefineSets.fill(VK_NULL_HANDLE);
+    shadowTwoSidedMeshletDrawSets.fill(VK_NULL_HANDLE);
+    shadowMeshletPassCapacity = 0;
+    shadowTwoSidedMeshletPassCapacity = 0;
     for (Buffer& buffer : shadowVisibleInstanceBuffers)
         buffer.destroy();
     for (Buffer& buffer : shadowTwoSidedInstanceTransformBuffers)
@@ -1694,6 +1832,8 @@ void destroyCullingResources() noexcept {
         buffer.destroy();
     for (Buffer& buffer : clusteredLightingUniformBuffers)
         buffer.destroy();
+    for (Buffer& buffer : localLightBuffers)
+        buffer.destroy();
     for (Buffer& buffer : sceneClusteredLightingUniformBuffers)
         buffer.destroy();
     for (Buffer& buffer : drawCountBuffers)
@@ -1720,6 +1860,12 @@ void destroyCullingResources() noexcept {
         buffer.destroy();
     for (Buffer& buffer : meshletIndexedDrawCountBuffers)
         buffer.destroy();
+    for (auto* buffers : {&meshletDrawListBuffers, &meshletDrawCommandBuffers})
+        for (Buffer& buffer : *buffers)
+            buffer.destroy();
+    meshletDrawBinSets.fill(VK_NULL_HANDLE);
+    meshletDrawCommandSets.fill(VK_NULL_HANDLE);
+    meshletDrawSets.fill(VK_NULL_HANDLE);
     for (Buffer& buffer : meshletCullingUniformBuffers)
         buffer.destroy();
     for (Buffer& buffer : grassBinCountBuffers)
@@ -1804,6 +1950,12 @@ void destroyCullingResources() noexcept {
         vkDestroyPipeline(device, meshletDispatchPipeline, nullptr);
     if (meshletIndirectPipeline != VK_NULL_HANDLE)
         vkDestroyPipeline(device, meshletIndirectPipeline, nullptr);
+    for (VkPipeline* pipeline : {&meshletDrawBinPipeline, &meshletDrawCommandPipeline,
+                                 &shadowMeshletMeshRefinePipeline, &shadowMeshletMeshCommandPipeline}) {
+        if (*pipeline != VK_NULL_HANDLE)
+            vkDestroyPipeline(device, *pipeline, nullptr);
+        *pipeline = VK_NULL_HANDLE;
+    }
     if (grassBuildPipeline != VK_NULL_HANDLE)
         vkDestroyPipeline(device, grassBuildPipeline, nullptr);
     if (grassDispatchBuildPipeline != VK_NULL_HANDLE)
@@ -1836,6 +1988,9 @@ void destroyCullingResources() noexcept {
         vkDestroyPipeline(device, vsmPageMarkingPipeline, nullptr);
     if (vsmPageCompactPipeline != VK_NULL_HANDLE)
         vkDestroyPipeline(device, vsmPageCompactPipeline, nullptr);
+    if (shadowMeshletRefinePipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, shadowMeshletRefinePipeline, nullptr);
+    shadowMeshletRefinePipeline = VK_NULL_HANDLE;
     if (hiZCopyPipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
     }
@@ -1885,6 +2040,9 @@ void destroyCullingResources() noexcept {
         vkDestroyPipelineLayout(device, vsmPageMarkingPipelineLayout, nullptr);
     if (vsmPageCompactPipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(device, vsmPageCompactPipelineLayout, nullptr);
+    if (shadowMeshletRefinePipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, shadowMeshletRefinePipelineLayout, nullptr);
+    shadowMeshletRefinePipelineLayout = VK_NULL_HANDLE;
     if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
     }
@@ -1934,6 +2092,9 @@ void destroyCullingResources() noexcept {
         vkDestroyDescriptorSetLayout(device, vsmPageMarkingDescriptorSetLayout, nullptr);
     if (vsmPageCompactDescriptorSetLayout != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device, vsmPageCompactDescriptorSetLayout, nullptr);
+    if (shadowMeshletRefineDescriptorSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, shadowMeshletRefineDescriptorSetLayout, nullptr);
+    shadowMeshletRefineDescriptorSetLayout = VK_NULL_HANDLE;
     cullingDescriptorPool = VK_NULL_HANDLE;
     hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
     vsmPageMarkingPipeline = VK_NULL_HANDLE;
@@ -2017,12 +2178,15 @@ void createVirtualWaterResources() {
         if (hiZInfos[i].imageView == VK_NULL_HANDLE)
             hiZInfos[i] = depthInfo;
     }
+    // Without water bodies the renderer never records; its screen-space
+    // targets (~76 MiB at 1080p) stay 1x1 until water appears.
+    const Water::WaterRenderWorld waterWorld = Water::WaterRenderWorld::capture(registry, sceneGpu);
     virtualWaterRenderer.create(
-        vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager, swapchain.extent(),
+        vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager,
+        waterWorld.empty() ? VkExtent2D{1U, 1U} : swapchain.extent(),
         sampledDepth.format(), sampledDepth.imageView(), shadowPass.descriptorSetLayout(), hdrBuffer.imageView(),
         {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, depthInfo,
         hiZInfos, instances, culling);
-    const Water::WaterRenderWorld waterWorld = Water::WaterRenderWorld::capture(registry, sceneGpu);
     virtualWaterRenderer.rebuild(waterWorld);
 }
 
@@ -2039,13 +2203,32 @@ void createSceneViewportResources() {
     sceneViewportDepthBuffer.create(sceneViewportTarget.extent(), VK_SAMPLE_COUNT_1_BIT,
                                     msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format());
     sceneViewportDepthInitialized = false;
+    createSceneViewportPrepassTargets();
     createSceneViewportForwardPass();
     createSceneVirtualWaterResources();
+}
+
+void createSceneViewportPrepassTargets() {
+    sceneViewportVelocity.destroy();
+    sceneViewportNormals.destroy();
+    sceneViewportVelocity.create(vulkanDevice.physical(), device, sceneViewportTarget.extent(),
+                                 vulkanDevice.allocator(), VK_FILTER_NEAREST, VK_FORMAT_R16G16_SFLOAT);
+    sceneViewportNormals.create(vulkanDevice.physical(), device, sceneViewportTarget.extent(), vulkanDevice.allocator(),
+                                VK_FILTER_NEAREST, VK_FORMAT_R16G16_SNORM);
 }
 
 void createSceneVirtualWaterResources() {
     sceneVirtualWaterRenderer.destroy();
     sceneGlassPass.destroy();
+    sceneGlassPassInfo = GlassPass::CreateInfo{.physicalDevice = vulkanDevice.physical(),
+                           .device = device,
+                           .allocator = vulkanDevice.allocator(),
+                           .assets = &assetManager,
+                           .sceneLayout = sceneDescriptorPass.descriptorSetLayout(),
+                           .extent = sceneViewportTarget.extent(),
+                           .depthFormat = sceneViewportDepthBuffer.format(),
+                           .sceneDepthView = sceneViewportDepthBuffer.imageView(),
+                           .sceneDepthSampler = sceneViewportDepthBuffer.sampler()};
     sceneOpaqueColor.destroy();
     sceneOpaqueColor.create(vulkanDevice.physical(), device, sceneViewportTarget.extent(), vulkanDevice.allocator());
     sceneOpaqueColorInitialized = false;
@@ -2061,20 +2244,17 @@ void createSceneVirtualWaterResources() {
                                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
     std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> noHiZInfos{};
     noHiZInfos.fill(depthInfo);
-    sceneGlassPass.create(
-        device, vulkanDevice.allocator(), HdrBuffer::Format, sampledDepth.format(), VK_SAMPLE_COUNT_1_BIT,
-        VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE, sceneDescriptorPass.descriptorSetLayout(), assetManager, false,
-        {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, depthInfo,
-        glassAtlasPaneCount);
     // Bind depth to keep the descriptor valid, but deliberately turn
     // Hi-Z off: the Scene View owns no independent pyramid yet.
+    const Water::WaterRenderWorld sceneWaterWorld = Water::WaterRenderWorld::capture(registry, sceneGpu);
     sceneVirtualWaterRenderer.create(
-        vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager, sceneViewportTarget.extent(),
+        vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager,
+        sceneWaterWorld.empty() ? VkExtent2D{1U, 1U} : sceneViewportTarget.extent(),
         sampledDepth.format(), sampledDepth.imageView(), sceneDescriptorPass.descriptorSetLayout(),
         sceneViewportTarget.color().imageView(),
         {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, depthInfo,
         noHiZInfos, instances, culling, false);
-    sceneVirtualWaterRenderer.rebuild(Water::WaterRenderWorld::capture(registry, sceneGpu));
+    sceneVirtualWaterRenderer.rebuild(sceneWaterWorld);
 }
 
 void applyPendingSceneViewportResize() {
@@ -2093,6 +2273,8 @@ void applyPendingSceneViewportResize() {
     sceneViewportDepthBuffer.create(requested, VK_SAMPLE_COUNT_1_BIT,
                                     msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format());
     sceneViewportDepthInitialized = false;
+    createSceneViewportPrepassTargets();
+    createSceneDirectionalVisibilityPass();
     createSceneVirtualWaterResources();
 
     if (sceneViewportDescriptor != VK_NULL_HANDLE) {
@@ -2115,7 +2297,9 @@ void destroySceneViewportResources() noexcept {
     sceneOpaqueColorInitialized = false;
     sceneViewportDepthBuffer.destroy();
     sceneViewportDepthInitialized = false;
-    sceneViewportForwardPass.destroy();
+    destroySceneViewportForwardPass();
+    sceneViewportVelocity.destroy();
+    sceneViewportNormals.destroy();
     sceneViewportTarget.destroy();
 }
 

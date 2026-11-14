@@ -29,7 +29,8 @@ constexpr std::uint32_t IrradianceSize = 32;
 constexpr std::uint32_t PrefilterSize = 256;
 constexpr std::uint32_t BrdfLutSize = 256;
 // Bump this whenever any bake parameter or integration algorithm changes.
-constexpr std::uint64_t IblCacheVersion = 4;
+// 5: irradiance and specular maps are baked without the extracted sun.
+constexpr std::uint64_t IblCacheVersion = 5;
 
 enum class IblCacheKind : std::uint32_t { Cubemap = 1 };
 
@@ -312,7 +313,22 @@ EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
     return source;
 }
 
-std::optional<ImageBasedLighting::EnvironmentSun> extractSun(const EnvironmentSource& source) {
+// The panorama pixels attributed to the sun, so the same region can be
+// removed from the sky the image-based lighting is baked from.
+struct SunRegion {
+    Vec3 peakDirection;
+    Vec3 ambient;
+    float cutoff = 0.0F;
+};
+
+struct ExtractedSun {
+    ImageBasedLighting::EnvironmentSun sun;
+    SunRegion region;
+};
+
+constexpr float CosSunRadius = 0.9961947F; // five degrees
+
+std::optional<ExtractedSun> extractSun(const EnvironmentSource& source) {
     if (!source.loaded())
         return std::nullopt;
     const auto& image = source.mips.front();
@@ -365,7 +381,6 @@ std::optional<ImageBasedLighting::EnvironmentSun> extractSun(const EnvironmentSo
         return std::nullopt;
 
     const Vec3 peakDirection = directionAt(peakX, peakY);
-    constexpr float CosSunRadius = 0.9961947F; // five degrees
     const float cutoff = std::max(peakLuminance * 0.05F, ambientLuminance * 4.0F);
     Vec3 energy{};
     Vec3 weightedDirection{};
@@ -388,7 +403,44 @@ std::optional<ImageBasedLighting::EnvironmentSun> extractSun(const EnvironmentSo
     const float intensity = std::max({energy.x(), energy.y(), energy.z()});
     if (!std::isfinite(intensity) || intensity < 0.01F || weightedDirection.length() < 1.0e-6F)
         return std::nullopt;
-    return ImageBasedLighting::EnvironmentSun{weightedDirection.normalized(), energy * (1.0F / intensity), intensity};
+    return ExtractedSun{
+        ImageBasedLighting::EnvironmentSun{weightedDirection.normalized(), energy * (1.0F / intensity), intensity},
+        SunRegion{peakDirection, ambient, cutoff}};
+}
+
+// The sun becomes a shadowed directional light. Left in the panorama it was
+// also integrated into the irradiance and specular maps, so it lit every
+// shadowed surface a second time through the ambient term and washed shadows
+// out; and with a few dozen samples per irradiance texel its tiny, extremely
+// bright disc made those maps noisy. Remove exactly the excess radiance the
+// light was built from. The displayed sky keeps its sun.
+EnvironmentSource withoutSun(const EnvironmentSource& source, const SunRegion& region) {
+    EnvironmentSource result;
+    const auto& image = source.mips.front();
+    result.mips.push_back(image);
+    auto& pixels = result.mips.front().pixels;
+    const float longitudeStep = Tau / static_cast<float>(image.width);
+    const float latitudeStep = Pi / static_cast<float>(image.height);
+    for (int y = 0; y < image.height; ++y) {
+        const float latitude = (static_cast<float>(y) + 0.5F) * latitudeStep;
+        const float sinLatitude = std::sin(latitude), cosLatitude = std::cos(latitude);
+        for (int x = 0; x < image.width; ++x) {
+            const float longitude = (static_cast<float>(x) + 0.5F) * longitudeStep - Pi;
+            const Vec3 direction{std::cos(longitude) * sinLatitude, cosLatitude, std::sin(longitude) * sinLatitude};
+            if (dot(direction, region.peakDirection) < CosSunRadius)
+                continue;
+            const auto index = (static_cast<std::size_t>(y) * image.width + x) * 4;
+            const float brightness =
+                0.2126F * pixels[index] + 0.7152F * pixels[index + 1] + 0.0722F * pixels[index + 2];
+            if (!std::isfinite(brightness) || brightness < region.cutoff)
+                continue;
+            pixels[index] = std::min(pixels[index], region.ambient.x());
+            pixels[index + 1] = std::min(pixels[index + 1], region.ambient.y());
+            pixels[index + 2] = std::min(pixels[index + 2], region.ambient.z());
+        }
+    }
+    result.buildMipChain();
+    return result;
 }
 
 } // namespace
@@ -442,7 +494,18 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
             source.emplace(loadEquirectangular(equirectangularPath));
         return *source;
     };
-    replacement.sun_ = extractSun(getSource());
+    const auto extracted = extractSun(getSource());
+    if (extracted)
+        replacement.sun_ = extracted->sun;
+    std::optional<EnvironmentSource> sunlessSource;
+    // Diffuse and specular IBL integrate only the sky the sun light leaves.
+    const auto getLightingSource = [&]() -> const EnvironmentSource& {
+        if (!extracted)
+            return getSource();
+        if (!sunlessSource)
+            sunlessSource.emplace(withoutSun(getSource(), extracted->region));
+        return *sunlessSource;
+    };
     uploadCubemap(
         environmentCache, quality.environmentResolution, environmentMips,
         [&] {
@@ -457,7 +520,7 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     uploadCubemap(
         irradianceCache, IrradianceSize, 1,
         [&] {
-            const auto& decoded = getSource();
+            const auto& decoded = getLightingSource();
             return EnvironmentBaker::bakeCubemap(
                 IrradianceSize, 1, [&decoded](const Vec3& direction, std::uint32_t, std::uint32_t) {
                     return EnvironmentBaker::diffuseIrradiance(
@@ -468,7 +531,7 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     uploadCubemap(
         prefilteredCache, quality.prefilterResolution, prefilterMips,
         [&] {
-            const auto& decoded = getSource();
+            const auto& decoded = getLightingSource();
             return EnvironmentBaker::bakePrefilteredCubemap(
                 quality.prefilterResolution, prefilterMips, quality.environmentResolution, environmentMips,
                 [&decoded](const Vec3& direction, const float mip) { return decoded.sample(direction, mip); });

@@ -13,8 +13,74 @@ static std::array<glm::vec4, 6> extractFrustumPlanes(const glm::mat4& matrix) {
     return planes;
 }
 
+// Per-meshlet VSM caster stream for ShadowPass::record; inert (and the
+// one-sided stream drawn whole) when this scene has no meshlet heap.
+// Indexed meshlet draws read the shared index heap (GpuMeshlet::material.y
+// holds each meshlet's first index there); only mesh-shader capable devices
+// build meshlet streams.
+[[nodiscard]] bool meshletIndexedDrawsSupported() const noexcept {
+    return vulkanDevice.supportsMeshShaders() && indexBuffer.handle() != VK_NULL_HANDLE;
+}
+
+[[nodiscard]] ShadowPass::MeshletStream shadowMeshletStream(const std::uint32_t frame,
+                                                           const bool twoSided = false) const {
+    const VkDescriptorSet drawSet = twoSided ? shadowTwoSidedMeshletDrawSets[frame] : shadowMeshletDrawSets[frame];
+    const VkDescriptorSet refineSet =
+        twoSided ? shadowTwoSidedMeshletRefineSets[frame] : shadowMeshletRefineSets[frame];
+    // Mesh-shader casters need the meshlet vertex streams the draw set binds.
+    const bool meshCasters = optimizationFeatures.meshShaders && drawSet != VK_NULL_HANDLE &&
+                             meshletVertexBuffer.handle() != VK_NULL_HANDLE &&
+                             meshletTriangleBuffer.handle() != VK_NULL_HANDLE;
+    const auto& objectCounts = twoSided ? shadowTwoSidedMeshletObjectCountBuffers : shadowMeshletObjectCountBuffers;
+    const auto& commands = twoSided ? shadowTwoSidedMeshletCommandBuffers : shadowMeshletCommandBuffers;
+    const auto& commandCounts =
+        twoSided ? shadowTwoSidedMeshletCommandCountBuffers : shadowMeshletCommandCountBuffers;
+    const auto& taskCommands = twoSided ? shadowTwoSidedMeshletTaskCommandBuffers : shadowMeshletTaskCommandBuffers;
+    return {.refinePipeline = shadowMeshletRefinePipeline,
+            .refineLayout = shadowMeshletRefinePipelineLayout,
+            .refineSet = meshletBuffer.handle() != VK_NULL_HANDLE ? refineSet : VK_NULL_HANDLE,
+            .objectCounts = objectCounts[frame].handle(),
+            .commands = commands[frame].handle(),
+            .commandCounts = commandCounts[frame].handle(),
+            .meshletIndexBuffer = meshletIndexedDrawsSupported() ? indexBuffer.handle() : VK_NULL_HANDLE,
+            .passCapacity = twoSided ? shadowTwoSidedMeshletPassCapacity : shadowMeshletPassCapacity,
+            .meshletCount = globalMeshletCount,
+            .meshRefinePipeline = meshCasters ? shadowMeshletMeshRefinePipeline : VK_NULL_HANDLE,
+            .meshCommandPipeline = meshCasters ? shadowMeshletMeshCommandPipeline : VK_NULL_HANDLE,
+            .meshTaskCommands = meshCasters ? taskCommands[frame].handle() : VK_NULL_HANDLE,
+            .meshDrawSet = meshCasters ? drawSet : VK_NULL_HANDLE};
+}
+
 [[nodiscard]] DirectionalLight directionalLight() const noexcept {
     return sceneFrameDataCache.data.directionalLight;
+}
+
+// The photometric profile of a point or spot light, or nothing for an
+// unprofiled one. IES files resolve against the project's asset folder like
+// the scene sky, and are parsed once per path.
+[[nodiscard]] std::optional<LightProfileTable> localLightProfileTable(const LightComponent& light) {
+    if (light.profile == LightProfile::None)
+        return std::nullopt;
+    if (light.profile != LightProfile::Ies)
+        return builtInLightProfile(light.profile);
+    if (light.iesProfile.empty())
+        return std::nullopt;
+    std::filesystem::path path = light.iesProfile;
+    if (path.is_relative()) {
+        const auto runtimeRoot = projectRoot.empty() ? assetManager.asset_root() : projectRoot;
+        const auto content = runtimeRoot / "Content";
+        path = (std::filesystem::is_directory(content) ? content : runtimeRoot / "Assets") / path;
+    }
+    const auto key = path.lexically_normal().generic_string();
+    if (const auto cached = iesProfileCache.find(key); cached != iesProfileCache.end())
+        return cached->second;
+    auto table = loadIesProfile(path);
+    if (!table)
+        Diagnostics::instance().report(DiagnosticSeverity::Warning,
+                                       "Could not read IES light profile: " + path.string() +
+                                           "; the light shines without a profile.",
+                                       {.subsystem = "Renderer"});
+    return iesProfileCache.emplace(key, std::move(table)).first->second;
 }
 
 void refreshSceneFrameData() {
@@ -39,16 +105,26 @@ void refreshSceneFrameData() {
     // recomputed, including descendants of a moved parent. A moving
     // renderable must not force scans of every camera, light and wind
     // component just because Transform has a global revision.
+    // Read every world change since the last refresh, not just the latest
+    // update's: physics resolves transforms before the renderer does, and a
+    // camera or light change it resolved first was otherwise lost, so the
+    // view lagged and jumped (and temporal effects saw that motion).
     bool relevantTransformChanged = !sceneFrameDataCache.initialized;
     if (!relevantTransformChanged && sceneFrameDataCache.transformRevision != transformRevision) {
-        for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
-            if (readRegistry.has<CameraComponent>(entity) || readRegistry.has<LightComponent>(entity) ||
-                readRegistry.has<WindComponent>(entity)) {
-                relevantTransformChanged = true;
+        bool complete = true;
+        const auto changes =
+            TransformSystem::worldTransformChangesSince(registry, sceneFrameDataCache.worldTransformSerial, complete);
+        relevantTransformChanged = !complete;
+        for (const auto& change : changes) {
+            if (relevantTransformChanged)
                 break;
-            }
+            const Entity entity = change.entity;
+            if (readRegistry.has<CameraComponent>(entity) || readRegistry.has<LightComponent>(entity) ||
+                readRegistry.has<WindComponent>(entity))
+                relevantTransformChanged = true;
         }
     }
+    sceneFrameDataCache.worldTransformSerial = TransformSystem::worldTransformSerial(registry);
 
     const bool dataDirty =
         !sceneFrameDataCache.initialized || relevantTransformChanged ||
@@ -88,7 +164,7 @@ void refreshSceneFrameData() {
                     }
                     return;
                 }
-                if (data.lightCount == MaxLocalLights || light.range <= 0.0F)
+                if (data.lightCount == MaxClusteredLocalLights || light.range <= 0.0F)
                     return;
                 constexpr float pi = 3.14159265358979323846F;
                 auto& gpu = data.lights[data.lightCount++];
@@ -98,6 +174,11 @@ void refreshSceneFrameData() {
                 gpu.colorIntensity = {color.r(), color.g(), color.b(), std::max(0.0F, light.intensity)};
                 gpu.parameters = {std::cos(light.innerConeAngle * pi / 180.0F), static_cast<float>(light.type),
                                   light.castShadows ? 1.0F : 0.0F, 0.0F};
+                gpu.profile = {};
+                if (const auto table = localLightProfileTable(light)) {
+                    gpu.profile = packLightProfile(*table);
+                    gpu.parameters.w = 1.0F;
+                }
             });
         if (const auto& sun = imageBasedLighting.sun(); sun) {
             if (data.directionalLight.enabled || !mainLightPresent) {
@@ -395,6 +476,8 @@ void updateUniformBuffer(const uint32_t frame) {
         // GTAO history is independent of TAA and must not survive a
         // teleport or a large camera rotation either.
         gtaoPass.reset();
+        // SSGI reprojects both its radiance and its accumulated GI.
+        ssgiPass.reset();
         if (taaResolveActive)
             temporalAaPass.reset();
     }
@@ -403,6 +486,28 @@ void updateUniformBuffer(const uint32_t frame) {
         // Hi-Z slot, not only the slot rendered this frame.
         hiZValid.fill(false);
     }
+    // SSGI needs the prepass view normals, which MSAA does not write. The
+    // decision is made here because Forward reads it from the frame UBO.
+    // DDGI is world space and needs no prepass inputs; while it runs it
+    // replaces SSGI, which would otherwise count the same bounce twice.
+    ddgiTracedThisFrame = renderGameViewport && ddgiSettings.enabled && ddgiPass.available();
+    ddgiPass.prepareFrame(frame, cameraController.camera()->position(), ddgiSettings, ddgiTracedThisFrame);
+    // Without a valid probe volume Forward never samples the probes; the
+    // _noddgi programs also drop the registers that lookup reserves.
+    lightingForwardPass.useReducedShaders(!ddgiPass.volumeValid(frame));
+    sceneViewportForwardPass.useReducedShaders(!ddgiPass.volumeValid(frame));
+    const bool ssgiTracedPreviousFrame = ssgiTracedThisFrame;
+    ssgiTracedThisFrame = renderGameViewport && ssgiSettings.quality != SsgiQuality::Off && !msaa.enabled() &&
+                          ssgiPass.resultView() != VK_NULL_HANDLE && !ddgiTracedThisFrame;
+    // Histories left over from before SSGI was off belong to an older camera.
+    if (ssgiTracedThisFrame && !ssgiTracedPreviousFrame)
+        ssgiPass.reset();
+    // The radiance history was captured with last frame's camera; previous*
+    // still holds it until it advances to this frame below.
+    ssgiViewToPreviousClip =
+        Mat4{(previousGameCameraValid ? previousGameProjection.native() * previousGameView.native()
+                                      : currentProjection.native() * currentView.native()) *
+             glm::inverse(currentView.native())};
     UniformBufferObject data{
         currentView, currentProjection, Mat4{glm::inverse(currentProjection.native())},
         Mat4{glm::inverse(currentView.native())}, previousGameCameraValid ? previousGameView : currentView,
@@ -417,7 +522,10 @@ void updateUniformBuffer(const uint32_t frame) {
         frameData.wind.directionStrength, frameData.wind.sourcePositionRange, frameData.wind.gustFrequencyTime,
         mainLightShadows ? 1u : 0u, static_cast<std::uint32_t>(shadowQuality),
         static_cast<std::uint32_t>(shadowDebugView), static_cast<std::uint32_t>(gtaoDebugView), materialSlots,
-        editorSelectedRenderable, frameData.lightCount, static_cast<std::uint32_t>(reflectionProbes.size()), 1u,
+        editorSelectedRenderable, frameData.lightCount, static_cast<std::uint32_t>(reflectionProbes.size()),
+        // Bit 0: Game View screen-space inputs are valid. Bit 1: SSGI is
+        // traced. Bit 2: TAA resolves this view, so per-pixel dither is safe.
+        gameScreenSpaceEffects = 1u | (ssgiTracedThisFrame ? 2u : 0u) | (taaResolveActive ? 4u : 0u),
         // Do not vary PCF/VSM sample phase until TAA has stronger
         // per-surface confidence (normals/reactive mask).  Depth
         // rejection prevents trails, but cannot fully hide changing
@@ -430,8 +538,11 @@ void updateUniformBuffer(const uint32_t frame) {
                   // Finalized after preparing this frame's TLAS,
                   // before the first submission reads the frame UBO.
                   0.0F},
-        frameData.lights};
+        uniformLocalLights(frameData)};
     uniformBuffers[frame].update(&data, sizeof(data));
+    // Game View and Scene View read the same lights from this frame slot.
+    localLightBuffers[frame].update(frameData.lights.data(),
+                                    sizeof(LocalLightGPU) * std::max(frameData.lightCount, 1U));
     const ClusteredLightingUniforms clustered{
         currentView.native(), currentProjection.native(),
         glm::uvec4{(swapchain.extent().width + ClusterTileSize - 1U) / ClusterTileSize,
@@ -517,9 +628,10 @@ void updateSceneViewportUniformBuffer(const uint32_t frame) {
     const Mat4 sceneView = sceneCamera.viewMatrix();
     const Mat4 sceneProjection = sceneCamera.projectionMatrix();
     sceneVsmFeedbackKey.viewProjection = sceneProjection.native() * sceneView.native();
-    sceneVsmFeedbackKey.sceneRevision = scene.mutationRevision();
+    // Same depth-relevant revisions as the Game View key (depthContentRevision).
+    sceneVsmFeedbackKey.sceneRevision = registry.renderTopologyRevision();
     sceneVsmFeedbackKey.settingsRevision = renderSettingsRevision;
-    sceneVsmFeedbackKey.transformRevision = registry.componentRevision<Transform>();
+    sceneVsmFeedbackKey.transformRevision = depthContentRevision;
     sceneVsmFeedbackKey.deformationRevision = grassDeformationVersion;
     sceneVsmFeedbackKey.windRevision = sceneFrameDataCache.windRevision;
     sceneVsmFeedbackKey.animationFrame =
@@ -585,7 +697,7 @@ void updateSceneViewportUniformBuffer(const uint32_t frame) {
                   static_cast<float>(sceneViewportTarget.extent().height), 0.1F, 1000.0F},
         glm::vec4{24.0F / std::log2(1000.0F / 0.1F), -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                   static_cast<float>(imageBasedLighting.prefilteredMipLevels()), 0.0F},
-        frameData.lights};
+        uniformLocalLights(frameData)};
     sceneUniformBuffers[frame].update(&data, sizeof(data));
     const ClusteredLightingUniforms clustered{
         sceneView.native(), sceneProjection.native(),
@@ -648,7 +760,7 @@ prepareGraphCommandBuffers(const RenderGraph::RenderGraph& graph, const uint32_t
     return buffers;
 }
 
-void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageIndex imageIndex) {
+void recordCommandBuffer(VkCommandBuffer commandBuffer) {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -672,9 +784,12 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
     static const ProfileNameId shadowPageMarkProfileName = Profiler::registerName("Shadow.PageMark");
     static const ProfileNameId shadowPageCompactProfileName = Profiler::registerName("Shadow.PageCompact");
     static const ProfileNameId shadowDepthRasterProfileName = Profiler::registerName("Shadow.CasterCullDepth");
-    static const ProfileNameId shadowProjectionProfileName = Profiler::registerName("Shadow.Projection");
+    static const ProfileNameId forwardOpaqueProfileName = Profiler::registerName("Forward.Opaque");
     static const ProfileNameId cullingProfileName = Profiler::registerName("Culling");
     static const ProfileNameId meshletForwardProfileName = Profiler::registerName("Meshlet Forward Prepare");
+    static const ProfileNameId meshletInstanceCullProfileName = Profiler::registerName("Meshlet.InstanceCull");
+    static const ProfileNameId meshletCullProfileName = Profiler::registerName("Meshlet.Cull");
+    static const ProfileNameId meshletBinProfileName = Profiler::registerName("Meshlet.Bin");
     static const ProfileNameId forwardProfileName = Profiler::registerName("Forward");
     static const ProfileNameId depthPrepassProfileName = Profiler::registerName("Depth Prepass");
     static const ProfileNameId hiZProfileName = Profiler::registerName("Hi-Z");
@@ -685,6 +800,15 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
     static const ProfileNameId tonemapProfileName = Profiler::registerName("Tonemap");
     static const ProfileNameId rtTlasProfileName = Profiler::registerName("RT TLAS");
     static const ProfileNameId rtContactProfileName = Profiler::registerName("RT Contact Shadows");
+    static const ProfileNameId clusterSceneProfileName = Profiler::registerName("Cluster RT Scene");
+    static const ProfileNameId localShadowProfileName = Profiler::registerName("Local Light Shadows");
+    static const ProfileNameId localShadowDenoiseProfileName = Profiler::registerName("Local Light Shadow Denoise");
+    static const ProfileNameId tileLightCullingProfileName = Profiler::registerName("Tile Light Culling");
+    static const ProfileNameId deferredLocalProfileName = Profiler::registerName("Deferred Local Lights");
+    static const ProfileNameId ssgiProfileName = Profiler::registerName("SSGI");
+    static const ProfileNameId gtaoProfileName = Profiler::registerName("GTAO");
+    static const ProfileNameId ddgiProfileName = Profiler::registerName("DDGI");
+    static const ProfileNameId ssgiCaptureProfileName = Profiler::registerName("SSGI.Capture");
     const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
     // Scene View replaces the embedded Game View in the editor.  Do
     // not submit hidden Game View work: this also makes the shared
@@ -722,7 +846,6 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
     importFrameUploadBuffer("Meshlet clusters", meshletClusterBuffer);
     importFrameUploadBuffer("Meshlet vertex references", meshletVertexBuffer);
     importFrameUploadBuffer("Meshlet triangles", meshletTriangleBuffer);
-    importFrameUploadBuffer("Meshlet indices", meshletIndexBuffer);
     importFrameUploadBuffer("Frame instances", instanceBuffers[currentFrame]);
     importFrameUploadBuffer("Previous transforms", previousTransformBuffers[currentFrame]);
     importFrameUploadBuffer("Frame materials", materialBuffers[currentFrame]);
@@ -732,6 +855,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
     importFrameUploadBuffer("Frame lights", uniformBuffers[currentFrame]);
     importFrameUploadBuffer("Shadow culling", shadowCullingUniformBuffers[currentFrame]);
     importFrameUploadBuffer("Clustered lighting", clusteredLightingUniformBuffers[currentFrame]);
+    importFrameUploadBuffer("Local lights", localLightBuffers[currentFrame]);
     importFrameUploadBuffer("Scene clustered lighting", sceneClusteredLightingUniformBuffers[currentFrame]);
     if (particleSystem && particleSystem->particleBuffer() != VK_NULL_HANDLE) {
         const auto particleBuffer = frameGraph.importBuffer(
@@ -770,7 +894,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
     // shared upload timeline. Keep this in sync with the imports above.
     const auto legacyUploadValue = [&]() {
         std::uint64_t value = 0;
-        const std::array<const Buffer*, 16> buffers{&vertexBuffer,
+        const std::array<const Buffer*, 15> buffers{&vertexBuffer,
                                                     &indexBuffer,
                                                     &instanceBuffers[currentFrame],
                                                     &previousTransformBuffers[currentFrame],
@@ -784,8 +908,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                     &meshletBuffer,
                                                     &meshletClusterBuffer,
                                                     &meshletVertexBuffer,
-                                                    &meshletTriangleBuffer,
-                                                    &meshletIndexBuffer};
+                                                    &meshletTriangleBuffer};
         for (const Buffer* buffer : buffers)
             if (buffer->handle() != VK_NULL_HANDLE)
                 value = std::max(value, buffer->readyTimeline());
@@ -833,17 +956,33 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
     // The virtual-water prepass is recorded by the legacy work pass
     // below whenever the Game View and the renderer are active. Keep
     // this decision available while declaring TAA's graph resources.
-    const bool virtualWaterPreparedThisFrame = renderGameViewport && virtualWaterRenderer.active();
+    // Set only once the water prepass is actually recorded: TAA and the frame
+    // graph then sample the water targets, which must have left UNDEFINED.
+    bool virtualWaterPreparedThisFrame = false;
     // Record legacy shadowing, culling, lighting and Scene View before
     // submitting the presentation graph. The viewport graph may split
     // this work across graphics and compute submissions.
+    if (displacedMaterialsDirty) {
+        // Same test as materialHasDisplacement() in Displacement.slang.
+        const bool noDisplacement = std::ranges::none_of(materials, [](const GPUMaterialData& material) {
+            return material.auxiliaryTextureIndices.w >= 0 &&
+                   (std::abs(material.displacementParams.x) > 1.0e-6F ||
+                    std::abs(material.displacementParams.y) > 1.0e-6F);
+        });
+        forwardPass.useReducedShaders(noDisplacement);
+        sceneViewportDepthPrepass.useReducedShaders(noDisplacement);
+        lightingForwardPass.useFlatMeshShaders(noDisplacement);
+        sceneViewportForwardPass.useFlatMeshShaders(noDisplacement);
+        materialsDisplaced = !noDisplacement;
+        displacedMaterialsDirty = false;
+    }
     {
         bool meshletForwardReady = meshletForwardPathActive && renderGameViewport &&
                                    vulkanDevice.supportsMeshShaders() && optimizationFeatures.gpuCulling &&
                                    globalMeshletCount != 0 &&
                                    // Visible-meshlet entries pack the id into 24 bits.
                                    globalMeshletCount <= 0x00ffffffU &&
-                                   meshletIndexBuffer.handle() != VK_NULL_HANDLE &&
+                                   meshletIndexedDrawsSupported() &&
                                    !instanceBatches.empty() && !sceneGpu.database.instances().empty() &&
                                    meshletCullSets[currentFrame] != VK_NULL_HANDLE;
         // Foliage-pipeline batches (two-sided, masked or blended) already
@@ -852,14 +991,26 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
         // the remaining opaque geometry through meshlet culling, instead of
         // giving up cluster culling for the entire scene.
         bool meshletSkipsFoliage = false;
+        // Rasterize the visible meshlets with mesh shaders (one workgroup
+        // per meshlet) rather than one indexed draw per meshlet run.
+        const bool meshShaderCapable =
+            optimizationFeatures.meshShaders && forwardPass.hasMeshShaderPipelines() &&
+            lightingForwardPass.hasMeshShaderPipelines() && meshletDrawBinPipeline != VK_NULL_HANDLE &&
+            meshletDrawSets[currentFrame] != VK_NULL_HANDLE &&
+            meshletDrawListBuffers[currentFrame].handle() != VK_NULL_HANDLE;
         if (meshletForwardReady) {
             for (const InstanceBatch& batch : instanceBatches) {
-                if (batch.shaderSlot == materialShaderIndex(MaterialShader::Water) ||
-                    batch.shaderSlot == GlassThinProgramSlot)
+                if (isCompositedProgramSlot(batch.shaderSlot))
                     continue;
-                // Meshlet commands currently mix both face modes in one
-                // shader bin. Two-sided materials need the indexed lists.
-                if (batch.meshletCount != 0 && batch.shaderSlot < MaterialShaderCount && !batch.twoSided &&
+                // Indexed meshlet commands mix both face modes in one
+                // back-face-culled shader bin, so two-sided materials need
+                // the indexed lists there. Mesh shaders cull per primitive.
+                // Shader Graph slots only have mesh-shader meshlet pipelines.
+                const bool meshletPipeline =
+                    batch.shaderSlot < MaterialShaderCount ||
+                    (meshShaderCapable && forwardPass.hasMeshShaderPipeline(batch.shaderSlot) &&
+                     lightingForwardPass.hasMeshShaderPipeline(batch.shaderSlot));
+                if (batch.meshletCount != 0 && meshletPipeline && (meshShaderCapable || !batch.twoSided) &&
                     batch.lod1IndexCount == 0 && batch.lod2IndexCount == 0)
                     continue;
                 if (batch.foliagePipeline) {
@@ -871,6 +1022,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 break;
             }
         }
+        const bool meshShaderForward = meshletForwardReady && meshShaderCapable;
+        { static int d = 0; if (d++ == 150) std::fprintf(stderr, "TEMP-DEBUG ready=%d mesh=%d skipsFoliage=%d\n", (int)meshletForwardReady, (int)meshShaderForward, (int)meshletSkipsFoliage); }
         // Culling samples the previous frame's pyramid while this frame's
         // depth is reduced into a different image.
         // Empty scenes do not allocate culling/Hi-Z resources. Keep the
@@ -897,8 +1050,10 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             // Build an indirect command from the compact coarse-visible
             // list, so meshlet culling launches one group per visible
             // instance instead of one per instance in the whole scene.
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, meshletInstanceCullProfileName);
             instanceCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(sceneGpu.database.instances().size()));
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletDispatchPipeline);
             const VkDescriptorSet meshletDispatchSet = meshletDispatchSets[currentFrame];
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletDispatchPipelineLayout, 0, 1,
@@ -926,11 +1081,13 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             const VkDependencyInfo clearDependency{
                 .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &clearBarrier};
             vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, meshletCullProfileName);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletCullingPipeline);
             const VkDescriptorSet meshletSet = meshletCullSets[currentFrame];
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletCullingPipelineLayout, 0, 1,
                                     &meshletSet, 0, nullptr);
             vkCmdDispatchIndirect(commandBuffer, meshletCullDispatchBuffers[currentFrame].handle(), 0);
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             const VkMemoryBarrier2 meshletBarrier{
                 VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,     nullptr,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -939,7 +1096,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                      .memoryBarrierCount = 1,
                                                      .pMemoryBarriers = &meshletBarrier};
             vkCmdPipelineBarrier2(commandBuffer, &meshletDependency);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletIndirectPipeline);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, meshletBinProfileName);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              meshShaderForward ? meshletDrawBinPipeline : meshletIndirectPipeline);
             vkCmdFillBuffer(commandBuffer, meshletIndexedDrawCountBuffers[currentFrame].handle(), 0,
                             sizeof(std::uint32_t) * MaterialProgramSlotCount, 0);
             const VkMemoryBarrier2 meshletCountClearBarrier{
@@ -953,14 +1112,34 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                                .memoryBarrierCount = 1,
                                                                .pMemoryBarriers = &meshletCountClearBarrier};
             vkCmdPipelineBarrier2(commandBuffer, &meshletCountClearDependency);
-            const VkDescriptorSet meshletIndirectSet = meshletIndirectSets[currentFrame];
+            const VkDescriptorSet meshletIndirectSet =
+                meshShaderForward ? meshletDrawBinSets[currentFrame] : meshletIndirectSets[currentFrame];
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletIndirectPipelineLayout, 0, 1,
                                     &meshletIndirectSet, 0, nullptr);
-            vkCmdDispatch(commandBuffer, (meshletVisibleCapacity + 63U) / 64U, 1, 1);
+            // BinGroups in meshlet_build_mesh_draws / meshlet_build_indexed:
+            // both loop over the visible count.
+            constexpr std::uint32_t meshletBinGroups = 1024U;
+            vkCmdDispatch(commandBuffer, std::min(meshletBinGroups, (meshletVisibleCapacity + 63U) / 64U), 1, 1);
+            if (meshShaderForward) {
+                // Per-slot counts are final: derive the mesh-task commands.
+                vkCmdPipelineBarrier2(commandBuffer, &meshletDependency);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletDrawCommandPipeline);
+                const VkDescriptorSet meshletDrawCommandSet = meshletDrawCommandSets[currentFrame];
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletDispatchPipelineLayout,
+                                        0, 1, &meshletDrawCommandSet, 0, nullptr);
+                vkCmdDispatch(commandBuffer, 1, 1, 1);
+            }
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            // The mesh stage also reads the entry list and counts as storage.
             const VkMemoryBarrier2 meshTaskIndirectBarrier{
-                VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,     nullptr,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,  VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
+                VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                nullptr,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                    (meshShaderForward ? VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT : VK_PIPELINE_STAGE_2_NONE),
+                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT |
+                    (meshShaderForward ? VK_ACCESS_2_SHADER_STORAGE_READ_BIT : VK_ACCESS_2_NONE)};
             const VkDependencyInfo meshTaskIndirectDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                                                               .memoryBarrierCount = 1,
                                                               .pMemoryBarriers = &meshTaskIndirectBarrier};
@@ -1416,7 +1595,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 constexpr std::uint32_t feedbackStride = 2;
                 const std::uint32_t feedbackWidth = (feedbackKey.width + feedbackStride - 1U) / feedbackStride;
                 const std::uint32_t feedbackHeight = (feedbackKey.height + feedbackStride - 1U) / feedbackStride;
-                vkCmdDispatch(buffer, (feedbackWidth + 7U) / 8U, (feedbackHeight + 7U) / 8U, 1);
+                vkCmdDispatch(buffer, (feedbackWidth + 15U) / 16U, (feedbackHeight + 15U) / 16U, 1);
                 const VkBufferMemoryBarrier2 markingBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                                                             .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                                             .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -1487,6 +1666,13 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             }
         };
+        // Scene View lighting reads its own resolved visibility. Update the
+        // set before anything in this frame binds it.
+        if (renderSceneViewport && sceneDirectionalVisibilityPass.resultView(currentFrame) != VK_NULL_HANDLE)
+            sceneDescriptorPass.setDirectionalVisibility(
+                currentFrame, {sceneDirectionalVisibilityPass.resultSampler(currentFrame),
+                               sceneDirectionalVisibilityPass.resultView(currentFrame),
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
         if (renderGameViewport) {
             // Update the shared scene descriptor before the depth prepass
             // binds it; the VSM pass records later in the frame graph.
@@ -1566,6 +1752,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             sceneDescriptorPass.setShadowInstanceTransforms(
                 currentFrame, shadowTwoSidedInstanceTransformBuffers[currentFrame].handle(),
                 shadowTwoSidedInstanceMaterialBuffers[currentFrame].handle(), true);
+            const ShadowPass::MeshletStream meshletShadowStream = shadowMeshletStream(currentFrame);
+            const ShadowPass::MeshletStream twoSidedMeshletShadowStream = shadowMeshletStream(currentFrame, true);
             sceneDescriptorPass.record(
                 commandBuffer, sceneShadowClipMatrices, sceneShadowClipUpdateMask, vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
@@ -1576,11 +1764,21 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 mainLightShadows ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                 sceneDescriptorPass.grassShadowDescriptorSet(currentFrame),
                 mainLightShadows ? grassShadowDrawPtr : nullptr,
-                static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())),
+                &meshletShadowStream, &twoSidedMeshletShadowStream);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
         }
+        // Forward and Scene View sample the masks every frame; give a slot
+        // that has never been traced a defined layout and "no receiver".
+        if (!localShadowMaskInitialized[currentFrame]) {
+            localLightShadowPass.clear(commandBuffer, currentFrame);
+            localShadowMaskInitialized[currentFrame] = true;
+        }
         gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, cullingProfileName);
+        // Closed by the Game View prepass, or before Scene View when that is
+        // the only view; it otherwise spanned the whole Scene View frame.
+        bool cullingZoneOpen = true;
         const auto dispatchClusteredLights = [&](VkDescriptorSet set, const VkExtent2D extent) {
             const uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
             const uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
@@ -1595,10 +1793,14 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             const VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO, nullptr, 0, 1, &barrier};
             vkCmdPipelineBarrier2(commandBuffer, &dependency);
         };
+        static const ProfileNameId clusteredLightsProfileName = Profiler::registerName("Culling.Clustered Lights");
+        static const ProfileNameId objectCullingProfileName = Profiler::registerName("Culling.Objects");
+        gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, clusteredLightsProfileName);
         if (renderGameViewport)
             dispatchClusteredLights(clusteredLightingSets[currentFrame], swapchain.extent());
         if (renderSceneViewport)
             dispatchClusteredLights(sceneClusteredLightingSets[currentFrame], sceneViewportTarget.extent());
+        gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
         // hasMaterialPipeline() probes the shader-graph pipeline registry, and
         // a large scene holds tens of thousands of objects spread over a
         // handful of shader slots. Collect the slots that are actually
@@ -1642,7 +1844,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             });
         earlyFrameGraph.exportBuffer(graphIndirect);
         earlyFrameGraph.exportBuffer(graphDrawCount);
+        gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, objectCullingProfileName);
         earlyFrameGraph.execute(commandBuffer);
+        gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
         profileRenderGraph(earlyFrameGraph, false);
         if (renderGameViewport && virtualWaterRenderer.active()) {
             static const ProfileNameId waterPageCullProfileName = Profiler::registerName("Water Page Cull");
@@ -1653,7 +1857,10 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                              static_cast<float>(Time::deltaTime()));
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
         }
-        if (renderSceneViewport && sceneVirtualWaterRenderer.active()) {
+        // The Scene View cull binds the viewport depth as its (disabled) Hi-Z
+        // source; skip it until that depth image has left UNDEFINED. The
+        // prepass then draws the zeroed indirect commands for one frame.
+        if (renderSceneViewport && sceneViewportDepthInitialized && sceneVirtualWaterRenderer.active()) {
             static const ProfileNameId sceneWaterPageCullProfileName = Profiler::registerName("Scene Water Page Cull");
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, sceneWaterPageCullProfileName);
             sceneVirtualWaterRenderer.recordCull(commandBuffer, currentFrame,
@@ -1736,6 +1943,13 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
         // texture here only when it is the active viewport.
         if (!renderGameViewport && !gtaoPass.resultInitialized())
             gtaoPass.initialize(commandBuffer);
+        // Forward always binds the SSGI result, so it must be black and
+        // sampleable before any view draws. A traced frame bootstraps it on
+        // the trace's own queue instead, as GTAO does.
+        if (!ssgiTracedThisFrame && !ssgiPass.initialized())
+            ssgiPass.initialize(commandBuffer);
+        if (!ddgiTracedThisFrame && ddgiPass.available() && !ddgiPass.initialized())
+            ddgiPass.initialize(commandBuffer);
         if (renderGameViewport) {
             viewportFrameGraph.reset();
             viewportFrameGraph.enablePassCulling();
@@ -1899,7 +2113,10 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                               .write = false});
                 },
                 [&](const VkCommandBuffer buffer) {
-                    gpuTimestampProfiler.endZone(buffer, currentFrame);
+                    if (cullingZoneOpen) {
+                        gpuTimestampProfiler.endZone(buffer, currentFrame);
+                        cullingZoneOpen = false;
+                    }
                     gpuTimestampProfiler.beginZone(buffer, currentFrame, depthPrepassProfileName);
                     forwardPass.begin(buffer, msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(),
                                       depthBuffer.imageView(),
@@ -1910,25 +2127,28 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                       shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                                       instanceBuffers[currentFrame].handle(), indexBuffer.handle());
                     if (meshletForwardReady)
-                        vkCmdBindIndexBuffer(buffer, meshletIndexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+                        vkCmdBindIndexBuffer(buffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
                     for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                         if (!activeShaderSlots.test(shader) ||
-                            (shader == materialShaderIndex(MaterialShader::Water) || shader == GlassThinProgramSlot))
+                            isCompositedProgramSlot(shader))
                             continue;
                         const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
-                        if (meshletForwardReady) {
-                            const auto commandOffset = static_cast<VkDeviceSize>(shader) * meshletVisibleCapacity *
-                                                       sizeof(VkDrawIndexedIndirectCommand);
+                        if (meshShaderForward) {
+                            forwardPass.drawMeshShaderMaterial(buffer, shadowPass.descriptorSet(currentFrame),
+                                                               meshletDrawSets[currentFrame], shader,
+                                                               meshletDrawCommandBuffers[currentFrame].handle());
+                        } else if (meshletForwardReady) {
+                            const auto commandOffset = meshletCommandOffset(shader);
                             forwardPass.drawMeshletMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
                                                             meshletIndexedIndirectDraws[currentFrame], commandOffset,
                                                             countOffset);
                         } else {
-                            const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
-                                                       sizeof(VkDrawIndexedIndirectCommand);
+                            const auto commandOffset = binnedCommandOffset(static_cast<std::uint32_t>(shader), false);
+                            const auto twoSidedCommandOffset = binnedCommandOffset(static_cast<std::uint32_t>(shader), true);
                             forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
                                                      indirectDraws[currentFrame], commandOffset, countOffset);
                             forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
-                                                     foliageIndirectDraws[currentFrame], commandOffset, countOffset,
+                                                     foliageIndirectDraws[currentFrame], twoSidedCommandOffset, countOffset,
                                                      true);
                         }
                     }
@@ -1936,13 +2156,11 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                         vkCmdBindIndexBuffer(buffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
                     if (meshletSkipsFoliage) {
                         for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
-                            if (!activeShaderSlots.test(shader) || shader == materialShaderIndex(MaterialShader::Water) ||
-                                shader == GlassThinProgramSlot)
+                            if (!activeShaderSlots.test(shader) || isCompositedProgramSlot(shader))
                                 continue;
                             forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
                                                      foliageIndirectDraws[currentFrame],
-                                                     static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
-                                                         sizeof(VkDrawIndexedIndirectCommand),
+                                                     binnedCommandOffset(static_cast<std::uint32_t>(shader), true),
                                                      static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t), true);
                         }
                     }
@@ -1976,14 +2194,294 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                            .write = false});
                 },
                 [&](const VkCommandBuffer buffer) {
+                    // Timestamps stay on graphics; async compute gets a label only.
+                    if (gtaoQueue == RenderGraph::Queue::Graphics)
+                        gpuTimestampProfiler.beginZone(buffer, currentFrame, gtaoProfileName);
                     gtaoPass.record(buffer, currentFrame,
                                     taaResolveActive ? static_cast<std::uint32_t>(submittedFrameValue) : 0U,
                                     gtaoDepth.imageView(), gtaoDepth.sampler(),
                                     msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
                                     msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(),
                                     !msaa.enabled(), inverseProjection, {.graphOwnsResultState = true});
+                    if (gtaoQueue == RenderGraph::Queue::Graphics)
+                        gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
             viewportFrameGraph.exportTexture(graphAo);
+            RenderGraph::TextureHandle graphSsgi{};
+            if (ssgiTracedThisFrame && graphViewNormal) {
+                const VkExtent2D ssgiExtent = ssgiPass.resultExtent();
+                const RenderGraph::TextureDesc ssgiDesc{.extent = {ssgiExtent.width, ssgiExtent.height, 1},
+                                                        .format = SsgiPass::ResultFormat,
+                                                        .usage = VK_IMAGE_USAGE_STORAGE_BIT |
+                                                                 VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                        .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        .concurrentSharing = graphAoDesc.concurrentSharing};
+                graphSsgi = viewportFrameGraph.importTexture(
+                    "SSGI irradiance", ssgiPass.resultImage(), ssgiDesc,
+                    ssgiPass.initialized()
+                        ? RenderGraph::TextureState{.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                                    .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                                    .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                        : RenderGraph::TextureState{.layout = VK_IMAGE_LAYOUT_UNDEFINED});
+                const SsgiFrameInputs ssgiInputs{.depthView = gtaoDepth.imageView(),
+                                                 .depthSampler = gtaoDepth.sampler(),
+                                                 .viewNormalView = gtaoViewNormalBuffer.imageView(),
+                                                 .viewNormalSampler = gtaoViewNormalBuffer.sampler(),
+                                                 .projection = cameraController.camera()->projectionMatrix(),
+                                                 .viewToPreviousClip = ssgiViewToPreviousClip};
+                // Same inputs as GTAO, so it shares GTAO's queue and overlaps
+                // the shadow atlas work on graphics.
+                viewportFrameGraph.addPass(
+                    "SSGI", gtaoQueue,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                        builder.read(graphViewNormal, RenderGraph::TextureUsage::SampledReadCompute);
+                        builder.write(graphSsgi, RenderGraph::TextureUsage::StorageWriteCompute);
+                        builder.setFinalTextureState(graphSsgi, {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                                                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                                 .write = false});
+                    },
+                    [&, ssgiInputs](const VkCommandBuffer buffer) {
+                        // Timestamps stay on graphics; async compute gets a label only.
+                        if (gtaoQueue == RenderGraph::Queue::Graphics)
+                            gpuTimestampProfiler.beginZone(buffer, currentFrame, ssgiProfileName);
+                        ssgiPass.record(buffer, currentFrame, ssgiInputs, ssgiSettings);
+                        if (gtaoQueue == RenderGraph::Queue::Graphics)
+                            gpuTimestampProfiler.endZone(buffer, currentFrame);
+                    });
+                viewportFrameGraph.exportTexture(graphSsgi);
+            } else {
+                ssgiTracedThisFrame = false;
+                if (!ssgiPass.initialized())
+                    ssgiPass.initialize(commandBuffer);
+            }
+            // Mega Geometry ray tracing scene, shared by DDGI and the local
+            // light shadows: every meshlet a cluster (CLAS), all opaque
+            // sections of a mesh one cluster BLAS, one PTLAS instance per
+            // object placement. Built and updated on graphics before either
+            // traces it.
+            const bool localShadowCasters =
+                std::any_of(sceneFrameDataCache.data.lights.begin(),
+                            sceneFrameDataCache.data.lights.begin() + sceneFrameDataCache.data.lightCount,
+                            [](const LocalLightGPU& light) { return light.parameters.z > 0.5F; });
+            const bool clusterShadowsPossible = localLightShadowPass.clusterTracing() && renderGameViewport &&
+                                                localShadowCasters && ddgiPass.tracePipeline() != VK_NULL_HANDLE;
+            // Trial phases of ShadowTracePhaseFrames alternate the cluster scene
+            // and the classic TLAS until both have been timed. The trial
+            // waits out the frames after a scene load (streaming, first
+            // builds, empty histories), and short phases let both backends
+            // time nearly the same views: 48-frame phases right after load
+            // once picked the 3x slower backend on Bistro.
+            constexpr std::uint32_t ShadowTraceWarmupFrames = 120;
+            constexpr std::uint32_t ShadowTracePhaseFrames = 16;
+            constexpr std::uint32_t ShadowTraceSettleFrames = 6;
+            bool clusterShadowsRequested = false;
+            shadowTraceSampled[currentFrame] = false;
+            if (clusterShadowsPossible) {
+                if (shadowTraceBackend == ShadowTraceBackend::Measuring &&
+                    shadowTraceTrialFrame < ShadowTraceWarmupFrames) {
+                    // Classic TLAS meanwhile: no cluster scene is built yet.
+                    ++shadowTraceTrialFrame;
+                } else if (shadowTraceBackend == ShadowTraceBackend::Measuring) {
+                    const std::uint32_t trialFrame = shadowTraceTrialFrame - ShadowTraceWarmupFrames;
+                    const std::uint32_t phaseFrame = trialFrame % ShadowTracePhaseFrames;
+                    clusterShadowsRequested = (trialFrame / ShadowTracePhaseFrames) % 2 == 0;
+                    // The first frames of a phase build its structures.
+                    shadowTraceSampled[currentFrame] = phaseFrame >= ShadowTraceSettleFrames;
+                    ++shadowTraceTrialFrame;
+                } else {
+                    clusterShadowsRequested = shadowTraceBackend == ShadowTraceBackend::Cluster;
+                }
+            }
+            shadowTraceUsedCluster[currentFrame] = clusterShadowsRequested;
+            const bool clusterSceneNeeded = ddgiTracedThisFrame || clusterShadowsRequested;
+            const DdgiPass::GeometryBuffers clusterGeometry{meshletBuffer.handle(), meshletVertexBuffer.handle(),
+                                                            meshletTriangleBuffer.handle(), vertexBuffer.handle()};
+            bool clusterTopologyChanged = false;
+            if (clusterSceneNeeded) {
+                const ClusterRayTracingScene::GeometrySources& builtSources = clusterScene.geometrySources();
+                const bool sourcesChanged = builtSources.meshlets != clusterGeometry.meshlets ||
+                                            builtSources.meshletVertices != clusterGeometry.meshletVertices ||
+                                            builtSources.meshletTriangles != clusterGeometry.meshletTriangles ||
+                                            builtSources.vertices != clusterGeometry.vertices;
+                const std::uint64_t topologyRevision = registry.renderTopologyRevision();
+                clusterInstances.clear();
+                clusterBlases.clear();
+                clusterVariants.clear();
+                clusterInstanceBounds.clear();
+                // Sections of one object share its transform and material
+                // table, so they collapse into one instance of the mesh BLAS.
+                std::unordered_map<std::uint64_t, std::size_t> placements;
+                for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
+                    const InstanceBatch& batch = instanceBatches[batchIndex];
+                    if (batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr || batch.meshletCount == 0)
+                        continue;
+                    const ClusterRayTracingScene::BlasKey key{batch.mesh, 0, 0};
+                    clusterBlases.push_back({key, batch.firstMeshlet, batch.meshletCount});
+                    for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
+                        const RendererInstanceData& source = instanceModels[renderableIndex];
+                        // Displaced instances trace their own cluster-template
+                        // instantiation, shared by every instance using the
+                        // same mesh and materials.
+                        const bool displaced = renderables[renderableIndex].displacementBoundsPadding > 1.0e-6F;
+                        const auto materialBase = std::bit_cast<std::uint32_t>(source.positionMaterial.w);
+                        if (displaced) {
+                            const ClusterRayTracingScene::VariantInput variant{key, materialBase};
+                            if (std::ranges::find(clusterVariants, variant) == clusterVariants.end())
+                                clusterVariants.push_back(variant);
+                        }
+                        const AABB& bounds = renderables[renderableIndex].worldBounds;
+                        const std::array<float, 6> box{bounds.min.x(), bounds.min.y(), bounds.min.z(),
+                                                       bounds.max.x(), bounds.max.y(), bounds.max.z()};
+                        const glm::quat q{source.rotation.w, source.rotation.x, source.rotation.y, source.rotation.z};
+                        glm::mat4 model = glm::mat4_cast(q);
+                        model[0] *= source.scaleBase.x;
+                        model[1] *= source.scaleBase.y;
+                        model[2] *= source.scaleBase.z;
+                        ClusterRayTracingScene::InstanceInput input{};
+                        input.key = key;
+                        input.materialBase = materialBase;
+                        input.displaced = displaced;
+                        for (std::uint32_t row = 0; row < 3; ++row) {
+                            for (std::uint32_t column = 0; column < 3; ++column)
+                                input.transform[row * 4 + column] = model[column][row];
+                            input.transform[row * 4 + 3] = source.positionMaterial[static_cast<int>(row)];
+                        }
+                        std::uint64_t placement = std::hash<const void*>{}(batch.mesh) ^ (materialBase * 0x9e3779b9ULL);
+                        placement ^= displaced ? 0x51ED270BULL : 0ULL;
+                        for (const float value : input.transform)
+                            placement = (placement ^ std::hash<float>{}(value)) * 1099511628211ULL;
+                        const auto [known, inserted] = placements.try_emplace(placement, clusterInstances.size());
+                        if (!inserted) {
+                            auto& merged = clusterInstanceBounds[known->second];
+                            for (int axis = 0; axis < 3; ++axis) {
+                                merged[axis] = std::min(merged[axis], box[axis]);
+                                merged[axis + 3] = std::max(merged[axis + 3], box[axis + 3]);
+                            }
+                            continue;
+                        }
+                        clusterInstanceBounds.push_back(box);
+                        clusterInstances.push_back(input);
+                    }
+                }
+                const bool rebuildGeometry =
+                    clusterGeometryDirty || sourcesChanged || !clusterScene.hasVariants(clusterVariants);
+                clusterTopologyChanged = rebuildGeometry || topologyRevision != clusterTopologyRevision;
+                viewportFrameGraph.addPass(
+                    "Cluster RT scene", RenderGraph::Queue::Graphics,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.read(graphVertices, RenderGraph::BufferUsage::StorageReadCompute);
+                        builder.setSideEffect();
+                    },
+                    [&, rebuildGeometry, topologyRevision](const VkCommandBuffer buffer) {
+                        gpuTimestampProfiler.beginZone(buffer, currentFrame, clusterSceneProfileName);
+                        // Building clusters needs a bound ray tracing pipeline
+                        // that allows them; the DDGI one always exists here.
+                        if (rebuildGeometry) {
+                            clusterScene.buildGeometry(buffer, ddgiPass.tracePipeline(),
+                                                       shadowPass.descriptorSet(currentFrame), clusterBlases,
+                                                       clusterVariants,
+                                                       {clusterGeometry.meshlets, clusterGeometry.meshletVertices,
+                                                        clusterGeometry.meshletTriangles, clusterGeometry.vertices});
+                            clusterGeometryDirty = false;
+                        }
+                        clusterScene.updateInstances(buffer, ddgiPass.tracePipeline(), currentFrame, clusterInstances,
+                                                     clusterTopologyChanged);
+                        clusterTopologyRevision = topologyRevision;
+                        gpuTimestampProfiler.endZone(buffer, currentFrame);
+                    });
+            }
+            RenderGraph::TextureHandle graphDdgiIrradiance{};
+            RenderGraph::TextureHandle graphDdgiDistance{};
+            if (ddgiTracedThisFrame) {
+                // Probe cache invalidation. Lighting, sky or structural
+                // changes wake every probe; a moved instance wakes the probes
+                // around its old and new bounds.
+                const auto& lighting = sceneFrameDataCache.data;
+                std::uint64_t lightHash = 1469598103934665603ULL;
+                const auto mix = [&lightHash](const void* bytes, std::size_t size) {
+                    for (std::size_t i = 0; i < size; ++i)
+                        lightHash = (lightHash ^ static_cast<const std::uint8_t*>(bytes)[i]) * 1099511628211ULL;
+                };
+                const std::array<float, 7> sun{lighting.directionalLight.direction.x(),
+                                               lighting.directionalLight.direction.y(),
+                                               lighting.directionalLight.direction.z(),
+                                               lighting.directionalLight.intensity,
+                                               lighting.directionalLight.color.r(),
+                                               lighting.directionalLight.color.g(),
+                                               lighting.directionalLight.color.b()};
+                mix(sun.data(), sizeof(sun));
+                mix(&lighting.lightCount, sizeof(lighting.lightCount));
+                mix(lighting.lights.data(), sizeof(lighting.lights[0]) * lighting.lightCount);
+                const VkImageView environment = imageBasedLighting.descriptors()[0].imageView;
+                ddgiWakeBoxes.clear();
+                bool wakeAll = clusterTopologyChanged || lightHash != ddgiLightHash || environment != ddgiEnvironmentView ||
+                               ddgiPreviousTransforms.size() != clusterInstances.size();
+                for (std::size_t i = 0; !wakeAll && i < clusterInstances.size(); ++i) {
+                    if (clusterInstances[i].transform == ddgiPreviousTransforms[i])
+                        continue;
+                    if (ddgiWakeBoxes.size() == DdgiPass::MaxWakeBoxes) {
+                        wakeAll = true;
+                        break;
+                    }
+                    const auto& before = ddgiPreviousBounds[i];
+                    const auto& after = clusterInstanceBounds[i];
+                    ddgiWakeBoxes.push_back({std::min(before[0], after[0]), std::min(before[1], after[1]),
+                                             std::min(before[2], after[2]), std::max(before[3], after[3]),
+                                             std::max(before[4], after[4]), std::max(before[5], after[5])});
+                }
+                ddgiPass.wakeProbes(currentFrame, {.all = wakeAll, .boxes = ddgiWakeBoxes});
+                ddgiLightHash = lightHash;
+                ddgiEnvironmentView = environment;
+                ddgiPreviousTransforms.resize(clusterInstances.size());
+                for (std::size_t i = 0; i < clusterInstances.size(); ++i)
+                    ddgiPreviousTransforms[i] = clusterInstances[i].transform;
+                ddgiPreviousBounds = clusterInstanceBounds;
+                const auto aoSharing = graphAoDesc.concurrentSharing;
+                const auto importAtlas = [&](const char* name, const HdrBuffer& atlas, VkExtent2D extent,
+                                             VkFormat format) {
+                    return viewportFrameGraph.importTexture(
+                        name, atlas.image(),
+                        {.extent = {extent.width, extent.height, 1},
+                         .format = format,
+                         .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                         .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                         .concurrentSharing = aoSharing},
+                        ddgiPass.initialized()
+                            ? RenderGraph::TextureState{.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                        .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                            : RenderGraph::TextureState{.layout = VK_IMAGE_LAYOUT_UNDEFINED});
+                };
+                graphDdgiIrradiance = importAtlas("DDGI irradiance", ddgiPass.irradianceAtlas(),
+                                                  ddgiPass.irradianceExtent(), DdgiPass::IrradianceFormat);
+                graphDdgiDistance = importAtlas("DDGI distance", ddgiPass.distanceAtlas(), ddgiPass.distanceExtent(),
+                                                DdgiPass::DistanceFormat);
+                // Graphics queue: the trace reads the vertex and meshlet heaps,
+                // which the graphics queue owns exclusively.
+                viewportFrameGraph.addPass(
+                    "DDGI", RenderGraph::Queue::Graphics,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.read(graphVertices, RenderGraph::BufferUsage::StorageReadCompute);
+                        for (const auto atlas : {graphDdgiIrradiance, graphDdgiDistance}) {
+                            builder.write(atlas, RenderGraph::TextureUsage::StorageWriteCompute);
+                            builder.setFinalTextureState(atlas, {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                                                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                                 .write = false});
+                        }
+                    },
+                    [&](const VkCommandBuffer buffer) {
+                        gpuTimestampProfiler.beginZone(buffer, currentFrame, ddgiProfileName);
+                        ddgiPass.record(buffer, currentFrame, shadowPass.descriptorSet(currentFrame), clusterScene,
+                                        clusterGeometry);
+                        gpuTimestampProfiler.endZone(buffer, currentFrame);
+                    });
+                viewportFrameGraph.exportTexture(graphDdgiIrradiance);
+                viewportFrameGraph.exportTexture(graphDdgiDistance);
+            }
             // Shadow atlas work follows depth on graphics and overlaps GTAO on compute.
             // The previous Hi-Z is read by page marking before the current Hi-Z write.
             // The table is also the explicit graph dependency between atlas
@@ -2007,6 +2505,10 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowProfileName);
                     recordVsmPageRequests(buffer, false);
                     gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowDepthRasterProfileName);
+                    const ShadowPass::MeshletStream meshletShadowStream = shadowMeshletStream(currentFrame);
+                    const ShadowPass::MeshletStream twoSidedMeshletShadowStream =
+                        shadowMeshletStream(currentFrame, true);
+                    shadowPass.setProfiler(&gpuTimestampProfiler, currentFrame);
                     shadowPass.record(
                         buffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
                         instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
@@ -2017,7 +2519,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                         mainLightShadows ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                         shadowPass.grassShadowDescriptorSet(currentFrame),
                         mainLightShadows ? grassShadowDrawPtr : nullptr,
-                        static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                        static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())),
+                &meshletShadowStream, &twoSidedMeshletShadowStream);
+                    shadowPass.setProfiler(nullptr, 0);
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
@@ -2060,6 +2564,91 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                         gpuTimestampProfiler.endZone(buffer, currentFrame);
                     });
             }
+            // Depth-bounded Forward+ light lists for Game View forward shading;
+            // without them (MSAA, no lights) it walks the cluster lists.
+            const bool tileLightsThisFrame =
+                tileLightCulling.culling() && renderGameViewport && sceneFrameDataCache.data.lightCount != 0;
+            if (tileLightsThisFrame) {
+                viewportFrameGraph.addPass(
+                    "Tile light culling", RenderGraph::Queue::Graphics,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                        // The lists are outside the graph; the pass handles their barriers.
+                        builder.setSideEffect();
+                    },
+                    [&](const VkCommandBuffer buffer) {
+                        gpuTimestampProfiler.beginZone(buffer, currentFrame, tileLightCullingProfileName);
+                        tileLightCulling.record(buffer, currentFrame, depthBuffer.imageView(), depthBuffer.sampler(),
+                                                localLightBuffers[currentFrame].handle());
+                        gpuTimestampProfiler.endZone(buffer, currentFrame);
+                    });
+            }
+            // Stochastic local lighting (MegaLights-style), opt-in with
+            // GAMENGINE_MEGALIGHTS=1: the tracer samples lights from the tile
+            // lists and the deferred pass shades those samples, so every light
+            // casts shadows at a cost independent of the light count. With a
+            // few dozen lights per tile the exact loop (shadows from each
+            // pixel's strongest lights) is faster, hence the default.
+            const bool megaLightsThisFrame = megaLightsRequested() && tileLightsThisFrame && !msaa.enabled() &&
+                                             deferredLocalLighting.stochasticReady();
+            megaLightsTracedThisFrame = false;
+            // Ray-traced local light shadows need only prepass outputs, the
+            // TLAS and the cluster lists, so they run on graphics while GTAO
+            // and SSGI occupy async compute; graphics otherwise idled there.
+            // Whether to trace is decided with the TLAS update below, before
+            // this graph records.
+            bool localShadowsReadyThisFrame = false;
+            if (localLightShadowPass.tracing() && graphViewNormal) {
+                viewportFrameGraph.addPass(
+                    "Local light shadows", RenderGraph::Queue::Graphics,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                        builder.read(graphViewNormal, RenderGraph::TextureUsage::SampledReadCompute);
+                        // The mask is outside the graph; the pass handles its layout.
+                        builder.setSideEffect();
+                    },
+                    [&](const VkCommandBuffer buffer) {
+                        if (!localShadowsReadyThisFrame)
+                            return;
+                        // The cluster scene is updated by the "Cluster RT scene"
+                        // pass above; until its first build completes nothing
+                        // is shadowed rather than reading a stale mask.
+                        if (clusterShadowsRequested && !clusterScene.ready()) {
+                            localLightShadowPass.clear(buffer, currentFrame);
+                            return;
+                        }
+                        gpuTimestampProfiler.beginZone(buffer, currentFrame, localShadowProfileName);
+                        localLightShadowPass.record(
+                            buffer, currentFrame,
+                            {.clusterScene = clusterShadowsRequested ? clusterScene.tlasAddress() : 0,
+                             .tlas = clusterShadowsRequested ? VK_NULL_HANDLE : accelerationStructures.tlas(currentFrame),
+                             .depth = depthBuffer.imageView(),
+                             .depthSampler = depthBuffer.sampler(),
+                             .normals = gtaoViewNormalBuffer.imageView(),
+                             .normalSampler = gtaoViewNormalBuffer.sampler(),
+                             .clusterRanges = clusteredLightRangeBuffers[currentFrame].handle(),
+                             .clusterIndices = clusteredLightIndexBuffers[currentFrame].handle(),
+                             .localLights = localLightBuffers[currentFrame].handle(),
+                             .tileLights = tileLightCulling.lists(currentFrame)},
+                            [&] {
+                                // GAMENGINE_SHADOW_RAY_REUSE=<n> overrides the converged
+                                // retrace interval (1 disables reuse).
+                                LocalLightShadowPass::Settings settings;
+                                settings.stochastic = megaLightsThisFrame;
+                                if (const char* reuse = std::getenv("GAMENGINE_SHADOW_RAY_REUSE"))
+                                    settings.convergedRayInterval =
+                                        static_cast<std::uint32_t>(std::max(1, std::atoi(reuse)));
+                                return settings;
+                            }(),
+                            [&] {
+                                // The trace alone is what the backend choice compares.
+                                gpuTimestampProfiler.endZone(buffer, currentFrame);
+                                gpuTimestampProfiler.beginZone(buffer, currentFrame, localShadowDenoiseProfileName);
+                            });
+                        gpuTimestampProfiler.endZone(buffer, currentFrame);
+                        megaLightsTracedThisFrame = megaLightsThisFrame;
+                    });
+            }
             // Forward lighting records after this graph. Its input pass waits
             // for GTAO while directional visibility can run on graphics.
             viewportFrameGraph.addPass(
@@ -2068,6 +2657,12 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     builder.startNewBatch();
                     builder.read(graphShadowPageTable, RenderGraph::BufferUsage::StorageReadFragment);
                     builder.read(graphAo, RenderGraph::TextureUsage::SampledReadFragment);
+                    if (graphSsgi)
+                        builder.read(graphSsgi, RenderGraph::TextureUsage::SampledReadFragment);
+                    if (graphDdgiIrradiance) {
+                        builder.read(graphDdgiIrradiance, RenderGraph::TextureUsage::SampledReadFragment);
+                        builder.read(graphDdgiDistance, RenderGraph::TextureUsage::SampledReadFragment);
+                    }
                     if (graphDirectionalVisibility)
                         builder.read(graphDirectionalVisibility, RenderGraph::TextureUsage::SampledReadCompute);
                     builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
@@ -2137,7 +2732,11 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                             rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
                                             rtContactShadowPass.resultView(currentFrame) != VK_NULL_HANDLE &&
                                             directionalVisibilityPass.resultView(currentFrame) != VK_NULL_HANDLE;
-            const bool rtSceneRequested = rtContactRequested;
+            const bool localShadowsRequested =
+                localLightShadowPass.tracing() && renderGameViewport && localShadowCasters;
+            // The classic triangle TLAS is needed only where shadows cannot
+            // trace the cluster scene.
+            const bool rtSceneRequested = rtContactRequested || (localShadowsRequested && !clusterShadowsRequested);
             if (rtSceneRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() &&
                 indexBuffer.hasDeviceAddress()) {
                 std::vector<AccelerationStructureManager::MeshBuildInput>& meshes = rtMeshBuildInputs;
@@ -2163,11 +2762,13 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     if (allocationIt == geometryHeapAllocations.end())
                         continue;
                     const auto& allocation = allocationIt->second;
-                    const AccelerationStructureManager::BlasKey key{batch.mesh, batch.firstIndex, batch.indexCount};
-                    if (!builtSections.insert(key).second)
+                    const AccelerationStructureManager::BlasKey section{batch.mesh, batch.firstIndex,
+                                                                        batch.indexCount};
+                    if (!builtSections.insert(section).second)
                         continue;
+                    // Every section of a mesh joins that mesh's single BLAS.
                     meshes.push_back(
-                        {key, vertexBuffer.deviceAddress(),
+                        {{batch.mesh, 0, 0}, vertexBuffer.deviceAddress(),
                          indexBuffer.deviceAddress() + VkDeviceAddress(batch.firstIndex) * sizeof(std::uint32_t),
                          allocation.firstVertex, allocation.vertexCount, batch.indexCount});
                 }
@@ -2183,6 +2784,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 const bool inputChanged = rtTlasInputDirty || topologyRevision != lastRtTlasTopologyRevision;
                 if (inputChanged) {
                     rtTlasInstances.clear();
+                    // One instance per mesh placement: its sections share
+                    // the mesh's BLAS and the object's transform.
+                    std::unordered_set<std::uint64_t> placedMeshes;
                     for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
                         const InstanceBatch& batch = instanceBatches[batchIndex];
                         // Masked surfaces need candidate alpha testing before
@@ -2205,7 +2809,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                             model[3] = glm::vec4(source.positionMaterial.x, source.positionMaterial.y,
                                                  source.positionMaterial.z, 1.0F);
                             AccelerationStructureManager::InstanceBuildInput input{};
-                            input.meshKey = {batch.mesh, batch.firstIndex, batch.indexCount};
+                            input.meshKey = {batch.mesh, 0, 0};
                             const GPUSceneInstanceId instanceId = renderables[renderableIndex].renderProxy.instance;
                             assert(instanceId < (1U << 24U));
                             input.mask = 0x01;
@@ -2213,6 +2817,11 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                             for (std::uint32_t row = 0; row < 3; ++row)
                                 for (std::uint32_t column = 0; column < 4; ++column)
                                     input.transform[row * 4 + column] = model[column][row];
+                            std::uint64_t placement = std::hash<const void*>{}(batch.mesh);
+                            for (const float value : input.transform)
+                                placement = (placement ^ std::hash<float>{}(value)) * 1099511628211ULL;
+                            if (!placedMeshes.insert(placement).second)
+                                continue;
                             rtTlasInstances.push_back(input);
                         }
                     }
@@ -2220,6 +2829,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     rtTlasInputDirty = false;
                     rtTlasUpdatePending.fill(true);
                 }
+                // Compacts the BLASes a few frames after their build; a
+                // finished compaction leaves every TLAS to rebuild below.
+                accelerationStructures.advanceCompaction(commandBuffer);
                 if (rtTlasUpdatePending[currentFrame] || !accelerationStructures.built(currentFrame)) {
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtTlasProfileName);
                     accelerationStructures.updateTlas(commandBuffer, currentFrame, rtTlasInstances);
@@ -2236,6 +2848,20 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             uniformBuffers[currentFrame].update(
                 &rtContactEnabled, sizeof(rtContactEnabled),
                 offsetof(UniformBufferObject, clusterZScaleBiasEnvironmentMipRtContact) + sizeof(float) * 3);
+            localShadowsReadyThisFrame =
+                clusterShadowsRequested ||
+                (localShadowsRequested && !rayTracingBlasDirty && accelerationStructures.built(currentFrame));
+            // Deferred local lights need the tile lists of this frame.
+            deferredLocalThisFrame = tileLightsThisFrame && deferredLocalLighting.ready() && !msaa.enabled();
+            // Same condition as deferLocalLights in forward_pbr.slang: the
+            // PBR programs may then drop their own local light walk.
+            lightingForwardPass.useDeferredLocalShaders(deferredLocalThisFrame &&
+                                                        pbrDebugView == PbrDebugView::FinalLighting);
+            const std::uint32_t screenSpaceEffects = gameScreenSpaceEffects | (localShadowsReadyThisFrame ? 8U : 0U) |
+                                                     (tileLightsThisFrame ? 16U : 0U) |
+                                                     (deferredLocalThisFrame ? 32U : 0U);
+            uniformBuffers[currentFrame].update(&screenSpaceEffects, sizeof(screenSpaceEffects),
+                                                offsetof(UniformBufferObject, screenSpaceEffects));
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
                 throw std::runtime_error("Could not end graphics commands before viewport RenderGraph");
@@ -2269,8 +2895,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 VsmFeedbackKey depthKey;
                 depthKey.viewProjection = cameraController.camera()->unjitteredProjectionMatrix().native() *
                                           cameraController.camera()->viewMatrix().native();
-                depthKey.sceneRevision = scene.mutationRevision();
-                depthKey.transformRevision = registry.componentRevision<Transform>();
+                depthKey.sceneRevision = registry.renderTopologyRevision();
+                depthKey.transformRevision = depthContentRevision;
                 depthKey.deformationRevision = grassDeformationVersion;
                 depthKey.windRevision = sceneFrameDataCache.windRevision;
                 depthKey.animationFrame =
@@ -2290,9 +2916,12 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 rtContactActive = true;
                 gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
-
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProjectionProfileName);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardOpaqueProfileName);
+            // The single-sample lighting pass always has the deferred local
+            // light target; its PBR programs clear it when not deferring.
+            if (!msaa.enabled())
+                deferredLocalLighting.prepare(commandBuffer);
             lightingForwardPass.begin(
                 commandBuffer, msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(), depthBuffer.imageView(),
                 // Velocity is already final from the depth prepass; passing
@@ -2301,28 +2930,32 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 VK_NULL_HANDLE, msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
                 msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), instanceBuffers[currentFrame].handle(),
-                indexBuffer.handle());
+                indexBuffer.handle(), msaa.enabled() ? VK_NULL_HANDLE : deferredLocalLighting.surfaceData());
             if (meshletForwardReady)
-                vkCmdBindIndexBuffer(commandBuffer, meshletIndexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+                vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 if (!activeShaderSlots.test(shader))
                     continue;
-                if ((shader == materialShaderIndex(MaterialShader::Water) || shader == GlassThinProgramSlot))
+                if (isCompositedProgramSlot(shader))
                     continue;
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
-                if (meshletForwardReady) {
-                    const auto commandOffset = static_cast<VkDeviceSize>(shader) * meshletVisibleCapacity *
-                                               sizeof(VkDrawIndexedIndirectCommand);
+                if (meshShaderForward) {
+                    lightingForwardPass.drawMeshShaderMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
+                                                               meshletDrawSets[currentFrame], shader,
+                                                               meshletDrawCommandBuffers[currentFrame].handle());
+                } else if (meshletForwardReady) {
+                    const auto commandOffset = meshletCommandOffset(shader);
                     lightingForwardPass.drawMeshletMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
                                                             shader, meshletIndexedIndirectDraws[currentFrame],
                                                             commandOffset, countOffset);
                 } else {
                     const auto commandOffset =
-                        static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                        binnedCommandOffset(static_cast<std::uint32_t>(shader), false);
+                    const auto twoSidedCommandOffset = binnedCommandOffset(static_cast<std::uint32_t>(shader), true);
                     lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader,
                                                      indirectDraws[currentFrame], commandOffset, countOffset);
                     lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader,
-                                                     foliageIndirectDraws[currentFrame], commandOffset, countOffset,
+                                                     foliageIndirectDraws[currentFrame], twoSidedCommandOffset, countOffset,
                                                      true);
                 }
             }
@@ -2330,13 +2963,12 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
             if (meshletSkipsFoliage) {
                 for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
-                    if (!activeShaderSlots.test(shader) || shader == materialShaderIndex(MaterialShader::Water) ||
-                        shader == GlassThinProgramSlot)
+                    if (!activeShaderSlots.test(shader) || isCompositedProgramSlot(shader))
                         continue;
                     lightingForwardPass.drawMaterial(
                         commandBuffer, shadowPass.descriptorSet(currentFrame), shader,
                         foliageIndirectDraws[currentFrame],
-                        static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand),
+                        binnedCommandOffset(static_cast<std::uint32_t>(shader), true),
                         static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t), true);
                 }
             }
@@ -2349,17 +2981,62 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 lightingForwardPass.drawGrass(commandBuffer, shadowPass.grassDescriptorSet(currentFrame), grassDraw);
             }
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            if (!msaa.enabled()) {
+                // The opaque surfaces end here: the deferred pass adds their
+                // local lights, then sky and particles continue on the lit
+                // color with HDR and depth only (their pipelines have no
+                // deferred-light target).
+                ForwardPass::end(commandBuffer);
+                if (deferredLocalThisFrame) {
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, deferredLocalProfileName);
+                    deferredLocalLighting.record(
+                        commandBuffer, currentFrame,
+                        {.depth = depthBuffer.imageView(),
+                         .depthSampler = depthBuffer.sampler(),
+                         .hdr = hdrBuffer.image(),
+                         .hdrView = hdrBuffer.imageView(),
+                         .localLights = localLightBuffers[currentFrame].handle(),
+                         .tileLights = tileLightCulling.lists(currentFrame),
+                         .localShadows = localLightShadowPass.resultView(currentFrame),
+                         .localShadowSampler = localLightShadowPass.resultSampler(currentFrame),
+                         .lightSamples = megaLightsTracedThisFrame ? localLightShadowPass.sampleView() : VK_NULL_HANDLE,
+                         .lightSampleWeights =
+                             megaLightsTracedThisFrame ? localLightShadowPass.sampleWeightView() : VK_NULL_HANDLE});
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                }
+                VkRenderingAttachmentInfo resumedColor{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                resumedColor.imageView = hdrBuffer.imageView();
+                resumedColor.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                resumedColor.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                resumedColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                VkRenderingAttachmentInfo resumedDepth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                resumedDepth.imageView = depthBuffer.imageView();
+                resumedDepth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                resumedDepth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                resumedDepth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                VkRenderingInfo resumed{VK_STRUCTURE_TYPE_RENDERING_INFO};
+                resumed.renderArea.extent = swapchain.extent();
+                resumed.layerCount = 1;
+                resumed.colorAttachmentCount = 1;
+                resumed.pColorAttachments = &resumedColor;
+                resumed.pDepthAttachment = &resumedDepth;
+                vkCmdBeginRendering(commandBuffer, &resumed);
+                const VkViewport viewport{0.0F, 0.0F, static_cast<float>(swapchain.extent().width),
+                                          static_cast<float>(swapchain.extent().height), 0.0F, 1.0F};
+                const VkRect2D scissor{{0, 0}, swapchain.extent()};
+                vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+                vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+            }
             skyPass.record(commandBuffer, currentFrame);
             // Water must be composited before alpha-blended particles.  A
             // particle does not write depth, so rendering it into the opaque
             // source would let the later water pass incorrectly cover it.
             const bool hasLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
             const bool hasVirtualWater = virtualWaterRenderer.active();
-            const bool hasGlass = activeShaderSlots.test(GlassThinProgramSlot);
-            const bool needsWaterComposite = hasLegacyWater || hasVirtualWater || hasGlass;
+            const bool needsWaterComposite = hasLegacyWater || hasVirtualWater;
             if (!needsWaterComposite) {
                 if (particleSystem && cameraController.camera()) {
-                    const Particles::ParticleFrameData particleFrame{cameraController.camera()->projectionMatrix() *
+                    Particles::ParticleFrameData particleFrame{cameraController.camera()->projectionMatrix() *
                                                                          cameraController.camera()->viewMatrix(),
                                                                      particlePreviousGameViewProjection,
                                                                      cameraController.camera()->right(),
@@ -2466,8 +3143,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 dependency.pImageMemoryBarriers = barriersAfter;
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
                 opaqueSceneColorInitialized = true;
-                const auto commandOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
-                                           gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                const auto commandOffset = binnedCommandOffset(static_cast<std::uint32_t>(materialShaderIndex(MaterialShader::Water)), false);
                 const auto countOffset =
                     static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) * sizeof(std::uint32_t);
                 if (hasVirtualWater) {
@@ -2483,6 +3159,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     virtualWaterRenderer.recordPrepass(
                         commandBuffer, currentFrame, shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                         indexBuffer.handle(), indirectDraws[currentFrame], commandOffset, countOffset);
+                    virtualWaterPreparedThisFrame = virtualWaterRenderer.active();
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterShadeProfileName);
                     virtualWaterRenderer.recordAdaptiveShading(commandBuffer, currentFrame,
@@ -2521,41 +3198,11 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     waterPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
                                    commandOffset, countOffset);
                 }
-                if (hasGlass) {
-                    WaterPass::end(commandBuffer);
-                    // Water belongs behind the glass snapshot; refresh only when needed.
-                    if (hasLegacyWater || hasVirtualWater)
-                        copyGlassBackground(commandBuffer, hdrBuffer.image(), opaqueSceneColor.image(),
-                                            swapchain.extent(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-                    // The previous dynamic rendering scope wrote HDR/velocity.
-                    vkCmdPipelineBarrier2(commandBuffer, &waterDependency);
-                    static const auto glassCrackProfileName = Profiler::registerName("GlassCrackAtlasGPU");
-                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, glassCrackProfileName);
-                    glassPass.recordCracks(commandBuffer, scene, currentFrame);
-                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-                    glassPass.begin(commandBuffer, msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(),
-                                    depthBuffer.imageView(), velocityBuffer.imageView(),
-                                    msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
-                                    msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE, swapchain.extent(),
-                                    shadowPass.descriptorSet(currentFrame), currentFrame, vertexBuffer.handle(),
-                                    indexBuffer.handle());
-                    const auto glassCommandOffset = static_cast<VkDeviceSize>(GlassThinProgramSlot) *
-                                                    gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
-                    const auto glassCountOffset =
-                        static_cast<VkDeviceSize>(GlassThinProgramSlot) * sizeof(std::uint32_t);
-                    static const ProfileNameId glassProfileName = Profiler::registerName("GlassThin");
-                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, glassProfileName);
-                    glassPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
-                                   glassCommandOffset, glassCountOffset);
-                    glassPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                                   foliageIndirectDraws[currentFrame], glassCommandOffset, glassCountOffset);
-                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-                }
                 // Particles use a compatible pipeline and can be composited
-                // after water and glass. The outline pipeline belongs to the lighting
+                // after water. The outline pipeline belongs to the lighting
                 // render pass and was recorded before ending that pass.
                 if (particleSystem && cameraController.camera()) {
-                    const Particles::ParticleFrameData particleFrame{cameraController.camera()->projectionMatrix() *
+                    Particles::ParticleFrameData particleFrame{cameraController.camera()->projectionMatrix() *
                                                                          cameraController.camera()->viewMatrix(),
                                                                      particlePreviousGameViewProjection,
                                                                      cameraController.camera()->right(),
@@ -2581,8 +3228,37 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 }
                 vkCmdPipelineBarrier2(commandBuffer, &waterDependency);
             }
+            // Glass refracts and reflects everything above: opaque, sky,
+            // water and particles. It leaves HDR sampled for post-processing.
+            if (activeShaderSlots.test(GlassProgramSlot) && !glassPass.created() && glassPassInfo.device != VK_NULL_HANDLE)
+                glassPass.create(glassPassInfo);
+            if (activeShaderSlots.test(GlassProgramSlot) && glassPass.created()) {
+                static const ProfileNameId glassProfileName = Profiler::registerName("Glass");
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, glassProfileName);
+                glassPass.record(
+                    commandBuffer,
+                    {.color = hdrBuffer.image(),
+                     .colorView = hdrBuffer.imageView(),
+                     .depth = (msaa.enabled() ? hiZDepthBuffer : depthBuffer).image(),
+                     .sceneDescriptorSet = shadowPass.descriptorSet(currentFrame),
+                     .vertexBuffer = vertexBuffer.handle(),
+                     .indexBuffer = indexBuffer.handle(),
+                     .singleSided = &indirectDraws[currentFrame],
+                     .twoSided = &foliageIndirectDraws[currentFrame],
+                     .commandOffset = binnedCommandOffset(static_cast<std::uint32_t>(GlassProgramSlot), false),
+                     .twoSidedCommandOffset = binnedCommandOffset(static_cast<std::uint32_t>(GlassProgramSlot), true),
+                     .countOffset = static_cast<VkDeviceSize>(GlassProgramSlot) * sizeof(std::uint32_t)});
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            }
         }
 
+        if (cullingZoneOpen) {
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            cullingZoneOpen = false;
+        }
+        static const ProfileNameId sceneViewProfileName = Profiler::registerName("Scene View");
+        if (renderSceneViewport)
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, sceneViewProfileName);
         if (renderSceneViewport) {
             // The prior Scene View image was sampled by ImGui. Make those
             // reads visible before the cache pass changes it back into a
@@ -2631,6 +3307,88 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             sceneFoliageGpuCullingPasses[currentFrame].recordBinned(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
 
+            // Depth prepass: depth plus the view normals that directional
+            // visibility reads. Velocity is written only because the shared
+            // prepass programs output it; nothing samples it.
+            {
+                const VkImageMemoryBarrier2 toAttachment[] = {
+                    {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_NONE, 0,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_QUEUE_FAMILY_IGNORED,
+                     VK_QUEUE_FAMILY_IGNORED, sceneViewportVelocity.image(), {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                    // The previous Scene View frame's visibility pass read these.
+                    {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, 0,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_QUEUE_FAMILY_IGNORED,
+                     VK_QUEUE_FAMILY_IGNORED, sceneViewportNormals.image(), {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                };
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.imageMemoryBarrierCount = std::size(toAttachment);
+                dependency.pImageMemoryBarriers = toAttachment;
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+            }
+            sceneViewportDepthPrepass.begin(commandBuffer, sceneViewportTarget.color().imageView(),
+                                            sceneViewportDepthBuffer.imageView(), sceneViewportVelocity.imageView(),
+                                            sceneViewportNormals.imageView(), VK_NULL_HANDLE, VK_NULL_HANDLE,
+                                            sceneViewportTarget.extent(),
+                                            sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
+                                            instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+            for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                if (!activeShaderSlots.test(shader) || isCompositedProgramSlot(shader))
+                    continue;
+                const auto commandOffset =
+                    binnedCommandOffset(static_cast<std::uint32_t>(shader), false);
+                const auto twoSidedCommandOffset = binnedCommandOffset(static_cast<std::uint32_t>(shader), true);
+                const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
+                sceneViewportDepthPrepass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                                                       shader, sceneIndirectDraws[currentFrame], commandOffset,
+                                                       countOffset);
+                sceneViewportDepthPrepass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                                                       shader, sceneFoliageIndirectDraws[currentFrame], twoSidedCommandOffset,
+                                                       countOffset, true);
+            }
+            if (!sceneGpu.grassInstances.empty()) {
+                const auto& lists = sceneGrassRenderLists[currentFrame];
+                Culling::IndexedIndirectDrawCount grassDraw;
+                grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(),
+                                 static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                sceneDescriptorPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[0].handle());
+                sceneViewportDepthPrepass.drawGrass(commandBuffer, sceneDescriptorPass.grassDescriptorSet(currentFrame),
+                                                    grassDraw);
+            }
+            ForwardPass::end(commandBuffer);
+            {
+                VkImageMemoryBarrier2 depthToRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                depthToRead.srcStageMask =
+                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                depthToRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                depthToRead.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                           VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                depthToRead.dstAccessMask =
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                depthToRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                depthToRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthToRead.image = sceneViewportDepthBuffer.image();
+                depthToRead.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                VkImageMemoryBarrier2 normalsToRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                normalsToRead.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                normalsToRead.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                normalsToRead.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                normalsToRead.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                normalsToRead.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                normalsToRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                normalsToRead.image = sceneViewportNormals.image();
+                normalsToRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                const VkImageMemoryBarrier2 prepassToRead[] = {depthToRead, normalsToRead};
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.imageMemoryBarrierCount = std::size(prepassToRead);
+                dependency.pImageMemoryBarriers = prepassToRead;
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+            }
+            sceneDirectionalVisibilityPass.record(commandBuffer, currentFrame, sceneViewportDepthBuffer.imageView(),
+                                                  sceneViewportDepthBuffer.sampler(), sceneViewportNormals.imageView(),
+                                                  sceneViewportNormals.sampler());
             sceneForwardPass.begin(commandBuffer, sceneViewportTarget.color().imageView(),
                                    sceneViewportDepthBuffer.imageView(), VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE,
                                    VK_NULL_HANDLE, sceneViewportTarget.extent(),
@@ -2642,15 +3400,16 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 // Scene View will receive the same dedicated post-opaque
                 // WaterPass when its viewport render graph is split. Do
                 // not accidentally run water through its opaque pass.
-                if ((shader == materialShaderIndex(MaterialShader::Water) || shader == GlassThinProgramSlot))
+                if (isCompositedProgramSlot(shader))
                     continue;
                 const auto commandOffset =
-                    static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                    binnedCommandOffset(static_cast<std::uint32_t>(shader), false);
+                const auto twoSidedCommandOffset = binnedCommandOffset(static_cast<std::uint32_t>(shader), true);
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
                 sceneForwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame), shader,
                                               sceneIndirectDraws[currentFrame], commandOffset, countOffset);
                 sceneForwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame), shader,
-                                              sceneFoliageIndirectDraws[currentFrame], commandOffset, countOffset,
+                                              sceneFoliageIndirectDraws[currentFrame], twoSidedCommandOffset, countOffset,
                                               true);
             }
             if (!sceneGpu.grassInstances.empty()) {
@@ -2670,7 +3429,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                    0.1F, 1000.0F};
                 sceneCamera.setPosition(cameraController.editorPosition());
                 sceneCamera.setRotation(Degrees{cameraController.editorYaw()}, Degrees{cameraController.editorPitch()});
-                const Particles::ParticleFrameData particleFrame{
+                Particles::ParticleFrameData particleFrame{
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
                     sceneCamera.right(),
@@ -2699,11 +3458,12 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             VkImageMemoryBarrier2 depthToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             depthToSampled.srcStageMask =
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            depthToSampled.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            depthToSampled.srcAccessMask = 0;
             depthToSampled.dstStageMask =
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             depthToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            depthToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            // Lighting only tested against the prepass depth (read-only).
+            depthToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
             depthToSampled.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
             depthToSampled.image = sceneViewportDepthBuffer.image();
             depthToSampled.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
@@ -2713,12 +3473,12 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
             sceneToSampledDependency.pImageMemoryBarriers = sceneToSampled;
             vkCmdPipelineBarrier2(commandBuffer, &sceneToSampledDependency);
             sceneViewportDepthInitialized = true;
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             recordVsmPageRequests(commandBuffer, true);
 
             const bool hasSceneLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
             const bool hasSceneVirtualWater = sceneVirtualWaterRenderer.active();
-            const bool hasSceneGlass = activeShaderSlots.test(GlassThinProgramSlot);
-            if (hasSceneLegacyWater || hasSceneVirtualWater || hasSceneGlass) {
+            if (hasSceneLegacyWater || hasSceneVirtualWater) {
                 const VkImageMemoryBarrier2 beforeCopy[] = {
                     {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                      nullptr,
@@ -2765,7 +3525,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     // Virtual Water composites into the target as a color attachment.
+                     hasSceneVirtualWater ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                          : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                      VK_QUEUE_FAMILY_IGNORED,
                      VK_QUEUE_FAMILY_IGNORED,
                      sceneViewportTarget.color().image(),
@@ -2788,8 +3550,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
                 sceneOpaqueColorInitialized = true;
 
-                const auto commandOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
-                                           gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                const auto commandOffset = binnedCommandOffset(static_cast<std::uint32_t>(materialShaderIndex(MaterialShader::Water)), false);
                 const auto countOffset =
                     static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) * sizeof(std::uint32_t);
                 if (hasSceneLegacyWater || hasSceneVirtualWater) {
@@ -2810,53 +3571,136 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                               sceneDescriptorPass.descriptorSet(currentFrame));
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
-                if (hasSceneGlass) {
-                    if (hasSceneVirtualWater)
-                        copyGlassBackground(commandBuffer, sceneViewportTarget.color().image(),
-                                            sceneOpaqueColor.image(), sceneViewportTarget.extent(),
-                                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-                    VkImageMemoryBarrier2 toGlass{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    toGlass.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                    toGlass.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-                    toGlass.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                    toGlass.dstAccessMask =
-                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                    toGlass.oldLayout = hasSceneVirtualWater ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-                                                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    toGlass.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                    toGlass.srcQueueFamilyIndex = toGlass.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toGlass.image = sceneViewportTarget.color().image();
-                    toGlass.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo glassDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    glassDependency.imageMemoryBarrierCount = 1;
-                    glassDependency.pImageMemoryBarriers = &toGlass;
-                    vkCmdPipelineBarrier2(commandBuffer, &glassDependency);
-                    sceneGlassPass.recordCracks(commandBuffer, scene, currentFrame);
-                    sceneGlassPass.begin(commandBuffer, sceneViewportTarget.color().imageView(),
-                                         sceneViewportDepthBuffer.imageView(), VK_NULL_HANDLE, VK_NULL_HANDLE,
-                                         VK_NULL_HANDLE, sceneViewportTarget.extent(),
-                                         sceneDescriptorPass.descriptorSet(currentFrame), currentFrame,
-                                         vertexBuffer.handle(), indexBuffer.handle());
-                    const auto glassCommandOffset = static_cast<VkDeviceSize>(GlassThinProgramSlot) *
-                                                    gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
-                    const auto glassCountOffset =
-                        static_cast<VkDeviceSize>(GlassThinProgramSlot) * sizeof(std::uint32_t);
-                    sceneGlassPass.draw(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
-                                        sceneIndirectDraws[currentFrame], glassCommandOffset, glassCountOffset);
-                    sceneGlassPass.draw(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
-                                        sceneFoliageIndirectDraws[currentFrame], glassCommandOffset, glassCountOffset);
-                    GlassPass::end(commandBuffer);
-                    toGlass.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                    toGlass.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                    toGlass.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-                    toGlass.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    toGlass.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                    toGlass.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    vkCmdPipelineBarrier2(commandBuffer, &glassDependency);
+                if (hasSceneVirtualWater) {
+                    VkImageMemoryBarrier2 toSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    toSampled.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    toSampled.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    toSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    toSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    toSampled.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    toSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    toSampled.srcQueueFamilyIndex = toSampled.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toSampled.image = sceneViewportTarget.color().image();
+                    toSampled.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo toSampledDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    toSampledDependency.imageMemoryBarrierCount = 1;
+                    toSampledDependency.pImageMemoryBarriers = &toSampled;
+                    vkCmdPipelineBarrier2(commandBuffer, &toSampledDependency);
                 }
+            }
+            if (activeShaderSlots.test(GlassProgramSlot) && !sceneGlassPass.created() &&
+                sceneGlassPassInfo.device != VK_NULL_HANDLE)
+                sceneGlassPass.create(sceneGlassPassInfo);
+            if (activeShaderSlots.test(GlassProgramSlot) && sceneGlassPass.created() &&
+                sceneGlassPass.extent().width == sceneViewportTarget.extent().width &&
+                sceneGlassPass.extent().height == sceneViewportTarget.extent().height) {
+                static const ProfileNameId sceneGlassProfileName = Profiler::registerName("Scene Glass");
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, sceneGlassProfileName);
+                sceneGlassPass.record(
+                    commandBuffer,
+                    {.color = sceneViewportTarget.color().image(),
+                     .colorView = sceneViewportTarget.color().imageView(),
+                     .depth = sceneViewportDepthBuffer.image(),
+                     .sceneDescriptorSet = sceneDescriptorPass.descriptorSet(currentFrame),
+                     .vertexBuffer = vertexBuffer.handle(),
+                     .indexBuffer = indexBuffer.handle(),
+                     .singleSided = &sceneIndirectDraws[currentFrame],
+                     .twoSided = &sceneFoliageIndirectDraws[currentFrame],
+                     .commandOffset = binnedCommandOffset(static_cast<std::uint32_t>(GlassProgramSlot), false),
+                     .twoSidedCommandOffset = binnedCommandOffset(static_cast<std::uint32_t>(GlassProgramSlot), true),
+                     .countOffset = static_cast<VkDeviceSize>(GlassProgramSlot) * sizeof(std::uint32_t)});
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
         }
     }
+
+    // The finished opaque and water lighting is the radiance the next
+    // frame's SSGI trace gathers.
+    if (ssgiTracedThisFrame) {
+        gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, ssgiCaptureProfileName);
+        ssgiPass.captureRadiance(commandBuffer, currentFrame, hdrBuffer.imageView(), hdrBuffer.sampler());
+        gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+    }
+
+    // Debug readback of the lit HDR scene (before TAA), see Renderer::requestHdrCapture.
+    // While only the editor's Scene View renders, its colour target instead.
+    const bool captureSceneView = !renderGameViewport && renderSceneViewport;
+    if (hdrCaptureRequested && (renderGameViewport || captureSceneView)) {
+        const VkExtent2D extent = captureSceneView ? sceneViewportTarget.extent() : swapchain.extent();
+        const VkImage captureImage = captureSceneView ? sceneViewportTarget.color().image() : hdrBuffer.image();
+        const VkDeviceSize bytes = VkDeviceSize{extent.width} * extent.height * 8;
+        Buffer& capture = hdrCaptureBuffers[currentFrame];
+        if (capture.size() < bytes) {
+            capture.destroy();
+            capture.createHostVisible(vulkanDevice.physical(), device, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      vulkanDevice.allocator());
+        }
+        VkImageMemoryBarrier2 toCopy{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        toCopy.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        toCopy.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        toCopy.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        toCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        toCopy.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toCopy.srcQueueFamilyIndex = toCopy.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toCopy.image = captureImage;
+        toCopy.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.imageMemoryBarrierCount = 1;
+        dependency.pImageMemoryBarriers = &toCopy;
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        const VkBufferImageCopy region{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                       {extent.width, extent.height, 1}};
+        vkCmdCopyImageToBuffer(commandBuffer, captureImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               capture.handle(), 1, &region);
+        VkImageMemoryBarrier2 back = toCopy;
+        back.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        back.srcAccessMask = 0;
+        back.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        back.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        back.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        dependency.pImageMemoryBarriers = &back;
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        hdrCaptureExtent = extent;
+        hdrCapturePending[currentFrame] = true;
+        hdrCaptureRequested = false;
+    }
+
+    // Initialize before importing: from here the render graph is the sole
+    // owner of the color-history and bloom image layouts.
+    if (renderGameViewport && taaResolveActive)
+        temporalAaPass.prepareHistory(commandBuffer);
+    bloomPass.prepare(commandBuffer);
+    // Everything before presentation goes to the GPU first; only then does
+    // the CPU wait for a swapchain image. Acquiring at the start of the frame
+    // blocked the CPU ~2.4 ms per frame before it had recorded anything, so
+    // the GPU idled ~0.7 ms of every frame waiting for work (Nsight Systems).
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+        throw std::runtime_error("Could not end graphics commands before presentation RenderGraph");
+    const std::uint64_t prePresentationUploadCandidate = legacyUploadValue();
+    const std::uint64_t prePresentationUploadValue =
+        prePresentationUploadCandidate != 0 && uploadContext.completedValue() < prePresentationUploadCandidate
+            ? prePresentationUploadCandidate
+            : 0;
+    const VkSemaphoreSubmitInfo prePresentationUploadWait{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                                          .semaphore = uploadContext.timeline(),
+                                                          .value = prePresentationUploadValue,
+                                                          .stageMask = legacyUploadStages};
+    const VkCommandBufferSubmitInfo prePresentationCommand{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                                                           .commandBuffer = commandBuffer};
+    const VkSubmitInfo2 prePresentationSubmit{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+        .waitSemaphoreInfoCount = prePresentationUploadValue != 0 ? 1U : 0U,
+        .pWaitSemaphoreInfos = prePresentationUploadValue != 0 ? &prePresentationUploadWait : nullptr,
+        .commandBufferInfoCount = 1,
+        .pCommandBufferInfos = &prePresentationCommand};
+    if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &prePresentationSubmit, VK_NULL_HANDLE) != VK_SUCCESS)
+        throw std::runtime_error("Could not submit graphics commands before presentation RenderGraph");
+    if (!acquireSwapchainImage())
+        return;
+    const SwapchainImageIndex imageIndex{acquiredImageIndex};
 
     // Presentation is one declarative chain. The graph owns the HDR
     // history and swapchain transitions between TAA, bloom and raster passes.
@@ -2900,15 +3744,17 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                .format = swapchain.format(),
                                                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                                                .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
-    const auto graphPresent = frameGraph.importTexture("Swapchain", swapchain.images().at(imageIndex.value),
-                                                       presentDesc, {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
+    // The acquire semaphore is waited on at COLOR_ATTACHMENT_OUTPUT; the
+    // graph's first transition must start from that stage to chain with it
+    // (the presentation engine may still read the image until then).
+    const auto graphPresent =
+        frameGraph.importTexture("Swapchain", swapchain.images().at(imageIndex.value), presentDesc,
+                                 {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                  .layout = VK_IMAGE_LAYOUT_UNDEFINED});
 
     const Mat4 taaProjection = cameraController.camera()->projectionMatrix();
     RenderGraph::TextureHandle graphPostSource = graphHdr;
     if (renderGameViewport && taaResolveActive) {
-        // Initialize before importing: from here the render graph is
-        // the sole owner of the color-history image layouts.
-        temporalAaPass.prepareHistory(commandBuffer);
         const std::uint32_t historyReadIndex = temporalAaPass.resolvedIndex();
         const std::uint32_t historyWriteIndex = temporalAaPass.nextResolvedIndex();
         const auto graphHistoryRead =
@@ -2994,20 +3840,42 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             });
     }
+    const std::uint32_t postSourceIndex = taaResolveActive ? 1U + temporalAaPass.resolvedIndex() : 0U;
+    if (renderGameViewport && postProcessSettings.autoExposure) {
+        frameGraph.addPass(
+            "Auto exposure", RenderGraph::Queue::Graphics,
+            [&](RenderGraph::PassBuilder& builder) {
+                builder.read(graphPostSource, RenderGraph::TextureUsage::SampledReadCompute);
+                // Its output (the adapted luminance) is not a graph resource,
+                // so without this the pass would be culled as dead.
+                builder.setSideEffect();
+            },
+            [&](const VkCommandBuffer buffer) {
+                tonemapPass.recordExposure(buffer, postProcessSettings, static_cast<float>(Time::deltaTime()),
+                                           postSourceIndex);
+            });
+    }
+    // Motion blur and moving-pixel sharpening read the velocity target, which
+    // is only kept current (and shader-readable) for the TAA resolve.
+    const bool postReadsVelocity = renderGameViewport && taaResolveActive && !msaa.enabled();
     frameGraph.addPass(
         editorUiActive ? "Editor UI" : "Tonemap and UI", RenderGraph::Queue::Graphics,
         [&](RenderGraph::PassBuilder& builder) {
             if (editorUiActive) {
-                // The editor samples the Game View descriptor. Make
-                // that external shader read visible to the graph so its
-                // producer (notably TAA resolve) is not dead-pass culled.
-                if (renderGameViewport)
+                // The editor samples the tonemapped Game View image drawn
+                // at the start of this pass, so it reads what the Player's
+                // tonemap reads.
+                if (renderGameViewport) {
                     builder.read(graphPostSource, RenderGraph::TextureUsage::SampledReadFragment);
+                    builder.read(graphBloom, RenderGraph::TextureUsage::SampledReadFragment);
+                }
             } else {
                 builder.read(graphPostSource, RenderGraph::TextureUsage::SampledReadFragment);
                 if (renderGameViewport)
                     builder.read(graphBloom, RenderGraph::TextureUsage::SampledReadFragment);
             }
+            if (postReadsVelocity)
+                builder.read(graphVelocity, RenderGraph::TextureUsage::SampledReadFragment);
             builder.write(graphPresent, RenderGraph::TextureUsage::ColorAttachment);
             builder.setFinalTextureState(graphPresent, {.stage = VK_PIPELINE_STAGE_2_NONE,
                                                         .access = VK_ACCESS_2_NONE,
@@ -3017,6 +3885,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
         [&](const VkCommandBuffer buffer) {
             gpuTimestampProfiler.beginZone(buffer, currentFrame, tonemapProfileName);
             if (editorUiActive) {
+                if (renderGameViewport)
+                    tonemapPass.recordDisplay(buffer, postExtent, postProcessSettings, postSourceIndex);
                 VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
                 color.imageView = swapchain.imageViews().at(imageIndex.value);
                 color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -3033,16 +3903,46 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                     editorUiBackend->renderDrawData(reinterpret_cast<std::uint64_t>(buffer));
                 vkCmdEndRendering(buffer);
             } else {
-                if (taaResolveActive)
-                    tonemapPass.record(buffer, imageIndex.value, postExtent, 0.0F, 1U + temporalAaPass.resolvedIndex());
-                else
-                    tonemapPass.record(buffer, imageIndex.value, postExtent);
+                tonemapPass.record(buffer, imageIndex.value, postExtent, postProcessSettings, postSourceIndex);
                 canvasRenderer.record(scene.uiCanvas(), buffer, UI::CanvasRenderer::ImageIndex{imageIndex.value},
                                       UI::CanvasRenderer::FrameIndex{currentFrame}, postExtent);
             }
             gpuTimestampProfiler.endZone(buffer, currentFrame);
             gpuTimestampProfiler.endFrame(buffer, currentFrame);
         });
+    // Final-image readback (Renderer::requestFrameCapture): exactly what is
+    // presented, after exposure, the display transform, bloom and UI.
+    if (frameCaptureRequested && swapchain.supportsCapture()) {
+        const VkDeviceSize bytes = VkDeviceSize{postExtent.width} * postExtent.height * 4;
+        Buffer& capture = frameCaptureBuffers[currentFrame];
+        if (capture.size() < bytes) {
+            capture.destroy();
+            capture.createHostVisible(vulkanDevice.physical(), device, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      vulkanDevice.allocator());
+        }
+        const VkImage presentImage = swapchain.images().at(imageIndex.value);
+        frameGraph.addPass(
+            "Frame capture", RenderGraph::Queue::Graphics,
+            [&](RenderGraph::PassBuilder& builder) {
+                builder.read(graphPresent, RenderGraph::TextureUsage::TransferRead);
+                // The last user decides the hand-off layout for presentation.
+                builder.setFinalTextureState(graphPresent, {.stage = VK_PIPELINE_STAGE_2_NONE,
+                                                            .access = VK_ACCESS_2_NONE,
+                                                            .layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                                            .write = false});
+                // The copy lands in a host buffer outside the graph.
+                builder.setSideEffect();
+            },
+            [&, presentImage](const VkCommandBuffer buffer) {
+                const VkBufferImageCopy region{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                               {postExtent.width, postExtent.height, 1}};
+                vkCmdCopyImageToBuffer(buffer, presentImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       frameCaptureBuffers[currentFrame].handle(), 1, &region);
+            });
+        frameCaptureExtents[currentFrame] = postExtent;
+        frameCapturePending[currentFrame] = true;
+        frameCaptureRequested = false;
+    }
     frameGraph.exportTexture(graphPresent);
     frameGraph.compile();
     profileRenderGraph(frameGraph, true);
@@ -3093,27 +3993,6 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageInde
                                                            .value = viewportGraphCompletion[queue],
                                                            .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
     viewportGraphCompletion = {};
-    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
-        throw std::runtime_error("Could not end graphics commands before presentation RenderGraph");
-    const std::uint64_t prePresentationUploadCandidate = legacyUploadValue();
-    const std::uint64_t prePresentationUploadValue =
-        prePresentationUploadCandidate != 0 && uploadContext.completedValue() < prePresentationUploadCandidate
-            ? prePresentationUploadCandidate
-            : 0;
-    const VkSemaphoreSubmitInfo prePresentationUploadWait{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                                          .semaphore = uploadContext.timeline(),
-                                                          .value = prePresentationUploadValue,
-                                                          .stageMask = legacyUploadStages};
-    const VkCommandBufferSubmitInfo prePresentationCommand{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-                                                           .commandBuffer = commandBuffer};
-    const VkSubmitInfo2 prePresentationSubmit{
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        .waitSemaphoreInfoCount = prePresentationUploadValue != 0 ? 1U : 0U,
-        .pWaitSemaphoreInfos = prePresentationUploadValue != 0 ? &prePresentationUploadWait : nullptr,
-        .commandBufferInfoCount = 1,
-        .pCommandBufferInfos = &prePresentationCommand};
-    if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &prePresentationSubmit, VK_NULL_HANDLE) != VK_SUCCESS)
-        throw std::runtime_error("Could not submit graphics commands before presentation RenderGraph");
     frameGraph.recordAndSubmit(presentationContext);
     presentationGraphSubmittedThisFrame = true;
 }
@@ -3162,6 +4041,7 @@ void cleanupSwapChain() {
     temporalAaPass.destroy();
     bloomPass.destroy();
     gtaoPass.destroy();
+    ssgiPass.destroy();
     destroyVelocityResources();
     if (hdrFramebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -3222,17 +4102,20 @@ void recreateSwapChain() {
     // resources, then register the SDL window again below.
     destroyEditorUiResources();
 
-    // Shadow/scene descriptor sets reference the packed grass
-    // buffers owned by culling resources. They cannot outlive a
-    // culling resize/rebuild.
+    // Only extent-dependent resources are rebuilt. The VSM passes, their
+    // physical page cache, DDGI and the cluster ray-tracing scene do not
+    // depend on the swapchain size: shadowPass and sceneDescriptorPass keep
+    // their pipelines and layouts, and createShadowPass() /
+    // createSceneDescriptorPass() below take their updateDescriptors() path
+    // to rebind the recreated culling buffers and GTAO/SSGI targets (the
+    // same path as a topology-only culling rebuild). The DDGI trace layout
+    // embeds shadowPass's set layout, which survives, so DDGI survives too.
     virtualWaterRenderer.destroy();
     forwardPass.destroy();
     lightingForwardPass.destroy();
     waterPass.destroy();
     glassPass.destroy();
     directionalVisibilityPass.destroy();
-    shadowPass.destroy();
-    sceneDescriptorPass.destroy();
     destroyCullingResources();
 
     canvasRenderer.destroy();
@@ -3240,6 +4123,7 @@ void recreateSwapChain() {
     temporalAaPass.destroy();
     bloomPass.destroy();
     gtaoPass.destroy();
+    ssgiPass.destroy();
     destroyVelocityResources();
     if (hdrFramebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -3274,13 +4158,15 @@ void recreateSwapChain() {
         createEditorUiResources(false);
         return;
     }
-    hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+    hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator(),
+                     VK_FILTER_LINEAR, HdrBuffer::Format, true); // storage: deferred local lights
     hdrBufferInitialized = false;
     opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
     opaqueSceneColorInitialized = false;
     msaa.create(swapchain.extent(), HdrBuffer::Format);
     createDepthResources();
     createGtaoPass();
+    createSsgiPass();
     createRenderFinishedSemaphores();
 
     createCullingResources();
@@ -3364,23 +4250,24 @@ void removeParticleCollider(const Entity entity) {
         cacheChanged = true;
     } else if (particleColliderComponentRevision != colliderRevision ||
                particleColliderTransformRevision != transformRevision) {
-        std::unordered_set<Entity> changed;
-        const auto addChanged = [&](const auto& entities) { changed.insert(entities.begin(), entities.end()); };
-        addChanged(registry.componentEntitiesChangedSince<ColliderComponent>(particleColliderComponentRevision));
-        addChanged(registry.componentEntitiesChangedSince<Transform>(particleColliderTransformRevision));
-
+        // Refreshing an entity is idempotent, so an entity reported by both
+        // logs may simply be visited twice. This used to collect both logs
+        // into fresh vectors and an unordered_set on every frame in which
+        // anything moved.
         const Registry& readRegistry = registry;
-        for (const Entity entity : changed) {
-            if (!readRegistry.valid(entity) || !readRegistry.has<ColliderComponent>(entity) ||
-                !readRegistry.has<Transform>(entity)) {
-                removeParticleCollider(entity);
-                cacheChanged = true;
-                continue;
+        const auto refresh = [&](const Entity entity) {
+            const auto* collider = readRegistry.tryGet<ColliderComponent>(entity);
+            const auto* transform = collider != nullptr ? readRegistry.tryGet<Transform>(entity) : nullptr;
+            const auto colliderIterator = particleColliderIndices.find(entity);
+            if (transform == nullptr) {
+                if (colliderIterator != particleColliderIndices.end()) {
+                    removeParticleCollider(entity);
+                    cacheChanged = true;
+                }
+                return;
             }
-            const Particles::ParticleCollider value = RendererSceneHelpers::makeParticleCollider(
-                readRegistry.get<ColliderComponent>(entity), readRegistry.get<Transform>(entity));
-            if (const auto colliderIterator = particleColliderIndices.find(entity);
-                colliderIterator != particleColliderIndices.end()) {
+            const Particles::ParticleCollider value = RendererSceneHelpers::makeParticleCollider(*collider, *transform);
+            if (colliderIterator != particleColliderIndices.end()) {
                 cachedParticleColliders[colliderIterator->second] = value;
             } else {
                 particleColliderIndices.emplace(entity, cachedParticleColliders.size());
@@ -3388,7 +4275,9 @@ void removeParticleCollider(const Entity entity) {
                 particleColliderEntities.push_back(entity);
             }
             cacheChanged = true;
-        }
+        };
+        readRegistry.forEachComponentChangedSinceUnique<ColliderComponent>(particleColliderComponentRevision, refresh);
+        readRegistry.forEachComponentChangedSinceUnique<Transform>(particleColliderTransformRevision, refresh);
     }
 
     particleColliderRegistry = &registry;
@@ -3398,8 +4287,28 @@ void removeParticleCollider(const Entity entity) {
     return cacheChanged;
 }
 
-[[nodiscard]] bool acquireFrameImage(uint32_t& imageIndex) {
+// Retires this frame slot's previous submission. The swapchain image is
+// acquired separately, as late as possible (acquireSwapchainImage).
+void waitFrameSlot() {
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    swapchainImageAcquired = false;
+    if (hdrCapturePending[currentFrame]) {
+        hdrCapturePixels.resize(std::size_t{hdrCaptureExtent.width} * hdrCaptureExtent.height * 4);
+        hdrCaptureBuffers[currentFrame].read(hdrCapturePixels.data(), hdrCapturePixels.size() * sizeof(std::uint16_t));
+        hdrCapturePending[currentFrame] = false;
+        hdrCaptureReady = true;
+    }
+    if (frameCapturePending[currentFrame]) {
+        frameCaptureExtent = frameCaptureExtents[currentFrame];
+        frameCapturePixels.resize(std::size_t{frameCaptureExtent.width} * frameCaptureExtent.height * 4);
+        frameCaptureBuffers[currentFrame].read(frameCapturePixels.data(), frameCapturePixels.size());
+        // The swapchain stores BGRA; hand out RGBA.
+        if (swapchain.format() == VK_FORMAT_B8G8R8A8_SRGB || swapchain.format() == VK_FORMAT_B8G8R8A8_UNORM)
+            for (std::size_t pixel = 0; pixel < frameCapturePixels.size(); pixel += 4)
+                std::swap(frameCapturePixels[pixel], frameCapturePixels[pixel + 2]);
+        frameCapturePending[currentFrame] = false;
+        frameCaptureReady = true;
+    }
     // Every buffer retired into this slot belonged to the submission
     // guarded by this fence, so destruction is now safe.
     deferredPreviousTransformBuffers[currentFrame].clear();
@@ -3408,6 +4317,47 @@ void removeParticleCollider(const Entity entity) {
     sceneGpu.database.reclaimDeferredInstances(completedFrameValue);
     if (const auto completed = gpuTimestampProfiler.completedFrame(currentFrame)) {
         lastGpuProfile = *completed;
+        if (shadowTraceSampled[currentFrame]) {
+            shadowTraceSampled[currentFrame] = false;
+            for (const GpuProfileEvent& event : completed->events) {
+                if (Profiler::name(event.name) != "Local Light Shadows")
+                    continue;
+                shadowTraceSamples[shadowTraceUsedCluster[currentFrame] ? 1 : 0].push_back(
+                    std::max(event.endMs - event.startMs, 0.0F));
+                break;
+            }
+            constexpr std::size_t SamplesPerBackend = 40;
+            if (shadowTraceBackend == ShadowTraceBackend::Measuring &&
+                shadowTraceSamples[0].size() >= SamplesPerBackend && shadowTraceSamples[1].size() >= SamplesPerBackend) {
+                const auto median = [](std::vector<float> values) {
+                    std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+                    return values[values.size() / 2];
+                };
+                const float classic = median(shadowTraceSamples[0]);
+                const float cluster = median(shadowTraceSamples[1]);
+                // The cluster scene must win clearly: it also keeps a second
+                // ray tracing scene resident, which a 4 GB GPU feels.
+                shadowTraceBackend =
+                    cluster <= classic * 0.9F ? ShadowTraceBackend::Cluster : ShadowTraceBackend::Classic;
+                saveShadowTraceDecision(classic, cluster);
+                // Keep only the winner resident: on a 4 GB GPU the loser's
+                // structures and build inputs evicted other render targets.
+                if (shadowTraceBackend == ShadowTraceBackend::Classic && !ddgiSettings.enabled) {
+                    clusterScene.releaseScene();
+                    clusterGeometryDirty = true;
+                } else if (shadowTraceBackend == ShadowTraceBackend::Cluster &&
+                           rtContactShadowSettings.mode != ContactShadowMode::RayTraced) {
+                    accelerationStructures.releaseStructures();
+                    rayTracingBlasDirty = vulkanDevice.supportsRayQuery();
+                }
+                Diagnostics::instance().report(
+                    DiagnosticSeverity::Info,
+                    "[RayTracing] Local light shadows: cluster scene " + std::to_string(cluster) +
+                        " ms, triangle TLAS " + std::to_string(classic) + " ms; using " +
+                        (shadowTraceBackend == ShadowTraceBackend::Cluster ? "the cluster scene" : "the triangle TLAS"),
+                    {.subsystem = "Renderer"});
+            }
+        }
         float gameWaterMs = 0.0F;
         float sceneWaterMs = 0.0F;
         if (gameVsmProfiled[currentFrame]) {
@@ -3416,9 +4366,12 @@ void removeParticleCollider(const Entity entity) {
                     continue;
                 const float gpuMs = std::max(event.endMs - event.startMs, 0.0F);
                 smoothedGameVsmMs = smoothedGameVsmMs == 0.0F ? gpuMs : 0.75F * smoothedGameVsmMs + 0.25F * gpuMs;
-                constexpr float targetVsmMs = 2.0F;
+                // Dense geometry makes every page expensive. A 16-page floor
+                // then took dozens of frames to cover a view, showing coarse
+                // fallback shadows the whole time; keep refreshing steadily.
+                constexpr float targetVsmMs = 3.0F;
                 if (smoothedGameVsmMs > targetVsmMs)
-                    adaptiveShadowPageBudget = std::max(16u, adaptiveShadowPageBudget - 8u);
+                    adaptiveShadowPageBudget = std::max(32u, adaptiveShadowPageBudget - 8u);
                 else if (smoothedGameVsmMs < targetVsmMs * 0.7F)
                     adaptiveShadowPageBudget = std::min(128u, adaptiveShadowPageBudget + 4u);
                 break;
@@ -3440,30 +4393,41 @@ void removeParticleCollider(const Entity entity) {
         sceneVirtualWaterRenderer.onFrameCompleted();
     }
     gameVsmProfiled[currentFrame] = false;
-    const VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
-                                                  imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+}
 
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreateSwapChain();
+// On OUT_OF_DATE the caller recreates the swapchain once the frame's
+// recording has unwound; the fence stays signalled, as nothing will signal it.
+[[nodiscard]] bool acquireSwapchainImage() {
+    if (swapchainImageAcquired)
+        return true;
+    const VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
+                                                  imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE,
+                                                  &acquiredImageIndex);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR)
         return false;
-    }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("Could not acquire swap chain image");
     }
-
+    // Reset only once this frame is certain to submit the fence's signal.
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
+    swapchainImageAcquired = true;
+    return true;
+}
+
+[[nodiscard]] bool acquireFrameImage(uint32_t& imageIndex) {
+    waitFrameSlot();
+    if (!acquireSwapchainImage()) {
+        recreateSwapChain();
+        return false;
+    }
+    imageIndex = acquiredImageIndex;
     return true;
 }
 
 void updateParticleSystemForFrame() {
-    if (!particleSystem && !scene.glassParticleBursts().empty())
-        createParticleResources();
     if (!particleSystem) {
         return;
     }
-    for (const auto& burst : scene.glassParticleBursts())
-        particleSystem->enqueueGlassBurst(burst);
-    scene.clearGlassParticleBursts();
 
     const Entity particleEntity = scene.particleEntity();
     const bool hasEmitter = particleEntity != NullEntity && (registry.has<ParticleEmitterComponent>(particleEntity) ||
@@ -3491,7 +4455,6 @@ void updateParticleSystemForFrame() {
 
 void submitAndPresentFrame(const uint32_t imageIndex) {
     if (!presentationGraphSubmittedThisFrame) {
-        VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
         // Do not derive this from UploadContext::lastSubmittedValue(): a
         // transfer unrelated to this frame must not stall graphics.  The
         // authoritative frame graph supplies only imported resources that
@@ -3508,30 +4471,28 @@ void submitAndPresentFrame(const uint32_t imageIndex) {
         const bool waitForUploads = uploadValue != 0;
         if (uploadStage == VK_PIPELINE_STAGE_2_NONE)
             uploadStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
-        VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame], uploadContext.timeline()};
-        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                             static_cast<VkPipelineStageFlags>(uploadStage)};
-        std::uint64_t waitValues[] = {0, uploadValue};
-        VkTimelineSemaphoreSubmitInfo timelineInfo{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-        if (waitForUploads) {
-            timelineInfo.waitSemaphoreValueCount = 2;
-            timelineInfo.pWaitSemaphoreValues = waitValues;
-            submitInfo.pNext = &timelineInfo;
-        }
-        submitInfo.waitSemaphoreCount = waitForUploads ? 2u : 1u;
-        submitInfo.pWaitSemaphores = waitSemaphores;
-        submitInfo.pWaitDstStageMask = waitStages;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
-
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = signalSemaphores;
-
+        const std::array<VkSemaphoreSubmitInfo, 2> waits{
+            VkSemaphoreSubmitInfo{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                  .semaphore = imageAvailableSemaphores[currentFrame],
+                                  .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT},
+            VkSemaphoreSubmitInfo{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                  .semaphore = uploadContext.timeline(),
+                                  .value = uploadValue,
+                                  .stageMask = uploadStage}};
+        const VkCommandBufferSubmitInfo command{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                                                .commandBuffer = commandBuffers[currentFrame]};
+        const VkSemaphoreSubmitInfo signal{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                           .semaphore = renderFinishedSemaphores[imageIndex],
+                                           .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+        const VkSubmitInfo2 submitInfo{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                                       .waitSemaphoreInfoCount = waitForUploads ? 2u : 1u,
+                                       .pWaitSemaphoreInfos = waits.data(),
+                                       .commandBufferInfoCount = 1,
+                                       .pCommandBufferInfos = &command,
+                                       .signalSemaphoreInfoCount = 1,
+                                       .pSignalSemaphoreInfos = &signal};
         const VkResult submitResult =
-            vkQueueSubmit(vulkanDevice.graphicsQueue(), 1, &submitInfo, inFlightFences[currentFrame]);
+            vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &submitInfo, inFlightFences[currentFrame]);
         if (submitResult != VK_SUCCESS) {
             throw std::runtime_error("Could not submit command buffer to queue (VkResult " +
                                      std::to_string(static_cast<int>(submitResult)) + ")");
@@ -3567,18 +4528,18 @@ void drawFrame() {
     // Frame uploads update stable instances, spatial membership and
     // culling bounds; a cell transition does not rebuild scene tables.
     TransformSystem::updateDirty(registry);
-    uint32_t imageIndex;
-    if (!acquireFrameImage(imageIndex)) {
-        return;
-    }
-
-    vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-    vkResetCommandBuffer(postViewportGraphicsCommandBuffers[currentFrame], 0);
-    presentationGraphSubmittedThisFrame = false;
+    // refreshSceneFrameData() only rebuilds CPU-side caches. Running it
+    // before the in-flight fence wait overlaps it with the GPU still
+    // finishing this slot's previous submission.
     {
         GE_PROFILE_SCOPE("Refresh Scene Data");
         refreshSceneFrameData();
     }
+    waitFrameSlot();
+
+    vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+    vkResetCommandBuffer(postViewportGraphicsCommandBuffers[currentFrame], 0);
+    presentationGraphSubmittedThisFrame = false;
     {
         GE_PROFILE_SCOPE("GPU Object Update");
         updateRenderableBuffers();
@@ -3647,13 +4608,20 @@ void drawFrame() {
     // command recording; this is a no-op unless its target extent changed.
     createDirectionalVisibilityPass();
     createRtContactShadowPass();
+    createLocalLightShadowPass();
     {
         GE_PROFILE_SCOPE("Command Recording");
-        recordCommandBuffer(commandBuffers[currentFrame], SwapchainImageIndex{imageIndex});
+        recordCommandBuffer(commandBuffers[currentFrame]);
+    }
+    if (!swapchainImageAcquired) {
+        // The swapchain went out of date after this frame's earlier work was
+        // submitted; recreation idles the device, which retires that work.
+        recreateSwapChain();
+        return;
     }
     {
         GE_PROFILE_SCOPE("Queue Submit / Present");
-        submitAndPresentFrame(imageIndex);
+        submitAndPresentFrame(acquiredImageIndex);
     }
     // Only this path records timestamp queries.  drawCoreFrame() shares
     // submitAndPresentFrame(), but does not reset or write this pool.
@@ -3693,6 +4661,8 @@ void drawCoreFrame() {
         throw std::runtime_error("Could not begin core command buffer");
     }
     VkImageMemoryBarrier2 toColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    // Chains with the acquire semaphore's COLOR_ATTACHMENT_OUTPUT wait.
+    toColor.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     toColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
     toColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;

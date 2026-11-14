@@ -1,6 +1,7 @@
 // Dedicated packed-grass forward path.  Binding 6 is updated each frame to
 // the compacted main visibility stream before its counted indirect draw.
 import Common.SceneData;
+import Common.VertexFrame;
 import Common.ShadowSampling;
 import Grass.GrassPackedData;
 import Grass.GrassDeformation;
@@ -27,7 +28,8 @@ struct VertexInput
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(1)]] float3 color : COLOR0;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
-    [[vk::location(3)]] float3 normal : NORMAL;
+    [[vk::location(3)]] uint tangentFrame : NORMAL; // GpuVertex::packTangentFrame
+    property float3 normal { get { return decodeVertexNormal(tangentFrame); } }
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
 };
 
@@ -109,7 +111,7 @@ GrassFragmentOutput fragmentMain(FragmentInput input)
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0), 0u, 0u};
     float shadow = frame.shadowEnabled != 0 ? sampleVirtualShadow(
         shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection,
-        frame.shadowClipMatrices, frame.shadowClipConstants, shadowPageTable,
+        frame, shadowPageTable,
         frame.shadowQuality, uint2(input.position.xy), frame.temporalSampleIndex,
         frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
     float visibility = 1.0 - shadow;

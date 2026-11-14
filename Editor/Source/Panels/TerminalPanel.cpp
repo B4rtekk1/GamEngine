@@ -195,7 +195,7 @@ void TerminalPanel::drawScreen() {
         const float cursorX = origin.x + static_cast<float>(buffer_.cursorColumn()) * cellWidth_;
         const float cursorY = origin.y + static_cast<float>(buffer_.cursorRow()) * cellHeight_;
         drawList->AddRectFilled({cursorX, cursorY}, {cursorX + 2.0F, cursorY + cellHeight_},
-                                IM_COL32(110, 210, 235, 190));
+                                ImGui::GetColorU32(EditorUI::withAlpha(EditorUI::colors().accentHover, 0.8F)));
     }
     drawList->PopClipRect();
 }

@@ -222,7 +222,8 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
     // history. Depth history is an internal storage image and needs explicit
     // layout transitions.
     VkImageMemoryBarrier2 internalBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    internalBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    // Last read by the previous resolve or by the display transform.
+    internalBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     internalBarrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     internalBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     internalBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
@@ -255,7 +256,9 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
     vkCmdDispatch(commandBuffer, (extent.width + 15) / 16, (extent.height + 15) / 16, 1);
     internalBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     internalBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    internalBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    // Next frame's resolve reads it, and the display transform's depth of
+    // field reads it this frame.
+    internalBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     internalBarrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     internalBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     internalBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -264,6 +267,33 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
     historyValid_ = true;
     previousJitterX_ = currentJitterX;
     previousJitterY_ = currentJitterY;
+}
+
+void TemporalAaPass::updateWaterInputs(const VkImageView waterVelocityView, const VkSampler waterVelocitySampler,
+                                       const VkImageView waterMetaView, const VkSampler waterMetaSampler,
+                                       const VkImageView waterSurfaceView,
+                                       const VkSampler waterSurfaceSampler) noexcept {
+    if (device_ == VK_NULL_HANDLE || waterVelocityView == VK_NULL_HANDLE || waterMetaView == VK_NULL_HANDLE ||
+        waterSurfaceView == VK_NULL_HANDLE)
+        return;
+    const VkDescriptorImageInfo images[3] = {
+        {waterVelocitySampler, waterVelocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {waterMetaSampler, waterMetaView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {waterSurfaceSampler, waterSurfaceView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    };
+    VkWriteDescriptorSet writes[6]{};
+    for (std::uint32_t set = 0; set < 2; ++set) {
+        for (std::uint32_t i = 0; i < 3; ++i) {
+            VkWriteDescriptorSet& write = writes[set * 3 + i];
+            write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = sets_[2 + set];
+            write.dstBinding = 5 + i;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &images[i];
+        }
+    }
+    vkUpdateDescriptorSets(device_, 6, writes, 0, nullptr);
 }
 
 void TemporalAaPass::destroy() noexcept {

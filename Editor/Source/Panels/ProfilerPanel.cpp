@@ -182,7 +182,7 @@ void drawTimeline(const char* label, const Engine::ProfileFrame& frame, const bo
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
     constexpr float rowHeight = 20.0F;
-    constexpr float labelWidth = 105.0F;
+    constexpr float labelWidth = 6.0F;
     constexpr float height = 104.0F;
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(origin, {origin.x + width, origin.y + height},
@@ -195,9 +195,13 @@ void drawTimeline(const char* label, const Engine::ProfileFrame& frame, const bo
         const float x1 = std::max(x0 + 2.0F, origin.x + labelWidth +
                                                  static_cast<float>(end / frameLength) * (width - labelWidth - 4.0F));
         draw->AddRectFilled({x0, y}, {x1, y + rowHeight - 3.0F}, zoneColor(event.name), 2.0F);
-        if (x1 - x0 > 42.0F)
-            draw->AddText({x0 + 4.0F, y + 2.0F}, IM_COL32(245, 245, 245, 255),
+        if (x1 - x0 > 42.0F) {
+            // Clip so a long zone name never bleeds into its neighbour.
+            draw->PushClipRect({x0, y}, {x1, y + rowHeight - 3.0F}, true);
+            draw->AddText({x0 + 5.0F, y + 2.0F}, ImGui::GetColorU32(EditorUI::colors().appBackground),
                           Engine::Profiler::name(event.name).data());
+            draw->PopClipRect();
+        }
         if (ImGui::IsMouseHoveringRect({x0, y}, {x1, y + rowHeight - 3.0F}))
             ImGui::SetTooltip("%s: %.3f ms", Engine::Profiler::name(event.name).data(), end - start);
     };

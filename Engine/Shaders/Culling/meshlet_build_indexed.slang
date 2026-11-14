@@ -27,31 +27,43 @@ struct IndexedDrawCommand {
 [[vk::binding(5, 0)]] RWStructuredBuffer<IndexedDrawCommand> commands;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> drawCounts;
 
-[numthreads(64, 1, 1)]
-[shader("compute")]
-void main(uint3 threadId : SV_DispatchThreadID) {
-    uint visibleCapacity, visibleStride;
-    visibleMeshlets.GetDimensions(visibleCapacity, visibleStride);
-    const uint index = threadId.x;
-    if (index >= min(visibleCount[0], visibleCapacity)) return;
-
+// `index` is below the clamped visible count.
+void binVisible(uint index) {
     const VisibleMeshlet visible = visibleMeshlets[index];
     const GPUSceneInstanceRecord instance = instances[visible.instanceId];
     const uint shaderSlot = materials[instance.idsAndFlags.y].data.w;
     if (shaderSlot >= 32u) return;
 
-    uint commandCapacity, commandStride;
-    commands.GetDimensions(commandCapacity, commandStride);
-    const uint capacityPerSlot = commandCapacity / 32u;
+    // drawCounts holds the 32 per-slot counts, then the packed slot offsets:
+    // slot s owns commands [drawCounts[32 + s], drawCounts[33 + s]).
+    const uint slotStart = drawCounts[32u + shaderSlot];
+    const uint slotCapacity = drawCounts[33u + shaderSlot] - slotStart;
     uint destination;
     InterlockedAdd(drawCounts[shaderSlot], 1u, destination);
-    if (destination >= capacityPerSlot) return;
+    if (destination >= slotCapacity) return;
 
     // Culling only merges meshlets whose triangle ranges are contiguous.
     const uint firstMeshlet = visible.meshletId & 0x00ffffffu;
     const uint lastMeshlet = firstMeshlet + (visible.meshletId >> 24u);
-    const uint firstTriangle = meshlets[firstMeshlet].range.z;
+    // material.y: the meshlet's first index in the shared index heap.
+    const uint firstIndex = meshlets[firstMeshlet].material.y;
     const GpuMeshlet last = meshlets[lastMeshlet];
-    commands[shaderSlot * capacityPerSlot + destination] = IndexedDrawCommand(
-        (last.range.z + last.range.w - firstTriangle) * 3u, 1u, firstTriangle * 3u, 0, instance.idsAndFlags.z);
+    commands[slotStart + destination] = IndexedDrawCommand(
+        last.material.y + last.range.w * 3u - firstIndex, 1u, firstIndex, 0, instance.idsAndFlags.z);
+}
+
+// The host launches at most BinGroups groups (renderer_backend_frame.inl):
+// a grid-stride loop covers any visible count, so the launch no longer scales
+// with the list capacity (one group per 64 meshlets of every instance) and
+// cannot exceed maxComputeWorkGroupCount on very large scenes.
+static const uint BinGroups = 1024u;
+
+[numthreads(64, 1, 1)]
+[shader("compute")]
+void main(uint3 threadId : SV_DispatchThreadID) {
+    uint visibleCapacity, visibleStride;
+    visibleMeshlets.GetDimensions(visibleCapacity, visibleStride);
+    const uint count = min(visibleCount[0], visibleCapacity);
+    for (uint index = threadId.x; index < count; index += BinGroups * 64u)
+        binVisible(index);
 }

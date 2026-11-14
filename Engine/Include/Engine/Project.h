@@ -51,6 +51,17 @@ class Project final {
         return startupScene_;
     }
 
+    void setName(std::string name) {
+        name_ = std::move(name);
+    }
+    /** @p scene must be an absolute path (or resolved with resolve()). */
+    void setStartupScene(std::filesystem::path scene) {
+        startupScene_ = std::move(scene);
+    }
+
+    /** Rewrites the manifest with the current name, asset root and startup scene. */
+    void save() const;
+
     /** Returns every `.scene` file stored next to the startup scene. */
     [[nodiscard]] std::vector<std::filesystem::path> scenes() const;
 

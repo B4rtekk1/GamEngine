@@ -349,20 +349,22 @@ void load_materials(const cgltf_data& data, const std::vector<NamedImage>& image
         if (source.has_ior)
             material.ior = source.ior.ior;
         if (source.has_transmission) {
-            material.transmission = source.transmission.transmission_factor;
+            material.transmission = std::clamp(source.transmission.transmission_factor, 0.0F, 1.0F);
             material.transmissionTexture = image_index(data, source.transmission.transmission_texture);
             import_texture_transform(material.glassTextureTransforms[0], source.transmission.transmission_texture);
         }
         if (source.has_volume) {
-            material.thickness = source.volume.thickness_factor;
+            material.thickness = std::max(source.volume.thickness_factor, 0.0F);
             material.thicknessTexture = image_index(data, source.volume.thickness_texture);
             import_texture_transform(material.glassTextureTransforms[1], source.volume.thickness_texture);
-            material.attenuationColor = {source.volume.attenuation_color[0], source.volume.attenuation_color[1],
-                                         source.volume.attenuation_color[2], 1.0F};
+            material.attenuationColor = Math::Color{source.volume.attenuation_color[0],
+                                                    source.volume.attenuation_color[1],
+                                                    source.volume.attenuation_color[2], 1.0F}
+                                            .clamped();
             // cgltf represents the omitted (infinite) distance as FLT_MAX.
             material.attenuationDistance = source.volume.attenuation_distance == std::numeric_limits<float>::max()
                                                ? 0.0F
-                                               : source.volume.attenuation_distance;
+                                               : std::max(source.volume.attenuation_distance, 0.0F);
         }
         if (source.has_specular) {
             material.specularTexture = image_index(data, source.specular.specular_texture);

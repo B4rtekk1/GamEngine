@@ -79,6 +79,11 @@ enum class PbrDebugView : std::uint8_t {
     NoDirectSpecular,
     NoGtao,
     GeometricDirectDiffuse,
+    Albedo,
+    Normals,
+    Roughness,
+    Metallic,
+    AmbientOcclusion,
 };
 
 /** Tunables are deliberately data, so automated GPU benchmarks can sweep them. */
@@ -132,6 +137,141 @@ constexpr GtaoQualitySettings gtaoQualitySettings(const GtaoQuality quality) noe
     return gtaoQualitySettings(GtaoQuality::High);
 }
 
+/**
+ * Screen-space diffuse global illumination. A half-resolution visibility-bitmask
+ * trace reprojects the previous frame's lit colour, so on-screen surfaces bounce
+ * light onto each other (one more bounce per frame) without ray tracing.
+ */
+enum class SsgiQuality : std::uint8_t { Off, Low, Medium, High };
+
+struct SsgiSettings final {
+    SsgiQuality quality = SsgiQuality::Medium;
+    /** World-space reach of the bounce, in metres. */
+    float radius = 4.0F;
+    /** Assumed depth of on-screen surfaces; light passes behind thinner objects. */
+    float thickness = 0.5F;
+    float intensity = 1.0F;
+    bool operator==(const SsgiSettings&) const noexcept = default;
+};
+
+struct SsgiQualitySettings final {
+    std::uint32_t slices;
+    std::uint32_t stepsPerSide;
+};
+
+constexpr SsgiQualitySettings ssgiQualitySettings(const SsgiQuality quality) noexcept {
+    switch (quality) {
+    case SsgiQuality::Off:
+        return {0, 0};
+    case SsgiQuality::Low:
+        return {1, 8};
+    case SsgiQuality::Medium:
+        return {2, 10};
+    case SsgiQuality::High:
+        return {3, 14};
+    }
+    return ssgiQualitySettings(SsgiQuality::Medium);
+}
+
+/**
+ * Ray-traced dynamic diffuse global illumination (DDGI) on a camera-centred
+ * probe grid. Optional: it needs ray tracing pipelines with cluster and
+ * partitioned acceleration structures (NVIDIA RTX Mega Geometry). While it
+ * is active it replaces both the sky irradiance and SSGI for diffuse light.
+ */
+enum class DdgiQuality : std::uint8_t { Low, Medium, High };
+
+struct DdgiSettings final {
+    bool enabled = false;
+    DdgiQuality quality = DdgiQuality::Medium;
+    /** World-space distance between neighbouring probes, in metres. */
+    float probeSpacing = 2.0F;
+    float intensity = 1.0F;
+    bool operator==(const DdgiSettings&) const noexcept = default;
+};
+
+struct DdgiQualitySettings final {
+    std::uint32_t raysPerProbe;
+    /** Every probe is refreshed once per this many frames. */
+    std::uint32_t updateInterval;
+};
+
+constexpr DdgiQualitySettings ddgiQualitySettings(const DdgiQuality quality) noexcept {
+    switch (quality) {
+    case DdgiQuality::Low:
+        return {96, 4};
+    case DdgiQuality::Medium:
+        return {128, 2};
+    case DdgiQuality::High:
+        return {192, 1};
+    }
+    return ddgiQualitySettings(DdgiQuality::Medium);
+}
+
+/** The diffuse global illumination technique a scene is lit with. */
+enum class GlobalIlluminationMode : std::uint8_t {
+    /** Sky irradiance only, occluded by GTAO. */
+    Off,
+    /** SSGI: one bounce per frame from on-screen surfaces, no ray tracing. */
+    ScreenSpace,
+    /** DDGI: ray-traced probes; needs cluster ray tracing, else falls back to Off. */
+    RayTracedProbes,
+};
+
+/** Per-scene GI choice with the parameters of both techniques. */
+struct GlobalIlluminationSettings final {
+    GlobalIlluminationMode mode = GlobalIlluminationMode::ScreenSpace;
+    SsgiSettings ssgi{};
+    DdgiSettings ddgi{};
+    bool operator==(const GlobalIlluminationSettings&) const noexcept = default;
+};
+
+/** Display transform applied after exposure. */
+enum class TonemapOperator : std::uint8_t {
+    /** AgX: bright saturated light desaturates towards white like film. */
+    AgX,
+    /** Fitted ACES curve on luminance; keeps hue but never reaches white. */
+    AcesLuminance,
+};
+
+/**
+ * Camera and colour settings of the final image: exposure, display
+ * transform, colour grading and lens effects. Saved per scene.
+ */
+struct PostProcessSettings final {
+    /** Meters the scene and adapts like an eye; otherwise exposure is fixed. */
+    bool autoExposure = true;
+    /** Added to the metered (or fixed) exposure, in stops. */
+    float exposureCompensation = 0.0F;
+    /** Limits of the metered scene luminance, in log2 units. */
+    float minLuminanceEv = -5.0F;
+    float maxLuminanceEv = 12.0F;
+    /** Adaptation rate towards brighter and darker scenes, per second. */
+    float adaptationSpeedUp = 3.0F;
+    float adaptationSpeedDown = 1.0F;
+    TonemapOperator tonemapper = TonemapOperator::AgX;
+    /** Colour grading. Contrast pivots around middle grey. */
+    float contrast = 1.0F;
+    float saturation = 1.0F;
+    /** White balance: -1 cool .. 1 warm, -1 magenta .. 1 green. */
+    float temperature = 0.0F;
+    float tint = 0.0F;
+    /** Strength of the glow around bright light (lamps, sun glints, emission). */
+    float bloom = 0.04F;
+    /** Lens. Vignette darkens the corners; aberration splits colour radially. */
+    float vignette = 0.25F;
+    float chromaticAberration = 0.1F;
+    /** Fraction of the frame time the virtual shutter is open; 0 disables. */
+    float motionBlur = 0.5F;
+    /** Depth of field (needs TAA, which provides linear depth). */
+    bool depthOfField = false;
+    float focusDistance = 10.0F;
+    /** 0..1: how strongly the background beyond the focus blurs. */
+    float aperture = 0.5F;
+    float maxBlurPixels = 12.0F;
+    bool operator==(const PostProcessSettings&) const noexcept = default;
+};
+
 enum class IblQuality : std::uint8_t { Low, Medium, High, Ultra };
 struct IblQualitySettings final {
     std::uint32_t environmentResolution;
@@ -183,6 +323,10 @@ struct RenderFeatures final {
     // cuts; MSAA paths without conservative depth resolve fall back to
     // frustum-only culling in canUseHiZOcclusionCulling().
     bool occlusionCulling = true;
+    // Rasterize GPU-culled meshlets with VK_EXT_mesh_shader (one workgroup
+    // per meshlet, per-triangle culling) instead of one indexed draw per
+    // meshlet run. Ignored on devices without mesh shaders.
+    bool meshShaders = true;
 };
 
 /** Distance limits for the GPU-driven grass visibility streams, in metres. */
@@ -204,6 +348,9 @@ struct RenderConfig final {
     PbrDebugView pbrDebugView = PbrDebugView::FinalLighting;
     IblQuality iblQuality = IblQuality::High;
     ShadowDebugView shadowDebugView = ShadowDebugView::Off;
+    SsgiSettings ssgi{};
+    DdgiSettings ddgi{};
+    PostProcessSettings postProcess{};
 };
 
 /** Opaque viewport texture handle used by editor integrations. */

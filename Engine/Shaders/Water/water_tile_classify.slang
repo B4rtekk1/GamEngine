@@ -50,7 +50,10 @@ bool reserveBudget(uint counterKind,uint amount,uint limit){
 [shader("compute")]
 void main(uint3 gid:SV_GroupID,uint3 lid3:SV_GroupThreadID,uint3 tid:SV_DispatchThreadID){
     uint2 lid=lid3.xy;uint lane=laneIndex(lid);uint tileIndex=gid.y*settings.tilesX+gid.x;
-    if(settings.denseMode==0u&&candidateMask[tileIndex]==0u)return;
+    if(settings.denseMode==0u){
+        const uint blocksX=(settings.tilesX+WATER_CANDIDATE_BLOCK_TILES-1u)/WATER_CANDIDATE_BLOCK_TILES;
+        if(candidateMask[(gid.y/WATER_CANDIDATE_BLOCK_TILES)*blocksX+gid.x/WATER_CANDIDATE_BLOCK_TILES]==0u)return;
+    }
     if(lane==0u){groupHasWater=0u;groupReflection=0u;groupRefraction=0u;groupErrorBits=0u;groupImportanceBits=0u;groupWaterCount=0u;groupSimpleCount=0u;}
     bool inBounds=tid.x<settings.width&&tid.y<settings.height;
     float4 surface=0;uint quality=0;uint material=0;bool valid=false;
@@ -81,10 +84,11 @@ void main(uint3 gid:SV_GroupID,uint3 lid3:SV_GroupThreadID,uint3 tid:SV_Dispatch
     uint reflectionCap=groupReflection;uint refractionCap=groupRefraction;
     const bool simpleOnly=groupSimpleCount==groupWaterCount;
     if(simpleOnly){reflectionCap=min(reflectionCap,1u);refractionCap=min(refractionCap,1u);}
-    // Histogram-derived thresholds redistribute the fixed frame budget toward
-    // the most important tiles. Tier zero has strict NO_RAY semantics.
-    if(quantized<settings.cheapThreshold){reflectionCap=0u;refractionCap=0u;}
-    else if(quantized<settings.mediumThreshold){reflectionCap=min(reflectionCap,1u);refractionCap=min(refractionCap,1u);}
+    // Histogram-derived thresholds redistribute the frame budget toward the
+    // most important tiles. Low-importance tiles keep the cheap ray tier:
+    // dropping them to NO_RAY made neighbouring 8x8 tiles alternate between
+    // SSR and sky/probe reflections, which reads as a blocky mosaic.
+    if(quantized<settings.mediumThreshold){reflectionCap=min(reflectionCap,1u);refractionCap=min(refractionCap,1u);}
     else if(quantized<settings.highThreshold){reflectionCap=min(reflectionCap,2u);refractionCap=min(refractionCap,2u);}
 #if WATER_DIAGNOSTIC_FULL_REFLECTION_TIER
     reflectionCap=groupReflection;
@@ -93,15 +97,19 @@ void main(uint3 gid:SV_GroupID,uint3 lid3:SV_GroupThreadID,uint3 tid:SV_Dispatch
     // reduced under load; a failed ray reservation cannot lower pixel density.
     reserveBudget(2u,64u,budgets[0].maxFullRateSamples);
     const uint sampleCount=64u;
-    uint reflectionSteps=reflectionCap==3u?40u:(reflectionCap==2u?26u:(reflectionCap==1u?14u:0u));
-    uint refractionSteps=refractionCap==3u?32u:(refractionCap==2u?20u:(refractionCap==1u?1u:0u));
+    // On budget exhaustion degrade one ladder step at a time (requested ->
+    // cheap -> none) so a saturated frame loses ray length, not whole tiles.
 #if !WATER_DIAGNOSTIC_UNLIMITED_REFLECTION_BUDGET
-    if(reflectionCap>0u&&!reserveBudget(0u,sampleCount*reflectionSteps,budgets[0].maxReflectionWork)){
-        reflectionCap=0u;uint ignoredSat=0u;InterlockedOr(budgets[0].budgetSaturated,1u,ignoredSat);
+    while(reflectionCap>0u){
+        uint steps=reflectionCap==3u?40u:(reflectionCap==2u?28u:20u);
+        if(reserveBudget(0u,sampleCount*steps,budgets[0].maxReflectionWork))break;
+        reflectionCap=reflectionCap>1u?1u:0u;uint ignoredSat=0u;InterlockedOr(budgets[0].budgetSaturated,1u,ignoredSat);
     }
 #endif
-    if(refractionCap>0u&&!reserveBudget(1u,sampleCount*refractionSteps,budgets[0].maxRefractionWork)){
-        refractionCap=0u;uint ignoredSat=0u;InterlockedOr(budgets[0].budgetSaturated,1u,ignoredSat);
+    while(refractionCap>0u){
+        uint steps=refractionCap==3u?32u:(refractionCap==2u?20u:1u);
+        if(reserveBudget(1u,sampleCount*steps,budgets[0].maxRefractionWork))break;
+        refractionCap=refractionCap>1u?1u:0u;uint ignoredSat=0u;InterlockedOr(budgets[0].budgetSaturated,1u,ignoredSat);
     }
     uint tier=max(reflectionCap,refractionCap);
     uint dst=0;InterlockedAdd(tierCounts[tier],1u,dst);

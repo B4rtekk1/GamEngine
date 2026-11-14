@@ -20,7 +20,7 @@ struct VertexOutput
 
 static const uint INVALID_PAGE = 0xffffffffu;
 static const uint PAGE_RESOLUTION = 256u;
-static const uint PHYSICAL_PAGES_PER_AXIS = 16u;
+static const uint PHYSICAL_PAGES_PER_AXIS = 32u; // ShadowMap::PhysicalPagesPerAxis
 static const uint ATLAS_RESOLUTION = PAGE_RESOLUTION * PHYSICAL_PAGES_PER_AXIS;
 
 [shader("vertex")]

@@ -18,6 +18,10 @@ struct CullingObjectData
     // the per-object LOD hot path.
     float lod1DistanceSq;
     float lod2DistanceSq;
+    // Global meshlet range of the LOD0 indices; zero disables the per-meshlet
+    // VSM path for this object (see shadow_meshlet_refine.slang).
+    uint firstMeshlet;
+    uint meshletCount;
 };
 
 struct IndexedDrawCommand
@@ -51,7 +55,14 @@ struct CullingUniformData
     uint shadowCacheMode;
     uint padding1;
     uint padding2;
+    // Binned draws: slot s owns commands [binOffsets[s], binOffsets[s + 1]).
+    uint4 binOffsets[9];
 };
+
+uint cullingBinOffset(CullingUniformData data, uint bin)
+{
+    return data.binOffsets[bin >> 2u][bin & 3u];
+}
 
 static const float3 UNIT_AABB_CORNERS[8] =
 {

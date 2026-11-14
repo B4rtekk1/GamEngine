@@ -13,7 +13,7 @@ static const float SHADOW_TEXEL_BIAS_SCALE = 2.0;
 // handles the larger grazing-angle correction.
 static const float GEOMETRIC_NORMAL_OFFSET_TEXELS = 0.5;
 static const uint SHADOW_CLIP_LEVELS = 7;
-static const uint PHYSICAL_PAGES_PER_AXIS = 16;
+static const uint PHYSICAL_PAGES_PER_AXIS = 32; // ShadowMap::PhysicalPagesPerAxis
 static const uint INVALID_SHADOW_PAGE = 0xffffffff;
 static const uint SHADOW_DEBUG_OFF = 0;
 static const uint SHADOW_DEBUG_BLOCKER_COUNT = 1;
@@ -147,19 +147,18 @@ float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, Sampler2DShadow lin
 
 // A rotated Poisson offset can reach sqrt(2) times the nominal radius on
 // either axis. Include the complete bilinear footprint of every tap.
-bool resolveShadowKernelPage(float2 virtualPixel, float radius, uint level,
-                             StructuredBuffer<uint4> pageTable, out uint physical)
+// The receiver's own page is already resolved, so a kernel that stays inside
+// it needs no further page-table fetch: every tap reuses `centerPhysical`.
+bool shadowKernelInCenterPage(float2 virtualPixel, float radius)
 {
     const float reach = radius * 1.41421357;
     const int2 minPixel = int2(floor(virtualPixel - reach - 0.5));
     const int2 maxPixel = int2(floor(virtualPixel + reach - 0.5)) + int2(1);
-    physical = INVALID_SHADOW_PAGE;
     if (any(minPixel < int2(0)) || any(maxPixel >= int2(VIRTUAL_RESOLUTION)))
         return false;
-    const uint2 minPage = uint2(minPixel) / PAGE_RESOLUTION;
-    const uint2 maxPage = uint2(maxPixel) / PAGE_RESOLUTION;
-    return all(minPage == maxPage) &&
-           resolveVirtualShadowPage(minPage, level, pageTable, physical);
+    const uint2 centerPage = uint2(virtualPixel) / PAGE_RESOLUTION;
+    return all(uint2(minPixel) / PAGE_RESOLUTION == centerPage) &&
+           all(uint2(maxPixel) / PAGE_RESOLUTION == centerPage);
 }
 
 float sampleResolvedShadowKernelTap(Sampler2DShadow linearShadowMap,
@@ -271,14 +270,15 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     float2 uv = projected.xy * 0.5 + 0.5;
     float currentDepth = projected.z;
     clipEdge = max(abs(projected.x), abs(projected.y));
-    float2 centerAtlasUv = 0.0;
+    const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
+    uint centerPhysical = INVALID_SHADOW_PAGE;
     resident = currentDepth > 0.0 && currentDepth < 1.0 &&
-               virtualShadowAtlasUv(uv * VIRTUAL_RESOLUTION, level,
-                                    pageTable, centerAtlasUv);
+               all(virtualPixel >= 0.0) && all(virtualPixel < float(VIRTUAL_RESOLUTION)) &&
+               resolveVirtualShadowPage(uint2(virtualPixel) / PAGE_RESOLUTION, level,
+                                        pageTable, centerPhysical);
     if (!resident)
         return 0.0;
-
-    const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
+    const float2 centerAtlasUv = virtualTexelAtlasUv(uint2(virtualPixel), centerPhysical);
     virtualPage = uint2(virtualPixel) / PAGE_RESOLUTION;
 
     const float bias = shadowReceiverDepthBias(currentDepth, uv,
@@ -412,9 +412,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
         // Contact shadows need silhouette antialiasing too; penumbra width
         // must not reduce the comparison budget below twelve samples.
         const uint tapCount = penumbraRadius < 3.5 ? 12u : 16u;
-        uint kernelPhysical;
-        const bool kernelInPage = resolveShadowKernelPage(
-            virtualPixel, penumbraRadius, level, pageTable, kernelPhysical);
+        const uint kernelPhysical = centerPhysical;
+        const bool kernelInPage = shadowKernelInCenterPage(virtualPixel, penumbraRadius);
         float filteredShadow = 0.0;
         float totalWeight = 0.0;
         [loop]
@@ -473,19 +472,37 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     // PCF16 is paid only where the footprint crosses a shadow silhouette.
     float initialShadow = 0.0;
     uint initialTapCount = 0;
-    [unroll]
-    for (int y = 0; y < 2; ++y)
+    if (shadowKernelInCenterPage(virtualPixel, 0.5))
+    {
+        // Away from page edges the probes need neither a page-table fetch
+        // nor the per-texel fallback of sampleVirtualShadowBilinear.
+        [unroll]
+        for (int y = 0; y < 2; ++y)
+        {
+            [unroll]
+            for (int x = 0; x < 2; ++x)
+                initialShadow += sampleResolvedShadowKernelTap(
+                    linearShadowMap, virtualPixel + float2(x - 0.5, y - 0.5),
+                    centerPhysical, currentDepth - bias);
+        }
+        initialTapCount = 4;
+    }
+    else
     {
         [unroll]
-        for (int x = 0; x < 2; ++x)
+        for (int y = 0; y < 2; ++y)
         {
-            bool tapResident;
-            const float tapShadow = sampleVirtualShadowBilinear(
-                shadowMap, linearShadowMap, virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
-                currentDepth - bias, tapResident);
-            if (!tapResident) continue;
-            initialShadow += tapShadow;
-            ++initialTapCount;
+            [unroll]
+            for (int x = 0; x < 2; ++x)
+            {
+                bool tapResident;
+                const float tapShadow = sampleVirtualShadowBilinear(
+                    shadowMap, linearShadowMap, virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
+                    currentDepth - bias, tapResident);
+                if (!tapResident) continue;
+                initialShadow += tapShadow;
+                ++initialTapCount;
+            }
         }
     }
     initialShadow *= 0.25;
@@ -494,9 +511,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
 
     float filteredShadow = 0.0;
     float totalWeight = 0.0;
-    uint kernelPhysical;
-    const bool kernelInPage = resolveShadowKernelPage(
-        virtualPixel, 1.25, level, pageTable, kernelPhysical);
+    const uint kernelPhysical = centerPhysical;
+    const bool kernelInPage = shadowKernelInCenterPage(virtualPixel, 1.25);
     [unroll]
     for (uint tap = 0; tap < 16; ++tap)
     {
@@ -557,8 +573,7 @@ float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix
     );
 }
 
-uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
-                              ShadowClipConstants clipConstants[7],
+uint selectVirtualShadowLevel(float3 worldPosition, ConstantBuffer<RendererFrameData> shadowFrame,
                               const uint shadowQuality,
 #if defined(SHADOW_COMPUTE)
                               float3 worldRight, float3 worldDown,
@@ -572,12 +587,12 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
     // at level 0; the texel footprint then scales by the inverse texel size.
     // The per-level matrix multiply below is still required for bounds, but
     // the two derivative transforms are no longer repeated seven times.
-    const float4 baseClip = mul(float4(worldPosition, 1.0), clipMatrices[0]);
+    const float4 baseClip = mul(float4(worldPosition, 1.0), shadowFrame.shadowClipMatrices[0]);
     float baseFootprint = 0.0;
     if (abs(baseClip.w) >= 1.0e-6)
     {
         const float2 baseUv = baseClip.xy / baseClip.w * 0.5 + 0.5;
-        baseFootprint = shadowFootprintFromProjectedUv(baseUv, clipMatrices[0]
+        baseFootprint = shadowFootprintFromProjectedUv(baseUv, shadowFrame.shadowClipMatrices[0]
 #if defined(SHADOW_COMPUTE)
             , worldRight, worldDown
 #endif
@@ -586,7 +601,7 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
     [unroll]
     for (uint level = 0; level < SHADOW_CLIP_LEVELS; ++level)
     {
-        const float4 lightClip = mul(float4(worldPosition, 1.0), clipMatrices[level]);
+        const float4 lightClip = mul(float4(worldPosition, 1.0), shadowFrame.shadowClipMatrices[level]);
         if (abs(lightClip.w) < 1.0e-6) continue;
         const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
         if (any(uv < 0.0) || any(uv >= 1.0)) continue;
@@ -595,8 +610,8 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
         // screen-space axes. Sampling must never let incidental L0 cache
         // residency override the requested geometric LOD.
         const float levelFootprint = baseFootprint *
-            clipConstants[0].worldTexelSize /
-            max(clipConstants[level].worldTexelSize, 1.0e-6);
+            shadowFrame.shadowClipConstants[0].worldTexelSize /
+            max(shadowFrame.shadowClipConstants[level].worldTexelSize, 1.0e-6);
         if (levelFootprint <= threshold || level + 1 == SHADOW_CLIP_LEVELS)
         {
             footprintInTexels = levelFootprint;
@@ -610,7 +625,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
                           Sampler2D shadowDepthMap,
                           float3 worldPosition,
                           float3 normal, float3 lightDirection,
-                          float4x4 clipMatrices[7], ShadowClipConstants clipConstants[7],
+                          ConstantBuffer<RendererFrameData> shadowFrame,
                           StructuredBuffer<uint4> pageTable,
                           uint shadowQuality, uint2 pixelCoordinate,
                           uint temporalSampleIndex, bool temporalShadowJitter,
@@ -629,7 +644,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
     bool resident;
     float desiredFootprintInTexels;
     const uint desiredLevel = selectVirtualShadowLevel(
-        worldPosition, clipMatrices, clipConstants, shadowQuality,
+        worldPosition, shadowFrame, shadowQuality,
 #if defined(SHADOW_COMPUTE)
         worldRight, worldDown,
 #endif
@@ -645,7 +660,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
         uint2 virtualPage;
         float shadow = sampleVirtualShadowLevel(
             shadowMap, linearShadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
-            clipMatrices[level], clipConstants[level], level, pageTable, shadowQuality, pixelCoordinate,
+            shadowFrame.shadowClipMatrices[level], shadowFrame.shadowClipConstants[level], level, pageTable, shadowQuality, pixelCoordinate,
             temporalSampleIndex, temporalShadowJitter, resident, clipEdge,
             blockerCount, penumbraRadius, virtualPage, false);
         if (level == desiredLevel)
@@ -663,7 +678,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
             // clip levels, which otherwise appears as horizontal LOD seams.
             const float footprintInTexels = level == desiredLevel
                 ? desiredFootprintInTexels
-                : shadowFootprintInTexels(worldPosition, clipMatrices[level]
+                : shadowFootprintInTexels(worldPosition, shadowFrame.shadowClipMatrices[level]
 #if defined(SHADOW_COMPUTE)
                     , worldRight, worldDown
 #endif
@@ -683,7 +698,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
                 uint2 nextVirtualPage;
                 float nextShadow = sampleVirtualShadowLevel(
                     shadowMap, linearShadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
-                    clipMatrices[level + 1], clipConstants[level + 1], level + 1,
+                    shadowFrame.shadowClipMatrices[level + 1], shadowFrame.shadowClipConstants[level + 1], level + 1,
                     pageTable, shadowQuality, pixelCoordinate, temporalSampleIndex,
                     temporalShadowJitter, nextResident, nextClipEdge,
                     nextBlockerCount, nextPenumbraRadius, nextVirtualPage, true);
@@ -738,6 +753,23 @@ float3 shadowDebugColor(uint view, ShadowSampleDebug debug)
                 debug.resolvedClipLevel * 2246822519u;
     return float3(float(hash & 255u), float((hash >> 8u) & 255u),
                   float((hash >> 16u) & 255u)) / 255.0;
+}
+
+// While a shadow debug view is active the resolved directional-visibility
+// image carries the debug colour instead of a visibility: 7 bits per channel
+// in the mantissa of a float in [2, 4), so the bits survive as a normal,
+// non-denormal value. Forward shaders then never inline the VSM sampler,
+// whose filter tables otherwise spill to local memory for every pixel.
+float packShadowDebugColor(float3 color)
+{
+    const uint3 q = uint3(round(saturate(color) * 127.0));
+    return asfloat(0x40000000u | (q.r << 14u) | (q.g << 7u) | q.b);
+}
+
+float3 unpackShadowDebugColor(float packed)
+{
+    const uint bits = asuint(packed);
+    return float3((bits >> 14u) & 127u, (bits >> 7u) & 127u, bits & 127u) / 127.0;
 }
 
 // Compatibility path for the standalone sample shader.

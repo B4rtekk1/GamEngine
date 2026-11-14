@@ -56,6 +56,9 @@ struct GraphicsPipelineOptions {
 
     /// SPIR-V module containing both vertexMain and fragmentMain.
     std::filesystem::path shader;
+    /// The module provides meshMain (VK_EXT_mesh_shader) instead of
+    /// vertexMain; the pipeline then has no vertex input or assembly state.
+    bool meshShader = false;
     /// Optional asset manager used to load shader sources.
     Assets::AssetManager* assetManager = nullptr;
 
@@ -86,6 +89,9 @@ struct GraphicsPipelineOptions {
     VkBool32 depthTestEnable = VK_TRUE;
     /// Comparison operation used by the depth test.
     VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
+    /// Constant depth bias in units of the minimum resolvable depth step;
+    /// zero leaves depth bias disabled.
+    float depthBiasConstantFactor = 0.0F;
     /// Enables alpha blending in the color blend state.
     VkBool32 alphaBlendEnable = VK_FALSE;
 

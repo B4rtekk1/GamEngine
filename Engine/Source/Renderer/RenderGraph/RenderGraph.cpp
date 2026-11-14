@@ -467,7 +467,16 @@ void RenderGraph::addPass(std::string name, const Queue queue, const std::functi
     if (compiled_) {
         throw std::logic_error("Reset RenderGraph before adding passes");
     }
-    passes_.push_back({std::move(name), queue, {}, {}, {}, false, false, std::move(execute)});
+    if (passPool_.empty()) {
+        passes_.push_back({std::move(name), queue, {}, {}, {}, false, false, std::move(execute)});
+    } else {
+        // Recycled passes keep the capacity of their access vectors.
+        Pass& pass = passes_.emplace_back(std::move(passPool_.back()));
+        passPool_.pop_back();
+        pass.name = std::move(name);
+        pass.queue = queue;
+        pass.execute = std::move(execute);
+    }
     PassBuilder builder{*this, static_cast<std::uint32_t>(passes_.size() - 1)};
     setup(builder);
 }
@@ -687,7 +696,8 @@ void RenderGraph::compile() {
     if (templateHit) {
         order_ = cachedTemplate->order;
         queueDependencies_ = cachedTemplate->queueDependencies;
-        queueBatches_ = cachedTemplate->queueBatches;
+        queueBatchRecycle_ = cachedTemplate->queueBatches;
+        queueBatches_ = std::move(queueBatchRecycle_);
         imageAliasPredecessor = cachedTemplate->imageAliasPredecessors;
         bufferAliasPredecessor = cachedTemplate->bufferAliasPredecessors;
         cachedImageSlotDescs = cachedTemplate->imageSlotDescs;
@@ -700,8 +710,10 @@ void RenderGraph::compile() {
             buffers_[resource].lifetime = cachedTemplate->bufferLifetimes[resource];
         allocateTransients(cachedImageSlotDescs);
         allocateTransientBuffers(cachedBufferSlotDescs);
-        barriers_ = cachedTemplate->barriers;
-        releaseBarriers_ = cachedTemplate->releaseBarriers;
+        barrierRecycle_ = cachedTemplate->barriers;
+        releaseBarrierRecycle_ = cachedTemplate->releaseBarriers;
+        barriers_ = std::move(barrierRecycle_);
+        releaseBarriers_ = std::move(releaseBarrierRecycle_);
         const auto rebindBarriers = [this](std::vector<BarrierBatch>& batches) {
             for (auto& batch : batches) {
                 for (std::size_t index = 0; index < batch.images.size(); ++index)
@@ -1230,6 +1242,8 @@ void RenderGraph::compile() {
                                         resources_[resource].desc.arrayLayers,
                                     initial);
         }
+        barriers_ = std::move(barrierRecycle_);
+        releaseBarriers_ = std::move(releaseBarrierRecycle_);
         barriers_.assign(count, {});
         releaseBarriers_.assign(count, {});
         for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered) {
@@ -1743,9 +1757,14 @@ void RenderGraph::recordAndSubmit(const SubmissionContext& context) {
                                    .pCommandBufferInfos = &command,
                                    .signalSemaphoreInfoCount = 1,
                                    .pSignalSemaphoreInfos = &signal};
-        if (vkQueueSubmit2(context.queues[static_cast<std::uint32_t>(batch.queue)], 1, &submit, VK_NULL_HANDLE) !=
-            VK_SUCCESS) {
-            throw std::runtime_error("Could not submit RenderGraph queue batch");
+        if (const VkResult result =
+                vkQueueSubmit2(context.queues[static_cast<std::uint32_t>(batch.queue)], 1, &submit, VK_NULL_HANDLE);
+            result != VK_SUCCESS) {
+            // VK_ERROR_DEVICE_LOST (-4) means an earlier command faulted on the
+            // GPU; the submit itself only reports it.
+            throw std::runtime_error("Could not submit RenderGraph queue batch: VkResult " +
+                                     std::to_string(static_cast<int>(result)) +
+                                     (result == VK_ERROR_DEVICE_LOST ? " (device lost)" : ""));
         }
     }
 
@@ -1825,12 +1844,32 @@ void RenderGraph::reset() noexcept {
     transientBufferSlots_.clear();
     resources_.clear();
     buffers_.clear();
+    // reset() is noexcept: recycle only into capacity that already exists.
+    try {
+        passPool_.reserve(passPool_.size() + passes_.size());
+    } catch (...) {
+    }
+    for (Pass& pass : passes_) {
+        if (passPool_.size() == passPool_.capacity())
+            break;
+        pass.name.clear();
+        pass.accesses.clear();
+        pass.finalTextureStates.clear();
+        pass.bufferAccesses.clear();
+        pass.sideEffect = false;
+        pass.startsNewBatch = false;
+        pass.execute = nullptr;
+        passPool_.push_back(std::move(pass));
+    }
     passes_.clear();
     order_.clear();
     orderNames_.clear();
+    barrierRecycle_ = std::move(barriers_);
+    releaseBarrierRecycle_ = std::move(releaseBarriers_);
     barriers_.clear();
     releaseBarriers_.clear();
     queueDependencies_.clear();
+    queueBatchRecycle_ = std::move(queueBatches_);
     queueBatches_.clear();
     uploadWaits_.clear();
     exportedTextures_.clear();

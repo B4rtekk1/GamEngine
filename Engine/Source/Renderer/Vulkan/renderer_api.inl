@@ -8,7 +8,10 @@ Renderer::Renderer(RenderConfig config)
       shadowQuality_(config.shadowQuality), rtContactShadowSettings_(config.rtContactShadows),
       gtaoQuality_(config.gtaoQuality), gtaoDebugView_(config.gtaoDebugView), pbrDebugView_(config.pbrDebugView),
       iblQuality_(config.iblQuality), shadowDebugView_(config.shadowDebugView), grassSettings_(config.grass),
-      state_(std::make_unique<State>()) {}
+      ssgiSettings_(config.ssgi), ddgiSettings_(config.ddgi), postProcessSettings_(config.postProcess),
+      configuredPostProcess_(config.postProcess), state_(std::make_unique<State>()) {
+    configuredGlobalIllumination_ = globalIllumination();
+}
 
 void Renderer::setOptimizationFeatures(RenderOptimizationFeatures features) noexcept {
     if (optimizationFeatures_.shadows == features.shadows &&
@@ -127,6 +130,105 @@ void Renderer::setGtaoDebugView(const GtaoDebugView view) noexcept {
 GtaoDebugView Renderer::gtaoDebugView() const noexcept {
     return gtaoDebugView_;
 }
+// SSGI resources always exist at the swapchain size, so these settings are
+// read every frame and never recreate GPU objects.
+void Renderer::setSsgiSettings(const SsgiSettings& settings) noexcept {
+    ssgiSettings_ = settings;
+}
+const SsgiSettings& Renderer::ssgiSettings() const noexcept {
+    return ssgiSettings_;
+}
+void Renderer::setDdgiSettings(const DdgiSettings& settings) noexcept {
+    ddgiSettings_ = settings;
+}
+const DdgiSettings& Renderer::ddgiSettings() const noexcept {
+    return ddgiSettings_;
+}
+bool Renderer::ddgiSupported() const noexcept {
+    return backend_ && backend_->ddgiPass.available();
+}
+void Renderer::setGlobalIllumination(const GlobalIlluminationSettings& settings) noexcept {
+    ssgiSettings_ = settings.ssgi;
+    ddgiSettings_ = settings.ddgi;
+    ddgiSettings_.enabled = settings.mode == GlobalIlluminationMode::RayTracedProbes;
+    // SSGI also stands in when DDGI is unsupported; Off disables both.
+    if (settings.mode == GlobalIlluminationMode::Off)
+        ssgiSettings_.quality = SsgiQuality::Off;
+    else if (settings.mode == GlobalIlluminationMode::ScreenSpace && ssgiSettings_.quality == SsgiQuality::Off)
+        ssgiSettings_.quality = SsgiQuality::Medium;
+}
+GlobalIlluminationSettings Renderer::globalIllumination() const noexcept {
+    GlobalIlluminationSettings settings{.ssgi = ssgiSettings_, .ddgi = ddgiSettings_};
+    settings.mode = ddgiSettings_.enabled                  ? GlobalIlluminationMode::RayTracedProbes
+                    : ssgiSettings_.quality == SsgiQuality::Off ? GlobalIlluminationMode::Off
+                                                                : GlobalIlluminationMode::ScreenSpace;
+    settings.ddgi.enabled = false;
+    return settings;
+}
+// Read every frame by the tonemap pass; no GPU object depends on them.
+void Renderer::setPostProcessSettings(const PostProcessSettings& settings) noexcept {
+    postProcessSettings_ = settings;
+}
+const PostProcessSettings& Renderer::postProcessSettings() const noexcept {
+    return postProcessSettings_;
+}
+void Renderer::applySceneSettings(const Scene& scene) noexcept {
+    setGlobalIllumination(scene.globalIllumination().value_or(configuredGlobalIllumination_));
+    setPostProcessSettings(scene.postProcess().value_or(configuredPostProcess_));
+}
+void Renderer::requestHdrCapture() noexcept {
+    if (backend_)
+        backend_->hdrCaptureRequested = true;
+}
+bool Renderer::takeHdrCapture(std::uint32_t& width, std::uint32_t& height, std::vector<std::uint16_t>& rgbaHalf) {
+    if (!backend_ || !backend_->hdrCaptureReady)
+        return false;
+    width = backend_->hdrCaptureExtent.width;
+    height = backend_->hdrCaptureExtent.height;
+    rgbaHalf = std::move(backend_->hdrCapturePixels);
+    backend_->hdrCaptureReady = false;
+    return true;
+}
+void Renderer::requestFrameCapture() noexcept {
+    if (backend_)
+        backend_->frameCaptureRequested = true;
+}
+bool Renderer::takeFrameCapture(std::uint32_t& width, std::uint32_t& height, std::vector<std::uint8_t>& rgba) {
+    if (!backend_ || !backend_->frameCaptureReady)
+        return false;
+    width = backend_->frameCaptureExtent.width;
+    height = backend_->frameCaptureExtent.height;
+    rgba = std::move(backend_->frameCapturePixels);
+    backend_->frameCaptureReady = false;
+    return true;
+}
+VsmStatistics Renderer::vsmStatistics() const noexcept {
+    if (!backend_)
+        return {};
+    const auto& stats = backend_->shadowPass.cacheStatistics();
+    return {.newPages = stats.newPages,
+            .refreshedPages = stats.refreshedPages,
+            .dirtyMarkedPages = stats.dirtyMarkedPages,
+            .levelsScrolled = stats.levelsScrolled,
+            .levelsInvalidated = stats.levelsInvalidated,
+            .deferredRequests = stats.deferredRequests,
+            .residentPages = stats.residentPages,
+            .pageBudget = backend_->adaptiveShadowPageBudget};
+}
+DdgiStatistics Renderer::ddgiStatistics() const noexcept {
+    if (!backend_)
+        return {};
+    const auto& scene = backend_->clusterScene.memoryStats();
+    return {.tracedProbes = backend_->ddgiPass.tracedProbes(),
+            .totalProbes = DdgiPass::ProbeCount,
+            .sceneBytesBuilt = scene.builtBytes,
+            .sceneBytesCompacted = scene.compactedBytes,
+            .clusters = scene.clusters,
+            .clusterTemplates = scene.templates,
+            .displacedClusters = scene.displacedClusters,
+            .clusterBlases = scene.blases,
+            .compacted = scene.compacted};
+}
 void Renderer::setPbrDebugView(const PbrDebugView view) noexcept {
     if (pbrDebugView_ == view)
         return;
@@ -172,14 +274,26 @@ std::vector<GpuMemoryCategoryBudget> Renderer::gpuMemoryCategories() const {
     return backend_ ? backend_->gpuMemoryCategories() : std::vector<GpuMemoryCategoryBudget>{};
 }
 
+std::string Renderer::gpuMemoryAllocationsJson() const {
+    return backend_ ? backend_->gpuMemoryAllocationsJson() : std::string{};
+}
+
 std::vector<GpuSceneMemoryAllocation> Renderer::gpuSceneMemory() const {
     return backend_ ? backend_->gpuSceneMemory() : std::vector<GpuSceneMemoryAllocation>{};
 }
 
 void Renderer::setProjectRoot(std::filesystem::path root) {
-    if (backend_)
-        throw std::logic_error("Renderer project root must be set before initialization");
     state_->projectRoot = std::move(root).lexically_normal();
+    // The editor switches projects without recreating the renderer. Project
+    // content and caches (environment, IBL in Library/) are resolved through
+    // this path whenever scene resources are rebuilt, so the next scene load
+    // uses the new project. The Vulkan pipeline cache keeps the directory it
+    // was opened with; its contents do not depend on the project.
+    if (backend_) {
+        backend_->projectRoot = state_->projectRoot;
+        // IES light profiles resolve against the project's assets.
+        backend_->iesProfileCache.clear();
+    }
 }
 
 void Renderer::setEditorUiBackend(EditorUiBackend* backend) noexcept {
@@ -194,7 +308,8 @@ void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
         throw std::logic_error("Renderer is already initialized");
     backend_ = std::make_unique<Backend>(
         scene, window, optimizationFeatures_, renderPath_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_,
-        gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
+        gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, ssgiSettings_,
+        ddgiSettings_, postProcessSettings_, state_->projectRoot,
         state_->assetManager, state_->forwardPass, state_->skyPass, state_->tonemapPass, state_->temporalAaPass,
         state_->bloomPass, state_->gtaoPass, state_->particlePipeline, state_->canvasRenderer, editorUiBackend_);
     backend_->initializeCore();
@@ -203,6 +318,7 @@ void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
 void Renderer::initializeScene(Scene& scene) {
     if (!backend_)
         throw std::logic_error("Renderer core must be initialized first");
+    applySceneSettings(scene);
     backend_->initializeSceneResources(scene);
 }
 
@@ -279,6 +395,7 @@ void Renderer::updateMeshGeometry(const Entity entity, const std::uint32_t first
 }
 void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
     static_cast<void>(nativeWindow);
+    applySceneSettings(scene);
     if (backend_) {
         if (!backend_->sceneResourcesReady()) {
             backend_->initializeSceneResources(scene);

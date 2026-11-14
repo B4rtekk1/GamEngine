@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Engine/ECS/Components/GlassDestructionComponent.h"
 #include "Engine/Math/Mat4.h"
 #include "Engine/Math/Vec4.h"
 #include "Engine/Renderer/Particles/ParticleTypes.h"
@@ -73,10 +72,6 @@ class ParticleSystem {
     ~ParticleSystem();
 
     void update(float deltaTime);
-    void enqueueGlassBurst(const GlassParticleBurst& burst) {
-        if (pendingGlassBursts_.size() < 1024)
-            pendingGlassBursts_.push_back(burst);
-    }
 
     void setEmitter(const ParticleEmitter& emitter) {
         emitter_ = emitter;
@@ -147,8 +142,6 @@ class ParticleSystem {
     ParticleEmitter emitter_{};
     SmokeEmitter smoke_;
     ParticleSimulationData simulation_{};
-    std::vector<GlassParticleBurst> pendingGlassBursts_;
-    std::vector<ParticleSimulationData> glassBurstSimulations_;
     std::array<std::array<void*, FramesInFlight>, RenderTargets> frameMapped_{};
     std::array<VkBuffer, FramesInFlight> smallArenaBuffers_{};
     std::array<VmaAllocation, FramesInFlight> smallArenaAllocations_{};

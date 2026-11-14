@@ -59,9 +59,12 @@ void main(uint3 id : SV_DispatchThreadID)
     const float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     ShadowSampleDebug debug;
     const float shadow = sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap,
-        worldPosition, worldNormal, lightDirection, frame.shadowClipMatrices,
-        frame.shadowClipConstants, shadowPageTable,
+        worldPosition, worldNormal, lightDirection, frame,
+        shadowPageTable,
         frame.shadowQuality, id.xy, frame.temporalSampleIndex,
         frame.temporalShadowJitter != 0, worldRight, worldDown, debug);
-    visibility[pixel] = saturate(1.0 - shadow);
+    // Forward reads the debug colour from here (unpackShadowDebugColor).
+    visibility[pixel] = frame.shadowDebugView != SHADOW_DEBUG_OFF
+        ? packShadowDebugColor(shadowDebugColor(frame.shadowDebugView, debug))
+        : saturate(1.0 - shadow);
 }

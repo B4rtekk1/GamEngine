@@ -31,6 +31,7 @@
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
 #include "Engine/Renderer/Water/WaterSystem.h"
+#include "Engine/Renderer/Lighting/LightProfiles.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Scripting/ScriptRegistry.h"
@@ -44,6 +45,28 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
+
+namespace {
+// Shader Graph assets offered by the mesh material picker, gathered when the
+// picker opens so the popup does not walk Assets on every frame.
+std::vector<std::string> shaderGraphChoices;
+
+std::vector<std::string> scanShaderGraphAssets(const std::filesystem::path& root) {
+    std::vector<std::string> result;
+    std::error_code error;
+    const std::filesystem::recursive_directory_iterator end;
+    for (std::filesystem::recursive_directory_iterator it{
+             root, std::filesystem::directory_options::skip_permission_denied, error};
+         !error && it != end; it.increment(error)) {
+        if (!it->is_regular_file(error) || it->path().extension() != ".shadergraph")
+            continue;
+        result.push_back(it->path().lexically_relative(root).generic_string());
+    }
+    std::ranges::sort(result);
+    return result;
+}
+} // namespace
 
 static bool drawRemovableComponentHeader(const char* label, const char* id, bool& remove) {
     ImGui::PushID(id);
@@ -267,6 +290,9 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
                     return false;
                 };
                 if (ImGui::Button(graphLabel.c_str(), {-1.0F, 0.0F})) {
+                    // Scan once per opening; the popup is redrawn every
+                    // frame and a recursive Assets walk is file-system I/O.
+                    shaderGraphChoices = scanShaderGraphAssets(content.assetRoot());
                     ImGui::OpenPopup("Select Shader Graph##mesh-material");
                 }
                 if (ImGui::BeginDragDropTarget()) {
@@ -277,23 +303,15 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
                     ImGui::EndDragDropTarget();
                 }
                 if (ImGui::BeginPopup("Select Shader Graph##mesh-material")) {
-                    bool found = false;
-                    std::error_code error;
-                    const std::filesystem::recursive_directory_iterator end;
-                    for (std::filesystem::recursive_directory_iterator it{
-                             content.assetRoot(), std::filesystem::directory_options::skip_permission_denied, error};
-                         !error && it != end; it.increment(error)) {
-                        if (!it->is_regular_file(error) || it->path().extension() != ".shadergraph")
-                            continue;
-                        const auto relative = it->path().lexically_relative(content.assetRoot());
-                        ImGui::PushID(relative.generic_string().c_str());
-                        if (ImGui::Selectable(relative.generic_string().c_str())) {
+                    for (const std::string& relative : shaderGraphChoices) {
+                        ImGui::PushID(relative.c_str());
+                        if (ImGui::Selectable(relative.c_str())) {
                             if (assignShaderGraph(relative))
                                 ImGui::CloseCurrentPopup();
                         }
                         ImGui::PopID();
-                        found = true;
                     }
+                    const bool found = !shaderGraphChoices.empty();
                     if (!found)
                         ImGui::TextDisabled("No .shadergraph assets in Assets.");
                     ImGui::EndPopup();
@@ -337,28 +355,72 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
             renderer.material.pbr.displacementOffset =
                 std::clamp(renderer.material.pbr.displacementOffset, -10.0F, 10.0F);
             ImGui::Separator();
-            ImGui::TextDisabled("GlassThin");
-            auto& glass = renderer.material.pbr;
-            changed |=
-                Editor::Controls::sliderFloat("Transmission##mesh-material", &glass.transmission, 0.0F, 1.0F, "%.3f");
-            if (glass.transmission > 0.0F) {
-                changed |= ImGui::DragFloat("IOR##mesh-material", &glass.ior, 0.01F, 1.0F, 3.0F, "%.3f");
-                changed |=
-                    ImGui::DragFloat("Thickness##mesh-material", &glass.thickness, 0.0001F, 0.0F, 1.0F, "%.4f m");
-                float attenuation[3] = {glass.attenuationColor.r(), glass.attenuationColor.g(),
-                                        glass.attenuationColor.b()};
-                if (ImGui::ColorEdit3("Attenuation Color##mesh-material", attenuation, ImGuiColorEditFlags_Float)) {
-                    glass.attenuationColor = Engine::Color{attenuation[0], attenuation[1], attenuation[2]}.clamped();
+            ImGui::TextDisabled("Glass");
+            {
+                auto& glass = renderer.material.pbr;
+                // One-click starting points; every value stays editable below.
+                const auto applyGlassPreset = [&](const float roughness, const Engine::Color tint,
+                                                  const float thickness, const Engine::Color attenuation,
+                                                  const float distance, const float ior,
+                                                  const float reflectivity = 2.0F) {
+                    glass.transmission = 1.0F;
+                    glass.specular = reflectivity;
+                    glass.metallic = 0.0F;
+                    glass.roughness = roughness;
+                    glass.baseColor = Engine::Color{tint.r(), tint.g(), tint.b(), glass.baseColor.a()};
+                    glass.thickness = thickness;
+                    glass.attenuationColor = attenuation;
+                    glass.attenuationDistance = distance;
+                    glass.ior = ior;
                     changed = true;
+                };
+                if (ImGui::SmallButton("Clear##glass-preset"))
+                    applyGlassPreset(0.0F, Engine::Color{1.0F, 1.0F, 1.0F}, 0.005F, Engine::Color{0.86F, 0.95F, 0.9F},
+                                     0.08F, 1.52F);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Frosted##glass-preset"))
+                    applyGlassPreset(0.35F, Engine::Color{0.97F, 0.98F, 1.0F}, 0.006F, Engine::Color{1.0F, 1.0F, 1.0F},
+                                     0.0F, 1.5F, 1.5F);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Tinted##glass-preset"))
+                    applyGlassPreset(0.02F, Engine::Color{0.55F, 0.75F, 0.95F}, 0.01F,
+                                     Engine::Color{0.35F, 0.6F, 0.85F}, 0.05F, 1.52F);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Thick block##glass-preset"))
+                    applyGlassPreset(0.0F, Engine::Color{1.0F, 1.0F, 1.0F}, 0.25F, Engine::Color{0.7F, 0.9F, 0.85F},
+                                     0.4F, 1.5F);
+                changed |= Editor::Controls::sliderFloat("Transmission##mesh-material", &glass.transmission, 0.0F,
+                                                         1.0F, "%.3f");
+                if (glass.transmission > 0.0F) {
+                    if (glass.metallic >= 1.0F)
+                        ImGui::TextColored(EditorUI::colors().warning, "Fully metallic materials are not transmissive.");
+                    changed |= ImGui::DragFloat("IOR##mesh-material", &glass.ior, 0.005F, 1.0F, 3.0F, "%.3f");
+                    changed |= Editor::Controls::sliderFloat("Reflectivity##mesh-material", &glass.specular, 0.0F,
+                                                             6.0F, "%.2f");
+                    ImGui::TextDisabled("Reflectivity 1 is physical glass; higher values strengthen reflections.");
+                    changed |=
+                        ImGui::DragFloat("Thickness##mesh-material", &glass.thickness, 0.0005F, 0.0F, 10.0F, "%.4f m");
+                    float attenuation[3] = {glass.attenuationColor.r(), glass.attenuationColor.g(),
+                                            glass.attenuationColor.b()};
+                    if (ImGui::ColorEdit3("Attenuation Color##mesh-material", attenuation, ImGuiColorEditFlags_Float)) {
+                        glass.attenuationColor =
+                            Engine::Color{attenuation[0], attenuation[1], attenuation[2]}.clamped();
+                        changed = true;
+                    }
+                    changed |= ImGui::DragFloat("Attenuation Distance##mesh-material", &glass.attenuationDistance,
+                                                0.005F, 0.0F, 1000.0F, "%.3f m");
+                    changed |= Editor::Controls::sliderFloat("Dirt##mesh-material", &glass.dirtIntensity, 0.0F, 1.0F,
+                                                             "%.2f");
+                    ImGui::TextDisabled("Base Color tints transmitted light; Roughness frosts it.");
+                    ImGui::TextDisabled("Thickness 0 is a thin film. Attenuation Distance 0 disables absorption.");
                 }
-                changed |= ImGui::DragFloat("Attenuation Distance##mesh-material", &glass.attenuationDistance, 0.01F,
-                                            0.0F, 1000.0F, "%.3f m");
-                ImGui::TextDisabled("Distance 0 disables volume absorption. Base Color tints transmission.");
-                changed |= Editor::Controls::sliderFloat("Dirt Intensity##mesh-material", &glass.dirtIntensity, 0.0F,
-                                                         1.0F, "%.2f");
+                glass.transmission = std::clamp(glass.transmission, 0.0F, 1.0F);
                 glass.ior = std::clamp(glass.ior, 1.0F, 3.0F);
                 glass.thickness = std::max(glass.thickness, 0.0F);
                 glass.attenuationDistance = std::max(glass.attenuationDistance, 0.0F);
+                glass.dirtIntensity = std::clamp(glass.dirtIntensity, 0.0F, 1.0F);
+                if (glass.transmission > 0.0F)
+                    glass.specular = std::clamp(glass.specular, 0.0F, 6.0F);
             }
             ImGui::Separator();
             ImGui::TextDisabled("Emission");
@@ -613,6 +675,41 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
                         ImGui::DragFloat("Inner cone##light", &light.innerConeAngle, 0.25F, 0.0F, 89.0F, "%.1f deg");
                     changed |= ImGui::DragFloat("Outer cone##light", &light.outerConeAngle, 0.25F, light.innerConeAngle,
                                                 89.9F, "%.1f deg");
+                }
+                // Photometric profile: the shape of the light around its
+                // forward axis (a lampshade, sconce, IES measurement...).
+                int profile = static_cast<int>(light.profile);
+                if (ImGui::BeginCombo("Profile##light", Engine::lightProfileName(light.profile))) {
+                    for (int index = 0; index < Engine::LightProfileCount; ++index) {
+                        if (ImGui::Selectable(Engine::lightProfileName(static_cast<Engine::LightProfile>(index)),
+                                              profile == index)) {
+                            profile = index;
+                            changed = true;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                light.profile = static_cast<Engine::LightProfile>(profile);
+                if (light.profile == Engine::LightProfile::Ies) {
+                    char iesPath[512]{};
+                    const std::string current = light.iesProfile.generic_string();
+                    std::snprintf(iesPath, sizeof(iesPath), "%s", current.c_str());
+                    if (ImGui::InputTextWithHint("IES file##light", "Lights/fixture.ies", iesPath, sizeof(iesPath),
+                                                 ImGuiInputTextFlags_EnterReturnsTrue)) {
+                        light.iesProfile = std::filesystem::path{iesPath}.lexically_normal();
+                        changed = true;
+                    }
+                    ImGui::TextDisabled("Path relative to Assets. Press Enter to apply.");
+                }
+                if (light.profile != Engine::LightProfile::None) {
+                    ImGui::TextDisabled("Profiles are measured around the light's forward axis.");
+                    if (ImGui::SmallButton("Aim down##light")) {
+                        scene.editor().patch<Engine::Transform>(selected, [](auto& transform) {
+                            transform.rotation = {-90.0F, 0.0F, 0.0F};
+                        });
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Point the light straight down, as ceiling and table lamps hang.");
                 }
             }
             changed |= ImGui::Checkbox("Cast Shadows##light", &light.castShadows);
@@ -1163,14 +1260,31 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
     }
     if (EditorButton("New C++ Script", {-1.0F, 0.0F}).draw())
         ImGui::OpenPopup("Create C++ Script");
-    if (ImGui::BeginPopupModal("Create C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (EditorUI::beginDialog("Create C++ Script", 420.0F)) {
         static char name[128]{};
         static std::string error;
-        ImGui::TextUnformatted("Creates Assets/Scripts/<Name>.h and .cpp in the current project");
-        ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
-        if (!error.empty())
+        EditorUI::dialogHeader(EditorUI::Icon::Code, EditorUI::colors().accent, "New C++ Script",
+                               "Creates Assets/Scripts/<Name>.h and .cpp in the current project.");
+        EditorUI::fieldLabel("Class name");
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+        ImGui::InputTextWithHint("##script-class-name", "PlayerController", name, sizeof(name));
+        if (!error.empty()) {
+            EditorUI::iconLabel(EditorUI::Icon::Error, EditorUI::colors().error);
+            ImGui::SameLine(0.0F, 6.0F);
+            ImGui::PushTextWrapPos(0.0F);
             ImGui::TextColored(EditorUI::colors().error, "%s", error.c_str());
-        if (EditorButton("Create").draw() && EditorSceneSession::createCppScript(name, error)) {
+            ImGui::PopTextWrapPos();
+        }
+        EditorUI::dialogFooter(2);
+        if (EditorButton("Cancel", {104.0F, 0.0F}).draw() || EditorUI::dialogEscapePressed()) {
+            name[0] = '\0';
+            error.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(name[0] == '\0');
+        if (EditorUI::primaryButton("Create", {104.0F, 0.0F}) && EditorSceneSession::createCppScript(name, error)) {
             if (!scene.editor().has<Engine::ScriptComponent>(selected))
                 scene.editor().add<Engine::ScriptComponent>(selected);
             scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto& script) {
@@ -1181,12 +1295,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& 
             error.clear();
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
-        if (EditorButton("Cancel").draw()) {
-            name[0] = '\0';
-            error.clear();
-            ImGui::CloseCurrentPopup();
-        }
+        ImGui::EndDisabled();
         ImGui::EndPopup();
     }
     ImGui::PopID();

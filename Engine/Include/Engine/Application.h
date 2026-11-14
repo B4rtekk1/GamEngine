@@ -31,6 +31,12 @@ struct ApplicationConfig final {
     float fixedDeltaTime = 1.0F / 60.0F; // NOLINT
     std::uint32_t maxFixedStepsPerFrame = 5;
     float maxFrameDeltaTime = 0.25F; // NOLINT
+    /**
+     * Let the last PhysX step of a frame run while the frame renders. Results
+     * are applied at the start of the next frame, before any game code, which
+     * adds one fixed step of latency to physics presentation.
+     */
+    bool pipelinedPhysics = false;
     std::filesystem::path assetRoot{};
     RenderConfig render{};
     /** When non-zero the loop exits after this many measured frames and writes a profiler report. */
@@ -38,6 +44,12 @@ struct ApplicationConfig final {
     std::uint32_t benchmarkWarmupFrames = 120; // NOLINT
     /** CSV destination for the benchmark report; the summary is always printed to stdout. */
     std::filesystem::path benchmarkOutput{};
+    /**
+     * When set, the presented image of frame `screenshotFrame` is written here
+     * as a PNG; without a benchmark the application then exits.
+     */
+    std::filesystem::path screenshotPath{};
+    std::uint32_t screenshotFrame = 240; // NOLINT
 };
 
 /** High-level application entry point. Owns the window and the render loop. */

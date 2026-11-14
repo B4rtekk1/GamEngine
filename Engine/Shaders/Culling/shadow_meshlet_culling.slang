@@ -29,10 +29,16 @@ bool sphereOutsidePage(float3 center, float radius, float4x4 viewProjection)
     // orthographic VSM clipmaps. Keep near-plane crossings: rasterization
     // performs the exact clip and a false reject would lose a shadow.
     if (clip.w <= 0.00001) return false;
-    const float r = radius;
-    return clip.x < -clip.w - r || clip.x > clip.w + r ||
-           clip.y < -clip.w - r || clip.y > clip.w + r ||
-           clip.z < -r || clip.z > clip.w + r;
+    // The radius is in world units; each clip axis scales it by the length
+    // of its matrix row. A page spans well under one world unit at fine
+    // clip levels, where the unscaled radius rejected visible casters.
+    const float3 r = radius * float3(
+        length(float3(viewProjection[0].x, viewProjection[1].x, viewProjection[2].x)),
+        length(float3(viewProjection[0].y, viewProjection[1].y, viewProjection[2].y)),
+        length(float3(viewProjection[0].z, viewProjection[1].z, viewProjection[2].z)));
+    return clip.x < -clip.w - r.x || clip.x > clip.w + r.x ||
+           clip.y < -clip.w - r.y || clip.y > clip.w + r.y ||
+           clip.z < -r.z || clip.z > clip.w + r.z;
 }
 
 [numthreads(64, 1, 1)]

@@ -201,6 +201,10 @@ void Swapchain::createResources(VkSwapchainKHR oldSwapchain) {
     createInfo.imageExtent = newExtent;
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // Renderer::requestFrameCapture copies the presented image back.
+    supportsCapture_ = (support.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+    if (supportsCapture_)
+        createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     const QueueFamilyIndices& families = device_->queueFamilies();
     const uint32_t familyIndices[] = {

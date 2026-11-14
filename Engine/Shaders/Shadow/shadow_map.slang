@@ -1,4 +1,5 @@
 import Common.SceneData;
+import Common.VertexFrame;
 import Common.Displacement;
 import Common.ShadowCasterData;
 
@@ -14,7 +15,8 @@ struct ShadowVertexInput
 {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
-    [[vk::location(3)]] float3 normal : NORMAL;
+    [[vk::location(3)]] uint tangentFrame : NORMAL; // GpuVertex::packTangentFrame
+    property float3 normal { get { return decodeVertexNormal(tangentFrame); } }
     [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
 };

@@ -1,548 +1,483 @@
 #include "Engine/Renderer/Passes/GlassPass.h"
 
-#include "Engine/Physics/GlassDestructionSystem.h"
+#include "Engine/Assets/AssetManager.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Vulkan/PipelineCache.h"
+#include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/shader_loader.h"
-#include "Engine/Scene/SceneView.h"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cstddef>
-#include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace Engine {
-void GlassPass::create(const VkDevice device, VmaAllocator allocator, const VkFormat colorFormat,
-                       const VkFormat depthFormat, const VkSampleCountFlagBits samples,
-                       const VkFormat depthResolveFormat, const VkResolveModeFlagBits depthResolveMode,
-                       const VkDescriptorSetLayout sceneLayout, Assets::AssetManager& assets, const bool velocity,
-                       const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth,
-                       unsigned paneCount) {
-    if (opaqueColor.imageView == VK_NULL_HANDLE || opaqueDepth.imageView == VK_NULL_HANDLE) {
-        throw std::invalid_argument("GlassPass requires valid opaque scene color/depth views");
+namespace {
+// Coarser snapshot levels add nothing a frosted pane can show: by mip 7 a
+// texel covers 128x128 pixels.
+constexpr std::uint32_t MaxSnapshotMips = 8;
+
+[[nodiscard]] bool hasStencil(const VkFormat format) noexcept {
+    return format == VK_FORMAT_D16_UNORM_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT ||
+           format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+}
+
+[[nodiscard]] VkImageMemoryBarrier2 imageBarrier(const VkImage image, const VkImageAspectFlags aspect,
+                                                 const VkPipelineStageFlags2 srcStage,
+                                                 const VkAccessFlags2 srcAccess,
+                                                 const VkPipelineStageFlags2 dstStage,
+                                                 const VkAccessFlags2 dstAccess, const VkImageLayout oldLayout,
+                                                 const VkImageLayout newLayout, const std::uint32_t baseMip = 0,
+                                                 const std::uint32_t mipCount = 1) {
+    VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = srcStage;
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstStageMask = dstStage;
+    barrier.dstAccessMask = dstAccess;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange = {aspect, baseMip, mipCount, 0, 1};
+    return barrier;
+}
+
+void submitBarriers(const VkCommandBuffer commandBuffer, const VkImageMemoryBarrier2* barriers,
+                    const std::uint32_t count) {
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = count;
+    dependency.pImageMemoryBarriers = barriers;
+    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+}
+
+template <std::size_t Count>
+void submitBarriers(const VkCommandBuffer commandBuffer, const std::array<VkImageMemoryBarrier2, Count>& barriers) {
+    submitBarriers(commandBuffer, barriers.data(), static_cast<std::uint32_t>(Count));
+}
+
+// Everything that may have produced the colour target before the glass pass:
+// forward/water/particle rasterization and the virtual-water compute path.
+constexpr VkPipelineStageFlags2 ColorProducerStages = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                                      VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+constexpr VkAccessFlags2 ColorProducerAccess =
+    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+constexpr VkPipelineStageFlags2 SampledReaderStages =
+    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+} // namespace
+
+GlassPass::~GlassPass() {
+    destroy();
+}
+
+void GlassPass::create(const CreateInfo& info) {
+    destroy();
+    if (info.device == VK_NULL_HANDLE || info.assets == nullptr || info.sceneLayout == VK_NULL_HANDLE ||
+        info.extent.width == 0 || info.extent.height == 0 || info.sceneDepthView == VK_NULL_HANDLE ||
+        info.sceneDepthSampler == VK_NULL_HANDLE || info.depthFormat == VK_FORMAT_UNDEFINED)
+        throw std::invalid_argument("GlassPass requires a device, assets, scene layout and a sampled scene depth");
+    info_ = info;
+    device_ = info.device;
+    extent_ = info.extent;
+    try {
+        createImages();
+        createPyramidPipelines();
+        createDescriptors();
+        createGraphicsPipelines();
+    } catch (...) {
+        destroy();
+        throw;
     }
-    device_ = device;
-    allocator_ = allocator;
-    hasVelocity_ = velocity;
-    GraphicsPipelineOptions options{};
-    options.colorFormat = colorFormat;
-    options.dynamicRendering = true;
-    options.additionalColorFormat = velocity ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED;
-    options.additionalColorLoadOp = velocity ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
-    options.depthFormat = depthFormat;
-    options.samples = samples;
-    options.depthResolveFormat = depthResolveFormat;
-    options.depthResolveMode = depthResolveMode;
-    // The opaque lighting pass has already produced both attachments.
-    options.colorLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    options.depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    options.colorInitialLayout = samples == VK_SAMPLE_COUNT_1_BIT ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                                                  : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    options.depthInitialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    options.depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    options.depthWriteEnable = VK_FALSE;
-    options.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-    options.shader = velocity ? "shaders/forward_glass.spv" : "shaders/forward_glass_no_velocity.spv";
-    options.assetManager = &assets;
-    options.cullMode = VK_CULL_MODE_NONE;
-    const VkDescriptorSetLayoutBinding bindings[] = {
-        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+}
+
+void GlassPass::createImages() {
+    snapshotMips_ =
+        std::min<std::uint32_t>(MaxSnapshotMips, std::bit_width(std::max(extent_.width, extent_.height)));
+    VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = HdrBuffer::Format;
+    imageInfo.extent = {extent_.width, extent_.height, 1};
+    imageInfo.mipLevels = snapshotMips_;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VmaAllocationCreateInfo allocation{};
+    allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    if (vmaCreateImage(info_.allocator, &imageInfo, &allocation, &snapshot_, &snapshotMemory_, nullptr) !=
+        VK_SUCCESS)
+        throw std::runtime_error("Could not allocate the glass scene snapshot");
+    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = snapshot_;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = HdrBuffer::Format;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, snapshotMips_, 0, 1};
+    if (vkCreateImageView(device_, &viewInfo, nullptr, &snapshotView_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create the glass scene snapshot view");
+    VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.maxLod = static_cast<float>(snapshotMips_ - 1);
+    if (vkCreateSampler(device_, &samplerInfo, nullptr, &snapshotSampler_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create the glass scene snapshot sampler");
+
+    pyramid_.create(info_.physicalDevice, device_, extent_.width, extent_.height, info_.allocator);
+
+    VkImageCreateInfo depthInfo = imageInfo;
+    depthInfo.format = info_.depthFormat;
+    depthInfo.mipLevels = 1;
+    depthInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (vmaCreateImage(info_.allocator, &depthInfo, &allocation, &glassDepth_, &glassDepthMemory_, nullptr) !=
+        VK_SUCCESS)
+        throw std::runtime_error("Could not allocate the glass depth target");
+    VkImageViewCreateInfo depthViewInfo = viewInfo;
+    depthViewInfo.image = glassDepth_;
+    depthViewInfo.format = info_.depthFormat;
+    depthViewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(device_, &depthViewInfo, nullptr, &glassDepthView_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create the glass depth view");
+}
+
+void GlassPass::createPyramidPipelines() {
+    const std::array bindings{
+        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT,
+                                     nullptr},
+        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     };
-    const VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-                                                     static_cast<std::uint32_t>(std::size(bindings)), bindings};
-    if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &sceneTextureLayout_) != VK_SUCCESS)
-        throw std::runtime_error("Could not create glass scene descriptor layout");
-    options.descriptorSetLayouts = {sceneLayout, sceneTextureLayout_};
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &pyramidSetLayout_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create the glass depth pyramid set layout");
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &pyramidSetLayout_;
+    if (vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr, &pyramidPipelineLayout_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create the glass depth pyramid pipeline layout");
+    const auto makeCompute = [&](const char* shader) {
+        const auto module = Vkutil::loadShaderModule(device_, *info_.assets, shader);
+        VkComputePipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        pipelineInfo.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        pipelineInfo.stage.module = module.get();
+        pipelineInfo.stage.pName = "main";
+        pipelineInfo.layout = pyramidPipelineLayout_;
+        VkPipeline pipeline{VK_NULL_HANDLE};
+        if (vkCreateComputePipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo, nullptr, &pipeline) !=
+            VK_SUCCESS)
+            throw std::runtime_error(std::string("Could not create glass compute pipeline: ") + shader);
+        return pipeline;
+    };
+    // Mip 0 is a plain copy of the hardware depth, the same as culling's.
+    pyramidInitPipeline_ = makeCompute("shaders/hiz_initialize.spv");
+    pyramidReducePipeline_ = makeCompute("shaders/glass_depth_reduce.spv");
+}
+
+void GlassPass::createDescriptors() {
+    const std::uint32_t mips = pyramid_.mipCount();
+    const std::array sizes{
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, mips + 2U},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, mips},
+    };
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.maxSets = mips + 1U;
+    poolInfo.poolSizeCount = static_cast<std::uint32_t>(sizes.size());
+    poolInfo.pPoolSizes = sizes.data();
+    if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create the glass descriptor pool");
+    pyramidPass_.create(device_, descriptorPool_, pyramidInitPipeline_, pyramidPipelineLayout_, pyramidSetLayout_,
+                        pyramidReducePipeline_, pyramidPipelineLayout_, pyramidSetLayout_, pyramid_,
+                        info_.sceneDepthView, info_.sceneDepthSampler);
+
+    const std::array bindings{
+        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                                     nullptr},
+        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                                     nullptr},
+    };
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &glassSetLayout_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create the glass set layout");
+    VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocateInfo.descriptorPool = descriptorPool_;
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &glassSetLayout_;
+    if (vkAllocateDescriptorSets(device_, &allocateInfo, &glassSet_) != VK_SUCCESS)
+        throw std::runtime_error("Could not allocate the glass descriptor set");
+    const VkDescriptorImageInfo snapshotInfo{snapshotSampler_, snapshotView_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo pyramidInfo{pyramid_.sampler(), pyramid_.fullView(),
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const std::array writes{
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, glassSet_, 0, 0, 1,
+                             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &snapshotInfo, nullptr, nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, glassSet_, 1, 0, 1,
+                             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &pyramidInfo, nullptr, nullptr},
+    };
+    vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+}
+
+void GlassPass::createGraphicsPipelines() {
+    GraphicsPipelineOptions options{};
+    options.colorFormat = HdrBuffer::Format;
+    options.dynamicRendering = true;
+    options.depthFormat = info_.depthFormat;
+    options.samples = VK_SAMPLE_COUNT_1_BIT;
+    options.colorLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    options.depthLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    options.colorInitialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    options.depthInitialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    options.depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    // Nearest glass surface wins; the shader composes the full colour.
+    options.depthWriteEnable = VK_TRUE;
+    options.depthTestEnable = VK_TRUE;
+    // The target holds the opaque depth (see depthSeedPipeline_): a pane in
+    // front of or on an opaque surface passes, as the shader's own test.
+    options.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    options.alphaBlendEnable = VK_FALSE;
+    options.shader = "shaders/forward_glass.spv";
+    options.assetManager = info_.assets;
+    options.cullMode = VK_CULL_MODE_BACK_BIT;
+    options.descriptorSetLayouts = {info_.sceneLayout, glassSetLayout_};
     options.vertexBindings = {{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX}};
     options.vertexAttributes = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
         {1, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(GpuVertex, color)},
         {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
-        // forward_glass's vertex entry point consumes the complete GpuVertex
-        // layout.  Every declared input needs an attribute on devices without
-        // vertex attribute robustness/maintenance9, even when a variant does
-        // not visibly use a value in its final fragment output.
         {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
-        {3, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, normal)},
+        {3, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, tangentFrame)},
         {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
-        {9, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, tangent)},
     };
-    pipeline_.create(device, options);
-    samples_ = samples;
-    depthResolveMode_ = depthResolveMode;
-    createCrackResources(assets, paneCount);
-    createSceneDescriptors(opaqueColor, opaqueDepth);
-}
+    singleSidedPipeline_.create(device_, options);
+    options.cullMode = VK_CULL_MODE_NONE;
+    twoSidedPipeline_.create(device_, options);
 
-void GlassPass::createSceneDescriptors(const VkDescriptorImageInfo& opaqueColor,
-                                       const VkDescriptorImageInfo& opaqueDepth) {
-    const VkDescriptorPoolSize sizes[] = {
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FramesInFlight * 3U},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FramesInFlight},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FramesInFlight},
-    };
-    const VkDescriptorPoolCreateInfo poolInfo{
-        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0, FramesInFlight, 3, sizes};
-    if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS)
-        throw std::runtime_error("Could not create glass scene descriptor pool");
-    std::array<VkDescriptorSetLayout, FramesInFlight> layouts{};
-    layouts.fill(sceneTextureLayout_);
-    VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    allocate.descriptorPool = descriptorPool_;
-    allocate.descriptorSetCount = FramesInFlight;
-    allocate.pSetLayouts = layouts.data();
-    if (vkAllocateDescriptorSets(device_, &allocate, sceneTextureSets_.data()) != VK_SUCCESS)
-        throw std::runtime_error("Could not allocate glass scene descriptor sets");
-    for (unsigned i = 0; i < FramesInFlight; ++i) {
-        const auto set = sceneTextureSets_[i];
-        const VkDescriptorImageInfo atlas{crackSampler_, crackAtlasView_, VK_IMAGE_LAYOUT_GENERAL};
-        const VkDescriptorImageInfo storage{VK_NULL_HANDLE, crackAtlasView_, VK_IMAGE_LAYOUT_GENERAL};
-        const VkDescriptorBufferInfo metadata{crackMetadata_[i], 0, VK_WHOLE_SIZE};
-        const VkWriteDescriptorSet writes[] = {
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-             &opaqueColor, nullptr, nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-             &opaqueDepth, nullptr, nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-             &atlas, nullptr, nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &storage,
-             nullptr, nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr,
-             &metadata, nullptr},
-        };
-        vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-    }
-}
-
-void GlassPass::destroyCrackStorage() noexcept {
-    if (device_ && crackAtlasView_)
-        vkDestroyImageView(device_, crackAtlasView_, nullptr);
-    if (allocator_ && crackAtlas_)
-        vmaDestroyImage(allocator_, crackAtlas_, crackAtlasMemory_);
-    for (unsigned i = 0; i < FramesInFlight; ++i)
-        if (allocator_ && crackMetadata_[i])
-            vmaDestroyBuffer(allocator_, crackMetadata_[i], crackMetadataMemory_[i]);
-    crackAtlasView_ = VK_NULL_HANDLE;
-    crackAtlas_ = VK_NULL_HANDLE;
-    crackAtlasMemory_ = nullptr;
-    crackMetadata_.fill(VK_NULL_HANDLE);
-    crackMetadataMemory_.fill(nullptr);
-    crackMetadataMapped_.fill(nullptr);
-    atlasLayers_ = 0;
-    crackAtlasInitialized_ = false;
-}
-
-void GlassPass::createCrackStorage(unsigned layers) {
-    VkImage atlas{};
-    VmaAllocation atlasMemory{};
-    VkImageView atlasView{};
-    std::array<VkBuffer, FramesInFlight> buffers{};
-    std::array<VmaAllocation, FramesInFlight> bufferMemory{};
-    std::array<void*, FramesInFlight> mapped{};
-    try {
-        VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        image.imageType = VK_IMAGE_TYPE_2D;
-        image.format = VK_FORMAT_R32_SFLOAT;
-        image.extent = {AtlasResolution, AtlasResolution, 1};
-        image.mipLevels = 1;
-        image.arrayLayers = layers;
-        image.samples = VK_SAMPLE_COUNT_1_BIT;
-        image.tiling = VK_IMAGE_TILING_OPTIMAL;
-        image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VmaAllocationCreateInfo allocation{};
-        allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        if (vmaCreateImage(allocator_, &image, &allocation, &atlas, &atlasMemory, nullptr) != VK_SUCCESS)
-            throw std::runtime_error("Could not allocate glass crack atlas");
-        VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        view.image = atlas;
-        view.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        view.format = image.format;
-        view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
-        if (vkCreateImageView(device_, &view, nullptr, &atlasView) != VK_SUCCESS)
-            throw std::runtime_error("Could not create glass crack atlas view");
-        for (unsigned i = 0; i < FramesInFlight; ++i) {
-            VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            // Interleaved pane header + 128 fragment exposure masks.
-            buffer.size = layers * 129 * sizeof(glm::vec4);
-            buffer.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-            VmaAllocationCreateInfo host{};
-            host.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-            host.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            VmaAllocationInfo details{};
-            if (vmaCreateBuffer(allocator_, &buffer, &host, &buffers[i], &bufferMemory[i], &details) != VK_SUCCESS)
-                throw std::runtime_error("Could not allocate glass crack metadata");
-            mapped[i] = details.pMappedData;
-            std::memset(mapped[i], 0, static_cast<std::size_t>(buffer.size));
-        }
-    } catch (...) {
-        for (unsigned i = 0; i < FramesInFlight; ++i)
-            if (buffers[i])
-                vmaDestroyBuffer(allocator_, buffers[i], bufferMemory[i]);
-        if (atlasView)
-            vkDestroyImageView(device_, atlasView, nullptr);
-        if (atlas)
-            vmaDestroyImage(allocator_, atlas, atlasMemory);
-        throw;
-    }
-    destroyCrackStorage();
-    crackAtlas_ = atlas;
-    crackAtlasMemory_ = atlasMemory;
-    crackAtlasView_ = atlasView;
-    crackMetadata_ = buffers;
-    crackMetadataMemory_ = bufferMemory;
-    crackMetadataMapped_ = mapped;
-    atlasLayers_ = layers;
-    crackSlots_ = {};
-}
-
-bool GlassPass::needsCrackAtlasResize(unsigned paneCount) const noexcept {
-    return device_ && atlasLayers_ != std::clamp(paneCount, 1U, AtlasSlots);
-}
-
-void GlassPass::resizeCrackAtlas(unsigned paneCount) {
-    if (!needsCrackAtlasResize(paneCount))
-        return;
-    createCrackStorage(std::clamp(paneCount, 1U, AtlasSlots));
-    for (unsigned i = 0; i < FramesInFlight; ++i) {
-        const VkDescriptorImageInfo atlas{crackSampler_, crackAtlasView_, VK_IMAGE_LAYOUT_GENERAL};
-        const VkDescriptorImageInfo storage{VK_NULL_HANDLE, crackAtlasView_, VK_IMAGE_LAYOUT_GENERAL};
-        const VkDescriptorBufferInfo metadata{crackMetadata_[i], 0, VK_WHOLE_SIZE};
-        const VkWriteDescriptorSet writes[] = {
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sceneTextureSets_[i], 2, 0, 1,
-             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &atlas, nullptr, nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sceneTextureSets_[i], 3, 0, 1,
-             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &storage, nullptr, nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sceneTextureSets_[i], 4, 0, 1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &metadata, nullptr},
-        };
-        vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-    }
-}
-
-void GlassPass::createCrackResources(Assets::AssetManager& assets, unsigned paneCount) {
-    createCrackStorage(std::clamp(paneCount, 1U, AtlasSlots));
-    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sampler.magFilter = sampler.minFilter = VK_FILTER_LINEAR;
-    sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (vkCreateSampler(device_, &sampler, nullptr, &crackSampler_) != VK_SUCCESS)
-        throw std::runtime_error("Could not create glass crack sampler");
-    // Empty set zero preserves the same set-one binding numbers as GlassThin.
-    VkDescriptorSetLayoutCreateInfo emptyInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    if (vkCreateDescriptorSetLayout(device_, &emptyInfo, nullptr, &crackEmptyLayout_) != VK_SUCCESS)
-        throw std::runtime_error("Could not create glass compute layout");
-    const std::array layouts{crackEmptyLayout_, sceneTextureLayout_};
-    VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64};
-    VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout.setLayoutCount = 2;
-    layout.pSetLayouts = layouts.data();
-    layout.pushConstantRangeCount = 1;
-    layout.pPushConstantRanges = &push;
-    const auto result = vkCreatePipelineLayout(device_, &layout, nullptr, &crackPipelineLayout_);
-    if (result != VK_SUCCESS)
-        throw std::runtime_error("Could not create glass crack pipeline layout");
-    const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/glass_crack_stamp.spv");
-    VkComputePipelineCreateInfo pipeline{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-    pipeline.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    pipeline.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    pipeline.stage.module = shader.get();
-    pipeline.stage.pName = "main";
-    pipeline.layout = crackPipelineLayout_;
-    if (vkCreateComputePipelines(device_, PipelineCache::get(device_), 1, &pipeline, nullptr, &crackPipeline_) !=
-        VK_SUCCESS)
-        throw std::runtime_error("Could not create glass crack compute pipeline");
-}
-
-void GlassPass::recordCracks(VkCommandBuffer commandBuffer, const Scene& scene, unsigned frameIndex) {
-    const unsigned frame = frameIndex % FramesInFlight;
-    auto* metadata = static_cast<glm::vec4*>(crackMetadataMapped_[frame]);
-    VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    barrier.srcStageMask = crackAtlasInitialized_
-                               ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                               : VK_PIPELINE_STAGE_2_NONE;
-    barrier.srcAccessMask =
-        crackAtlasInitialized_ ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : 0;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-    barrier.dstAccessMask =
-        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    barrier.oldLayout = crackAtlasInitialized_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = crackAtlas_;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, atlasLayers_};
-    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.imageMemoryBarrierCount = 1;
-    dependency.pImageMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(commandBuffer, &dependency);
-    if (!crackAtlasInitialized_) {
-        const VkClearColorValue clear{};
-        vkCmdClearColorImage(commandBuffer, crackAtlas_, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &barrier.subresourceRange);
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        vkCmdPipelineBarrier2(commandBuffer, &dependency);
-        crackAtlasInitialized_ = true;
-    }
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, crackPipeline_);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, crackPipelineLayout_, 1, 1,
-                            &sceneTextureSets_[frame], 0, nullptr);
-    struct alignas(16) Stamp {
-        glm::vec4 positionRadius, sizeWidth;
-        glm::uvec4 tile, region;
-    };
-    static_assert(sizeof(Stamp) == 64);
-
-    // Collect all stamps first, then dispatch in a single batch.
-    // The shader uses max() which is commutative, so no per-segment barrier is needed.
-    std::vector<Stamp> stamps;
-    stamps.reserve(256);
-    unsigned budget = 256;
-
-    scene.view().view<GlassDestructionComponent, UUIDComponent>([&](Entity, const auto& glass, const auto& uuid) {
-        const unsigned slot = glass.crackAtlasIndex;
-        if (slot >= atlasLayers_)
-            return;
-        auto* paneMetadata = metadata + slot * 129;
-        paneMetadata[0] = {glass.size, glass.crackWidth, 0};
-        auto& state = crackSlots_[slot];
-        const auto historyStart = glass.impactCount - static_cast<unsigned>(glass.cracks.size());
-        const bool changedOwner =
-            state.uuid != uuid.value || state.submitted > glass.cracks.size() || state.historyStart != historyStart;
-        if (changedOwner && budget == 0) {
-            paneMetadata[0].w = 0;
-            return;
-        }
-        if (changedOwner)
-            state = {uuid.value, 0, 0, historyStart, historyStart != 0};
-        std::vector<std::uint8_t> exposureState;
-        exposureState.reserve(glass.fragments.size() + glass.bonds.size());
-        for (const auto& fragment : glass.fragments)
-            exposureState.push_back(fragment.attached);
-        for (const auto& bond : glass.bonds)
-            exposureState.push_back(bond.broken);
-        if (state.geometry != glass.fractureRenderGeometry.get() || state.exposureState != exposureState) {
-            // Pending segments were built from a previous bond graph. Replay
-            // against the current graph, newest impacts first, so newly
-            // exposed cracks also appear after support loss without a shot.
-            state.submitted = 0;
-            state.segmentOffset = 0;
-            state.segments.clear();
-            state.reverse = true;
-            state.geometry = glass.fractureRenderGeometry.get();
-            state.exposureState = std::move(exposureState);
-            state.exposureMasks = {};
-            for (unsigned fragment = 0; fragment < glass.fragments.size(); ++fragment) {
-                auto& exposed = state.exposureMasks[fragment];
-                const auto count = std::min<std::size_t>(glass.fragments[fragment].polygon.size(), 128);
-                for (unsigned edge = 0; edge < count; ++edge)
-                    if (GlassDestructionSystem::edgeExposed(glass, fragment, edge))
-                        exposed[edge / 32] |= 1U << (edge % 32);
-            }
-        }
-        std::memcpy(&paneMetadata[1], state.exposureMasks.data(), sizeof(state.exposureMasks));
-        paneMetadata[0].w = 1;
-        bool reset = changedOwner;
-        // Clear recycled slots even when the new pane has no cracks.
-        do {
-            if (!reset && state.submitted == glass.cracks.size())
-                break;
-            if (budget == 0)
-                break;
-            const bool hasCrack = state.submitted < glass.cracks.size();
-            const auto index = state.reverse ? glass.cracks.size() - 1 - state.submitted : state.submitted;
-            const GlassCrack crack = hasCrack ? glass.cracks[index] : GlassCrack{};
-            if (hasCrack && !reset && state.segments.empty())
-                state.segments = GlassDestructionSystem::crackSegments(glass, crack);
-            const auto& segments = state.segments;
-            if (!reset && state.segmentOffset >= segments.size()) {
-                if (hasCrack)
-                    ++state.submitted;
-                state.segmentOffset = 0;
-                state.segments.clear();
-                continue;
-            }
-            const auto segment =
-                !reset && state.segmentOffset < segments.size() ? segments[state.segmentOffset] : GlassCrackSegment{};
-            Stamp stamp{{segment.start, segment.end},
-                        {glass.size, glass.crackWidth, segment.intensity},
-                        {slot, 0, reset ? 1U : 0U, AtlasResolution},
-                        {0, 0, AtlasResolution, AtlasResolution}};
-            if (!reset) {
-                const float padding = glass.crackWidth + std::max(glass.size.x, glass.size.y) / float(AtlasResolution);
-                const auto low = glm::clamp(
-                    (glm::min(segment.start, segment.end) - glm::vec2{padding} + glass.size * 0.5F) / glass.size,
-                    glm::vec2{0}, glm::vec2{1});
-                const auto high = glm::clamp(
-                    (glm::max(segment.start, segment.end) + glm::vec2{padding} + glass.size * 0.5F) / glass.size,
-                    glm::vec2{0}, glm::vec2{1});
-                const auto start = glm::uvec2{glm::floor(low * float(AtlasResolution))};
-                const auto end = glm::uvec2{glm::ceil(high * float(AtlasResolution))};
-                stamp.region = {start, end - start};
-            }
-            stamps.push_back(stamp);
-            if (!reset && hasCrack) {
-                ++state.segmentOffset;
-                if (state.segmentOffset >= segments.size()) {
-                    ++state.submitted;
-                    state.segmentOffset = 0;
-                    state.segments.clear();
-                }
-            }
-            --budget;
-            reset = false;
-        } while (state.submitted < glass.cracks.size());
-    });
-
-    // Batch dispatch all stamps in a single pass — no per-segment barriers needed
-    // because the shader uses max() which is commutative and associative.
-    for (const auto& stamp : stamps) {
-        vkCmdPushConstants(commandBuffer, crackPipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(stamp),
-                           &stamp);
-        if (stamp.region.z && stamp.region.w)
-            vkCmdDispatch(commandBuffer, (stamp.region.z + 7) / 8, (stamp.region.w + 7) / 8, 1);
-    }
-
-    vmaFlushAllocation(allocator_, crackMetadataMemory_[frame], 0, VK_WHOLE_SIZE);
-    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-    barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    vkCmdPipelineBarrier2(commandBuffer, &dependency);
-}
-
-std::vector<GpuSceneMemoryAllocation> GlassPass::memoryAllocations() const {
-    std::vector<GpuSceneMemoryAllocation> result;
-    if (!allocator_)
-        return result;
-    VmaAllocatorInfo allocatorInfo{};
-    vmaGetAllocatorInfo(allocator_, &allocatorInfo);
-    VkPhysicalDeviceMemoryProperties memory{};
-    vkGetPhysicalDeviceMemoryProperties(allocatorInfo.physicalDevice, &memory);
-    auto append = [&](const char* name, VmaAllocation allocation) {
-        if (!allocation)
-            return;
-        VmaAllocationInfo info{};
-        vmaGetAllocationInfo(allocator_, allocation, &info);
-        const auto& type = memory.memoryTypes[info.memoryType];
-        result.push_back({name, type.heapIndex, (type.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0,
-                          (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0,
-                          (type.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0, info.size});
-    };
-    append("Glass crack atlas", crackAtlasMemory_);
-    for (auto allocation : crackMetadataMemory_)
-        append("Glass crack metadata", allocation);
-    return result;
+    GraphicsPipelineOptions seed = options;
+    seed.shader = "shaders/glass_depth_seed.spv";
+    seed.vertexBindings.clear();
+    seed.vertexAttributes.clear();
+    seed.colorWriteMask = 0;
+    seed.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    depthSeedPipeline_.create(device_, seed);
 }
 
 void GlassPass::destroy() noexcept {
-    pipeline_.destroy();
-    if (device_ && crackPipeline_)
-        vkDestroyPipeline(device_, crackPipeline_, nullptr);
-    if (device_ && crackPipelineLayout_)
-        vkDestroyPipelineLayout(device_, crackPipelineLayout_, nullptr);
-    if (device_ && crackEmptyLayout_)
-        vkDestroyDescriptorSetLayout(device_, crackEmptyLayout_, nullptr);
-    if (device_ && crackSampler_)
-        vkDestroySampler(device_, crackSampler_, nullptr);
-    destroyCrackStorage();
-    crackPipeline_ = VK_NULL_HANDLE;
-    crackPipelineLayout_ = VK_NULL_HANDLE;
-    crackEmptyLayout_ = VK_NULL_HANDLE;
-    crackSampler_ = VK_NULL_HANDLE;
-    crackAtlasView_ = VK_NULL_HANDLE;
-    crackAtlas_ = VK_NULL_HANDLE;
-    crackAtlasMemory_ = nullptr;
-    crackMetadata_.fill(VK_NULL_HANDLE);
-    crackMetadataMemory_.fill(nullptr);
-    crackMetadataMapped_.fill(nullptr);
-    crackSlots_ = {};
-    crackAtlasInitialized_ = false;
-    allocator_ = nullptr;
+    depthSeedPipeline_.destroy();
+    singleSidedPipeline_.destroy();
+    twoSidedPipeline_.destroy();
+    pyramidPass_.destroy();
     if (device_ != VK_NULL_HANDLE) {
         if (descriptorPool_ != VK_NULL_HANDLE)
             vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
-        if (sceneTextureLayout_ != VK_NULL_HANDLE)
-            vkDestroyDescriptorSetLayout(device_, sceneTextureLayout_, nullptr);
+        if (glassSetLayout_ != VK_NULL_HANDLE)
+            vkDestroyDescriptorSetLayout(device_, glassSetLayout_, nullptr);
+        for (const VkPipeline pipeline : {pyramidInitPipeline_, pyramidReducePipeline_})
+            if (pipeline != VK_NULL_HANDLE)
+                vkDestroyPipeline(device_, pipeline, nullptr);
+        if (pyramidPipelineLayout_ != VK_NULL_HANDLE)
+            vkDestroyPipelineLayout(device_, pyramidPipelineLayout_, nullptr);
+        if (pyramidSetLayout_ != VK_NULL_HANDLE)
+            vkDestroyDescriptorSetLayout(device_, pyramidSetLayout_, nullptr);
+        if (snapshotSampler_ != VK_NULL_HANDLE)
+            vkDestroySampler(device_, snapshotSampler_, nullptr);
+        if (snapshotView_ != VK_NULL_HANDLE)
+            vkDestroyImageView(device_, snapshotView_, nullptr);
+        if (glassDepthView_ != VK_NULL_HANDLE)
+            vkDestroyImageView(device_, glassDepthView_, nullptr);
     }
-    device_ = VK_NULL_HANDLE;
+    if (info_.allocator != VK_NULL_HANDLE) {
+        if (snapshot_ != VK_NULL_HANDLE)
+            vmaDestroyImage(info_.allocator, snapshot_, snapshotMemory_);
+        if (glassDepth_ != VK_NULL_HANDLE)
+            vmaDestroyImage(info_.allocator, glassDepth_, glassDepthMemory_);
+    }
+    pyramid_.destroy();
     descriptorPool_ = VK_NULL_HANDLE;
-    sceneTextureLayout_ = VK_NULL_HANDLE;
-    sceneTextureSets_.fill(VK_NULL_HANDLE);
-    hasVelocity_ = false;
-    samples_ = VK_SAMPLE_COUNT_1_BIT;
-    depthResolveMode_ = VK_RESOLVE_MODE_NONE;
+    glassSetLayout_ = VK_NULL_HANDLE;
+    glassSet_ = VK_NULL_HANDLE;
+    pyramidInitPipeline_ = pyramidReducePipeline_ = VK_NULL_HANDLE;
+    pyramidPipelineLayout_ = VK_NULL_HANDLE;
+    pyramidSetLayout_ = VK_NULL_HANDLE;
+    snapshotSampler_ = VK_NULL_HANDLE;
+    snapshotView_ = VK_NULL_HANDLE;
+    glassDepthView_ = VK_NULL_HANDLE;
+    snapshot_ = glassDepth_ = VK_NULL_HANDLE;
+    snapshotMemory_ = glassDepthMemory_ = VK_NULL_HANDLE;
+    snapshotMips_ = 0;
+    snapshotInitialized_ = pyramidInitialized_ = false;
+    device_ = VK_NULL_HANDLE;
+    extent_ = {};
+    info_ = {};
 }
 
-void GlassPass::begin(const VkCommandBuffer commandBuffer, const VkImageView colorView, const VkImageView depthView,
-                      const VkImageView velocityView, const VkImageView colorResolveView,
-                      const VkImageView depthResolveView, const VkExtent2D extent, const VkDescriptorSet descriptorSet,
-                      const std::uint32_t frameIndex, const VkBuffer vertexBuffer, const VkBuffer indexBuffer) const {
+void GlassPass::recordSnapshot(const VkCommandBuffer commandBuffer, const VkImage color) {
+    // The previous frame sampled the snapshot; its contents are replaced.
+    const std::array before{
+        imageBarrier(color, VK_IMAGE_ASPECT_COLOR_BIT, ColorProducerStages, ColorProducerAccess,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL),
+        imageBarrier(snapshot_, VK_IMAGE_ASPECT_COLOR_BIT,
+                     snapshotInitialized_ ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                     snapshotInitialized_ ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : VK_ACCESS_2_NONE,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, snapshotMips_),
+    };
+    submitBarriers(commandBuffer, before);
+    const VkImageCopy copy{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                           {0, 0, 0},
+                           {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                           {0, 0, 0},
+                           {extent_.width, extent_.height, 1}};
+    vkCmdCopyImage(commandBuffer, color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, snapshot_,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    // Box-filtered mip chain. The shader samples it trilinearly with a small
+    // rotated tap pattern, which hides the 2x2 box structure.
+    for (std::uint32_t mip = 1; mip < snapshotMips_; ++mip) {
+        const auto toSource = imageBarrier(snapshot_, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                           VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                           VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mip - 1);
+        submitBarriers(commandBuffer, &toSource, 1);
+        const auto size = [&](const std::uint32_t level) {
+            return VkOffset3D{static_cast<std::int32_t>(std::max(1U, extent_.width >> level)),
+                              static_cast<std::int32_t>(std::max(1U, extent_.height >> level)), 1};
+        };
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip - 1, 0, 1};
+        blit.srcOffsets[1] = size(mip - 1);
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1};
+        blit.dstOffsets[1] = size(mip);
+        vkCmdBlitImage(commandBuffer, snapshot_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, snapshot_,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+    }
+    std::array<VkImageMemoryBarrier2, 3> after{};
+    std::uint32_t afterCount = 0;
+    if (snapshotMips_ > 1)
+        after[afterCount++] = imageBarrier(snapshot_, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                           VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                           VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, snapshotMips_ - 1);
+    after[afterCount++] = imageBarrier(snapshot_, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                       VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                       VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, snapshotMips_ - 1);
+    // The colour target becomes the glass draw's attachment.
+    after[afterCount++] = imageBarrier(
+        color, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    submitBarriers(commandBuffer, after.data(), afterCount);
+    snapshotInitialized_ = true;
+}
+
+void GlassPass::recordPyramid(const VkCommandBuffer commandBuffer, const VkImage sceneDepth) {
+    const VkImageAspectFlags depthAspect =
+        VK_IMAGE_ASPECT_DEPTH_BIT | (hasStencil(info_.depthFormat) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0U);
+    const std::array before{
+        // Depth stays read-only; this only orders its last attachment write
+        // before the compute copy.
+        imageBarrier(sceneDepth, depthAspect,
+                     VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL),
+        imageBarrier(pyramid_.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                     pyramidInitialized_ ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                     pyramidInitialized_ ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : VK_ACCESS_2_NONE,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, pyramid_.mipCount()),
+    };
+    submitBarriers(commandBuffer, before);
+    pyramidPass_.record(commandBuffer, pyramid_, VK_NULL_HANDLE, false);
+    const auto toSampled = imageBarrier(pyramid_.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0,
+                                        pyramid_.mipCount());
+    submitBarriers(commandBuffer, &toSampled, 1);
+    pyramidInitialized_ = true;
+}
+
+void GlassPass::record(const VkCommandBuffer commandBuffer, const RecordInfo& info) {
+    if (!created() || info.color == VK_NULL_HANDLE || info.colorView == VK_NULL_HANDLE ||
+        info.depth == VK_NULL_HANDLE || info.sceneDescriptorSet == VK_NULL_HANDLE)
+        return;
+    recordPyramid(commandBuffer, info.depth);
+    recordSnapshot(commandBuffer, info.color);
+
+    const VkImageAspectFlags glassDepthAspect =
+        VK_IMAGE_ASPECT_DEPTH_BIT | (hasStencil(info_.depthFormat) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0U);
+    const auto depthToAttachment = imageBarrier(
+        glassDepth_, glassDepthAspect, VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    submitBarriers(commandBuffer, &depthToAttachment, 1);
+
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    color.imageView = colorView;
+    color.imageView = info.colorView;
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    if (samples_ != VK_SAMPLE_COUNT_1_BIT) {
-        color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
-        color.resolveImageView = colorResolveView;
-        color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    }
-    VkRenderingAttachmentInfo velocity{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    velocity.imageView = velocityView;
-    velocity.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    velocity.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    velocity.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    std::array colors{color, velocity};
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    depth.imageView = depthView;
-    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    if (samples_ != VK_SAMPLE_COUNT_1_BIT && depthResolveMode_ != VK_RESOLVE_MODE_NONE) {
-        depth.resolveMode = depthResolveMode_;
-        depth.resolveImageView = depthResolveView;
-        depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    }
+    depth.imageView = glassDepthView_;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    // Every texel is written by the depth seed below.
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea.extent = extent;
+    rendering.renderArea.extent = extent_;
     rendering.layerCount = 1;
-    rendering.colorAttachmentCount = hasVelocity_ ? 2U : 1U;
-    rendering.pColorAttachments = colors.data();
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &color;
     rendering.pDepthAttachment = &depth;
     vkCmdBeginRendering(commandBuffer, &rendering);
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
-    const std::array sets{descriptorSet, sceneTextureSets_.at(frameIndex % FramesInFlight)};
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0,
-                            static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
-    constexpr VkDeviceSize offset{};
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &offset);
-    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    const VkViewport viewport{0.0F, 0.0F, static_cast<float>(extent.width), static_cast<float>(extent.height),
+    const VkViewport viewport{0.0F, 0.0F, static_cast<float>(extent_.width), static_cast<float>(extent_.height),
                               0.0F, 1.0F};
-    const VkRect2D scissor{{0, 0}, extent};
+    const VkRect2D scissor{{0, 0}, extent_};
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-}
-
-void GlassPass::draw(const VkCommandBuffer commandBuffer, const VkDescriptorSet descriptorSet,
-                     const Culling::IndexedIndirectDrawCount& indirectDraw, const VkDeviceSize commandOffset,
-                     const VkDeviceSize countOffset) const {
-    if (!indirectDraw.valid())
-        return;
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1, &descriptorSet, 0,
-                            nullptr);
-    indirectDraw.record(commandBuffer, commandOffset, countOffset);
-}
-
-void GlassPass::end(const VkCommandBuffer commandBuffer) {
+    constexpr VkDeviceSize vertexOffset{0};
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &info.vertexBuffer, &vertexOffset);
+    vkCmdBindIndexBuffer(commandBuffer, info.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    const std::array sets{info.sceneDescriptorSet, glassSet_};
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, depthSeedPipeline_.handle());
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, depthSeedPipeline_.layout(), 0,
+                            static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+    const auto drawStream = [&](const GraphicsPipeline& pipeline, const Culling::IndexedIndirectDrawCount* stream,
+                                const VkDeviceSize commandOffset) {
+        if (stream == nullptr || !stream->valid())
+            return;
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0,
+                                static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
+        stream->record(commandBuffer, commandOffset, info.countOffset);
+    };
+    drawStream(singleSidedPipeline_, info.singleSided, info.commandOffset);
+    drawStream(twoSidedPipeline_, info.twoSided, info.twoSidedCommandOffset);
     vkCmdEndRendering(commandBuffer);
+
+    // Post-processing, Scene View display and the next frame sample it.
+    const auto colorToSampled = imageBarrier(
+        info.color, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, SampledReaderStages | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    submitBarriers(commandBuffer, &colorToSampled, 1);
 }
 } // namespace Engine

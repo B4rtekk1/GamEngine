@@ -24,7 +24,6 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
-#include "Engine/ECS/Components/GlassDestructionComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/ReflectionProbeComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
@@ -37,6 +36,7 @@
 #include "Engine/Input/Input.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/Math/Frustum.h"
+#include "Engine/Math/MatrixDecompose.h"
 #include "Engine/Math/Math.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
@@ -48,6 +48,7 @@
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Lighting/ImageBasedLighting.h"
+#include "Engine/Renderer/Lighting/LightProfiles.h"
 #include "Engine/Renderer/Lighting/ReflectionProbeManager.h"
 #include "Engine/Renderer/Lighting/VsmFeedbackCache.h"
 #include "Engine/Renderer/Lighting/VsmPagePolicy.h"
@@ -57,13 +58,20 @@
 #include "Engine/Renderer/Passes/BloomPass.h"
 #include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
 #include "Engine/Renderer/Passes/ForwardPass.h"
-#include "Engine/Renderer/Passes/GlassPass.h"
 #include "Engine/Renderer/Passes/GtaoPass.h"
+#include "Engine/Renderer/Passes/LocalLightShadowPass.h"
+#include "Engine/Renderer/Passes/TileLightCullingPass.h"
+#include "Engine/Renderer/Passes/DeferredLocalLightingPass.h"
+#include "Engine/Renderer/Passes/VisibilityBufferPass.h"
 #include "Engine/Renderer/Passes/RtContactShadowPass.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
+#include "Engine/Renderer/Passes/SsgiPass.h"
+#include "Engine/Renderer/Passes/DdgiPass.h"
+#include "Engine/Renderer/RayTracing/ClusterRayTracingScene.h"
 #include "Engine/Renderer/Passes/TemporalAaPass.h"
 #include "Engine/Renderer/Passes/TonemapPass.h"
+#include "Engine/Renderer/Passes/GlassPass.h"
 #include "Engine/Renderer/Passes/WaterPass.h"
 #include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
 #include "Engine/Renderer/RenderGraph/RenderGraph.h"
@@ -103,6 +111,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <iostream>
 #include <iterator>
@@ -142,9 +151,16 @@ struct SceneFrameData final {
     Entity primaryCamera{NullEntity};
     DirectionalLight directionalLight{};
     WindFrameData wind{};
-    std::array<LocalLightGPU, MaxLocalLights> lights{};
+    std::array<LocalLightGPU, MaxClusteredLocalLights> lights{};
     std::uint32_t lightCount{};
 };
+
+// The frame UBO's fixed-size copy of the first lights (see MaxLocalLights).
+std::array<LocalLightGPU, MaxLocalLights> uniformLocalLights(const SceneFrameData& data) {
+    std::array<LocalLightGPU, MaxLocalLights> lights{};
+    std::copy_n(data.lights.begin(), std::min(data.lightCount, MaxLocalLights), lights.begin());
+    return lights;
+}
 } // namespace
 
 struct SceneFrameDataCache final {
@@ -156,6 +172,8 @@ struct SceneFrameDataCache final {
     bool hasWind{};
     bool initialized{};
     std::uint64_t transformRevision{};
+    // TransformSystem world-change serial last consumed (see refreshSceneFrameData).
+    std::uint64_t worldTransformSerial{};
     std::uint64_t lightRevision{};
     std::uint64_t windRevision{};
     std::uint64_t cameraRevision{};
@@ -207,6 +225,8 @@ class Renderer::Backend {
                      const GtaoQuality& gtaoQuality, const GtaoDebugView& gtaoDebugView,
                      const PbrDebugView& pbrDebugView, const IblQuality& iblQuality,
                      const ShadowDebugView& shadowDebugView, const GrassRenderSettings& grassSettings,
+                     const SsgiSettings& ssgiSettings, const DdgiSettings& ddgiSettings,
+                     const PostProcessSettings& postProcessSettings,
                      std::filesystem::path projectRoot, Assets::AssetManager& assetManager, ForwardPass& forwardPass,
                      SkyPass& skyPass, TonemapPass& tonemapPass, TemporalAaPass& temporalAaPass, BloomPass& bloomPass,
                      GtaoPass& gtaoPass, GraphicsPipeline& particlePipeline, UI::CanvasRenderer& canvasRenderer,
@@ -218,7 +238,9 @@ class Renderer::Backend {
           antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality),
           rtContactShadowSettings(rtContactShadowSettings), gtaoQuality(gtaoQuality), gtaoDebugView(gtaoDebugView),
           pbrDebugView(pbrDebugView), iblQuality(iblQuality), shadowDebugView(shadowDebugView),
-          configuredGtaoQuality(gtaoQuality), grassSettings(grassSettings), assetManager(assetManager),
+          configuredGtaoQuality(gtaoQuality), grassSettings(grassSettings), ssgiSettings(ssgiSettings),
+          ddgiSettings(ddgiSettings), postProcessSettings(postProcessSettings),
+          assetManager(assetManager),
           renderables(sceneGpu.renderables), instanceBatches(sceneGpu.instanceBatches),
           instanceModels(sceneGpu.instanceModels), previousInstanceTransforms(sceneGpu.previousInstanceTransforms),
           materials(sceneGpu.materials), materialSlots(sceneGpu.materialSlots),
@@ -246,6 +268,7 @@ class Renderer::Backend {
         if (&updatedScene != &scene) {
             throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
         }
+        ++depthContentRevision;
         if (sceneResourcesInitialized) {
             return;
         }
@@ -264,6 +287,16 @@ class Renderer::Backend {
 
     [[nodiscard]] std::vector<GpuMemoryHeapBudget> gpuMemoryHeaps() const {
         return vulkanDevice.memoryBudgetManager().heaps();
+    }
+
+    [[nodiscard]] std::string gpuMemoryAllocationsJson() const {
+        if (vulkanDevice.allocator() == VK_NULL_HANDLE)
+            return {};
+        char* text = nullptr;
+        vmaBuildStatsString(vulkanDevice.allocator(), &text, VK_TRUE);
+        std::string result = text == nullptr ? std::string{} : std::string{text};
+        vmaFreeStatsString(vulkanDevice.allocator(), text);
+        return result;
     }
 
     [[nodiscard]] std::vector<GpuMemoryCategoryBudget> gpuMemoryCategories() const {
@@ -289,10 +322,6 @@ class Renderer::Backend {
                 info.bytes,
             });
         };
-        for (const auto& allocation : glassPass.memoryAllocations())
-            result.push_back(allocation);
-        for (const auto& allocation : sceneGlassPass.memoryAllocations())
-            result.push_back(allocation);
         append("Instances", gpuSceneInstanceBuffers[currentFrame]);
         append("Meshes", gpuSceneMeshBuffers[currentFrame]);
         append("Materials", gpuSceneMaterialBuffers[currentFrame]);
@@ -358,6 +387,8 @@ class Renderer::Backend {
     }
 
     [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept {
+        if (gameViewportDisplayDescriptor != VK_NULL_HANDLE && tonemapPass.displayReady())
+            return gameViewportDisplayDescriptor;
         // Scene View temporarily suppresses the Game View TAA resolve.
         // In that case the temporal history has not been written or
         // transitioned yet, so ImGui must keep sampling the HDR target.
@@ -521,14 +552,6 @@ class Renderer::Backend {
         // Retire and rebuild stale batches before drawFrame dereferences
         // their MeshGpuResource identities (loaded panes may release them).
         synchronizeSceneResources(scene);
-        synchronizeGlassAtlasSlots();
-        if (glassPass.needsCrackAtlasResize(glassAtlasPaneCount) ||
-            sceneGlassPass.needsCrackAtlasResize(glassAtlasPaneCount)) {
-            waitForGlobalResourceRebuild();
-            glassPass.resizeCrackAtlas(glassAtlasPaneCount);
-            sceneGlassPass.resizeCrackAtlas(glassAtlasPaneCount);
-            sceneViewportNeedsRender = true;
-        }
         drawFrame();
     }
 
@@ -593,6 +616,7 @@ class Renderer::Backend {
             skyPass.setEnvironment(environment);
             sceneSkyPass.setEnvironment(environment);
             environmentEquirectangularPath = path;
+            builtIblKey = iblBuildKey(path, runtimeRoot / "Library");
             sceneViewportNeedsRender = true;
             return true;
         } catch (const std::exception& exception) {
@@ -656,7 +680,7 @@ class Renderer::Backend {
             }
             skyPass.destroy();
             sceneSkyPass.destroy();
-            sceneViewportForwardPass.destroy();
+            destroySceneViewportForwardPass();
             forwardPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
@@ -698,6 +722,7 @@ class Renderer::Backend {
         if (&updatedScene != &scene) {
             throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
         }
+        ++depthContentRevision;
         if (device == VK_NULL_HANDLE) {
             return;
         }
@@ -734,9 +759,13 @@ class Renderer::Backend {
         virtualWaterRenderer.destroy();
         lightingForwardPass.destroy();
         waterPass.destroy();
+        glassPass.destroy();
         // These passes retain descriptors for the frame UBO and VSM page
         // table. A scene reload replaces both buffers even at the same extent.
         rtContactShadowPass.destroy();
+        localLightShadowPass.destroy();
+        tileLightCulling.destroy();
+        deferredLocalLighting.destroy();
         directionalVisibilityPass.destroy();
         shadowPass.destroy();
         sceneDescriptorPass.destroy();
@@ -787,7 +816,8 @@ class Renderer::Backend {
         freeMaterialTextureSlots.clear();
         materialTextureDescriptors.clear();
         fallbackMaterialTexture.destroy();
-        imageBasedLighting.destroy();
+        // The IBL maps depend on the environment, not on the registry;
+        // createImageBasedLighting() keeps them when that is unchanged.
         renderables.clear();
         instanceBatches.clear();
         instanceModels.clear();
@@ -828,28 +858,49 @@ class Renderer::Backend {
             particleComputePipelineLayout = VK_NULL_HANDLE;
         }
 
-        createMaterialTextures();
-        createImageBasedLighting();
-        createMeshBuffers();
-        createInstanceBuffer();
+        // Same per-stage report as [GPUInit], so a slow Play-mode exit or
+        // scene switch shows which rebuild step it spent its time in.
+        const auto timeStage = [](const std::string_view stage, const auto& rebuild) {
+            const auto startedAt = std::chrono::steady_clock::now();
+            rebuild();
+            const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - startedAt)
+                                          .count();
+            Diagnostics::instance().report(DiagnosticSeverity::Info,
+                                           "[SceneReload] " + std::string{stage} + ": " +
+                                               std::to_string(milliseconds) + " ms",
+                                           {.subsystem = "Renderer"});
+        };
+        timeStage("Material textures", [&] { createMaterialTextures(); });
+        timeStage("IBL", [&] { createImageBasedLighting(); });
+        timeStage("Mesh buffers", [&] { createMeshBuffers(); });
+        timeStage("Instance buffer", [&] { createInstanceBuffer(); });
         lastRenderTopologyRevision = registry.renderTopologyRevision();
         lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
         lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
-        createUniformBuffers();
-        createSceneUniformBuffers();
-        createCullingResources();
-        createShadowPass();
-        createSceneDescriptorPass();
-        createForwardPass();
-        createSkyPass();
-        createFramebuffers();
-        createSceneViewportResources();
-        createParticleResources();
-        createSceneSkyPass();
-        createTemporalAaPass();
-        createBloomPass();
-        createTonemapPass();
-        refreshEditorViewportTextures();
+        timeStage("Uniforms and culling", [&] {
+            createUniformBuffers();
+            createSceneUniformBuffers();
+            createCullingResources();
+        });
+        timeStage("Shadows and descriptors", [&] {
+            createShadowPass();
+            createSceneDescriptorPass();
+        });
+        timeStage("Forward pipelines", [&] { createForwardPass(); });
+        timeStage("Sky, framebuffers and Scene View", [&] {
+            createSkyPass();
+            createFramebuffers();
+            createSceneViewportResources();
+            createParticleResources();
+            createSceneSkyPass();
+        });
+        timeStage("Post-processing", [&] {
+            createTemporalAaPass();
+            createBloomPass();
+            createTonemapPass();
+            refreshEditorViewportTextures();
+        });
         sceneViewportCacheValid = false;
         sceneViewportImageInitialized = false;
         sceneViewportNeedsRender = true;
@@ -959,9 +1010,24 @@ class Renderer::Backend {
                                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
                 }
             }
-            virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, virtualHiZ);
             const Water::WaterRenderWorld waterWorld = Water::WaterRenderWorld::capture(registry, sceneGpu);
-            virtualWaterRenderer.rebuild(waterWorld);
+            const VkExtent2D waterExtent = virtualWaterRenderer.extent();
+            const VkExtent2D fullExtent = swapchain.extent();
+            if (!waterWorld.empty() &&
+                (waterExtent.width != fullExtent.width || waterExtent.height != fullExtent.height)) {
+                // The first water body of a scene: replace the 1x1
+                // placeholder targets with full-resolution ones. Rare, so
+                // an explicit idle covers the async queues too.
+                waitIdle();
+                createVirtualWaterResources();
+                temporalAaPass.updateWaterInputs(
+                    virtualWaterRenderer.velocityView(), virtualWaterRenderer.velocitySampler(),
+                    virtualWaterRenderer.metaView(), virtualWaterRenderer.metaSampler(),
+                    virtualWaterRenderer.surfaceView(), virtualWaterRenderer.surfaceSampler());
+            } else {
+                virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, virtualHiZ);
+                virtualWaterRenderer.rebuild(waterWorld);
+            }
             // Scene View Virtual Water is intentionally not rebuilt here:
             // topology changes must not enter the still-fragile editor
             // water descriptor path while ordinary meshes are added.
@@ -975,6 +1041,7 @@ class Renderer::Backend {
 
     void updateMeshGeometry(const Entity entity, const std::uint32_t firstVertex,
                             const std::uint32_t requestedVertexCount) {
+        ++depthContentRevision;
         const auto recordIt = sceneGpu.renderableIndices.find(entity);
         if (recordIt == sceneGpu.renderableIndices.end() || !registry.has<MeshRenderer>(entity) ||
             !registry.has<Transform>(entity)) {

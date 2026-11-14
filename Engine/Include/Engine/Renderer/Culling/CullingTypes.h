@@ -63,11 +63,21 @@ struct alignas(16) GPUObjectData {
     float lod1DistanceSq;
     /// Squared world-space distance at which LOD2 becomes active.
     float lod2DistanceSq;
+    /// Global meshlet range covering the LOD0 index range. A non-zero count
+    /// lets VSM page culling rasterize only the meshlets inside each page;
+    /// zero keeps the whole-section draw (no meshlets, displaced, cutout).
+    std::uint32_t firstMeshlet{};
+    std::uint32_t meshletCount{};
 };
+static_assert(sizeof(GPUObjectData) == 160, "GPUObjectData must match CullingObjectData in CullingTypes.slang");
 
 /**
  * @brief Per-dispatch parameters shared with the GPU culling shader.
  */
+/** Material program slots binned by GPU culling, plus the end sentinel, rounded to whole uint4s. */
+inline constexpr std::uint32_t DrawBinCount = 32;
+inline constexpr std::uint32_t DrawBinOffsetCount = 36;
+
 struct alignas(16) CullingUniformData {
     /// Combined view and projection matrix of the active camera.
     GPUMat4 viewProjection;
@@ -110,5 +120,10 @@ struct alignas(16) CullingUniformData {
     std::uint32_t shadowCacheMode{};
     std::uint32_t padding1{};
     std::uint32_t padding2{};
+    /// Binned draws (material program slots): slot s owns the commands
+    /// [binOffsets[s], binOffsets[s + 1]) of the indirect buffer, so each
+    /// slot reserves only the objects it can draw instead of every object.
+    std::uint32_t binOffsets[DrawBinOffsetCount]{};
 };
+static_assert(sizeof(CullingUniformData) == 448, "CullingUniformData must match CullingTypes.slang");
 } // namespace Engine::Culling

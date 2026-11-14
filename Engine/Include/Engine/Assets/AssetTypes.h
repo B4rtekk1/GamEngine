@@ -60,7 +60,38 @@ enum class TextureFormat : std::uint8_t {
     BC5_UNORM,
     BC7_UNORM,
     BC7_SRGB,
+    // Block-copied from already compressed DDS sources (DXT1 / DXT5); never
+    // produced by the encoder. Appended so existing .gtex values keep meaning.
+    BC1_UNORM,
+    BC1_SRGB,
+    BC3_UNORM,
+    BC3_SRGB,
 };
+
+/** Bytes of one 4x4 block (or one pixel for RGBA8). */
+[[nodiscard]] constexpr std::uint32_t textureFormatBlockBytes(const TextureFormat format) noexcept {
+    switch (format) {
+    case TextureFormat::RGBA8_SRGB:
+    case TextureFormat::RGBA8_UNORM:
+        return 4;
+    case TextureFormat::BC1_UNORM:
+    case TextureFormat::BC1_SRGB:
+    case TextureFormat::BC4_UNORM:
+        return 8;
+    case TextureFormat::BC3_UNORM:
+    case TextureFormat::BC3_SRGB:
+    case TextureFormat::BC5_UNORM:
+    case TextureFormat::BC7_UNORM:
+    case TextureFormat::BC7_SRGB:
+        return 16;
+    }
+    return 16;
+}
+
+[[nodiscard]] constexpr bool textureFormatIsSrgb(const TextureFormat format) noexcept {
+    return format == TextureFormat::RGBA8_SRGB || format == TextureFormat::BC7_SRGB ||
+           format == TextureFormat::BC1_SRGB || format == TextureFormat::BC3_SRGB;
+}
 
 /** Byte range and dimensions of one cooked mip level. */
 struct TextureMip {

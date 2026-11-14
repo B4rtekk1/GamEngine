@@ -6,8 +6,8 @@
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
-#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Renderer/Geometry/Capsule.h"
+#include "Engine/Renderer/Geometry/Cylinder.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
@@ -99,6 +99,8 @@ ScenePreset::ScenePreset(const SceneType type) {
     sphereMesh_ = std::make_shared<Mesh>(Sphere::createMesh());
     capsuleMesh_ = std::make_shared<Mesh>(Capsule::createMesh(CapsuleRadius, CapsuleHeight));
     rampMesh_ = std::make_shared<Mesh>(Ramp::createMesh());
+    cylinderMesh_ = std::make_shared<Mesh>(Cylinder::createMesh());
+    coneMesh_ = std::make_shared<Mesh>(Cone::createMesh());
     buildFont(uiFontAtlas());
     if (type == SceneType::Particles) {
         Particles::ParticleEmitter emitter;
@@ -213,25 +215,27 @@ Entity ScenePreset::createCube() {
     return entity;
 }
 
-Entity ScenePreset::createGlass() {
-    constexpr float GlassThickness = 0.01F;
-    // A slight tint and surface haze keep the sample pane readable even
-    // when viewed head-on against a uniform background.
-    const Actor object = GlassDestructionSystem::createPane(
-        *this, "Glass", GlassDestructionComponent{.size = {1.0F, 2.0F}, .thickness = GlassThickness},
-        PBRMaterial{
-            .baseColor = {0.92F, 0.98F, 0.95F},
-            .metallic = 0.0F,
-            .roughness = 0.12F,
-            .ior = 1.5F,
-            .transmission = 0.96F,
-            .thickness = GlassThickness,
-            .attenuationColor = {0.80F, 0.95F, 0.88F},
-            .attenuationDistance = 0.10F,
-            .dirtIntensity = 0.05F,
-        });
-    object.setPosition({0.0F, 1.0F, 0.0F});
-    return findEntity(object.id());
+Entity ScenePreset::createGlassPane() {
+    // A thin box keeps both faces and the edges physically correct: from
+    // either side it is a slab of float glass with its green edge tint.
+    auto& object = createMeshObject("Glass Pane", cubeMesh_,
+                                    PBRMaterial{
+                                        .baseColor = {1.0F, 1.0F, 1.0F},
+                                        .metallic = 0.0F,
+                                        .roughness = 0.0F,
+                                        // Reflectivity: twice the physical F0, so
+                                        // screen-space reflections read clearly.
+                                        .specular = 2.0F,
+                                        .ior = 1.52F,
+                                        .transmission = 1.0F,
+                                        .thickness = 0.006F,
+                                        .attenuationColor = {0.86F, 0.95F, 0.9F},
+                                        .attenuationDistance = 0.08F,
+                                    });
+    object.setPosition({0, EditorObjectHeight, 0});
+    object.setScale({2.0F, 1.5F, 0.006F});
+    object.add<ColliderComponent>();
+    return object.entity();
 }
 
 Entity ScenePreset::createPlane() {
@@ -274,6 +278,34 @@ Entity ScenePreset::createCapsule() {
     return entity;
 }
 
+Entity ScenePreset::createCylinder() {
+    auto& object = createMeshObject("Cylinder", cylinderMesh_,
+                                    PBRMaterial{
+                                        .baseColor = {CubeColor, CubeColor, CubeColor},
+                                        .metallic = CubeMetallic,
+                                        .roughness = CubeRoughness,
+                                    });
+    object.setPosition({0, EditorObjectHeight, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>(ColliderComponent{.shape = BoxCollider{.halfExtents = {0.5F, 0.5F, 0.5F}}});
+    editorCylinders.push_back(entity);
+    return entity;
+}
+
+Entity ScenePreset::createCone() {
+    auto& object = createMeshObject("Cone", coneMesh_,
+                                    PBRMaterial{
+                                        .baseColor = {CubeColor, CubeColor, CubeColor},
+                                        .metallic = CubeMetallic,
+                                        .roughness = CubeRoughness,
+                                    });
+    object.setPosition({0, EditorObjectHeight, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>(ColliderComponent{.shape = BoxCollider{.halfExtents = {0.5F, 0.5F, 0.5F}}});
+    editorCones.push_back(entity);
+    return entity;
+}
+
 Entity ScenePreset::createRamp() {
     auto& object = createMeshObject("Ramp", rampMesh_,
                                     PBRMaterial{
@@ -304,6 +336,31 @@ Entity ScenePreset::createLight() {
     const Actor object = Scene::createLight("Light", light);
     object.setPosition({3.0F, 5.0F, -3.0F});
     object.setRotation({-55.0F, 35.0F, 0.0F});
+    const Entity entity = findEntity(object.id());
+    editorLights.push_back(entity);
+    return entity;
+}
+
+Entity ScenePreset::createPointLight() {
+    LightComponent light;
+    light.type = LightType::Point;
+    light.intensity = 8.0F;
+    light.castShadows = false;
+    const Actor object = Scene::createLight("Point Light", light);
+    object.setPosition({0.0F, 3.0F, 0.0F});
+    const Entity entity = findEntity(object.id());
+    editorLights.push_back(entity);
+    return entity;
+}
+
+Entity ScenePreset::createSpotLight() {
+    LightComponent light;
+    light.type = LightType::Spot;
+    light.intensity = 12.0F;
+    light.castShadows = false;
+    const Actor object = Scene::createLight("Spot Light", light);
+    object.setPosition({0.0F, 4.0F, 0.0F});
+    object.setRotation({-90.0F, 0.0F, 0.0F});
     const Entity entity = findEntity(object.id());
     editorLights.push_back(entity);
     return entity;

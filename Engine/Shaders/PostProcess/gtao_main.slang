@@ -30,6 +30,12 @@ static const float Pi=3.14159265359;
 float3 positionFromDepth(int2 pixel,float depth,float2 positionScale,float2 positionBias){
  return float3((float2(pixel)+.5)*positionScale+positionBias,-1)*depth;
 }
+// Pixel coordinates kept as floats: on Ampere every int<->float conversion
+// issues on the quarter-rate XU pipe, which this kernel otherwise saturates.
+float3 positionFromPixelCenter(float2 pixelCenter,float depth,float2 positionScale,float2 positionBias){
+ return float3(pixelCenter*positionScale+positionBias,-1)*depth;
+}
+
 float3 safeNormalize(float3 value){return value*rsqrt(max(dot(value,value),1e-12));}
 // Abramowitz & Stegun 4.4.45: |error| <= 6.7e-5 rad, far below what the
 // depth pyramid resolves, at a fraction of the cost of acos().
@@ -70,6 +76,9 @@ float3 decodeOct(float2 e){float3 n=float3(e,1-abs(e.x)-abs(e.y));if(n.z<0)n.xy=
 
 float3 loadViewNormal(int2 pixel,uint2 aoSize){
  uint normalW,normalH;viewNormalTexture.GetDimensions(normalW,normalH);
+ // Full-resolution AO reads its own texel: skip the divisions and the
+ // int<->float round trip, which issue on the saturated XU pipe.
+ if(normalW==aoSize.x&&normalH==aoSize.y)return decodeOct(viewNormalTexture.Load(int3(pixel,0)).xy);
  float2 uv=(float2(pixel)+.5)/float2(aoSize);
  int2 normalPixel=clamp(int2(uv*float2(normalW,normalH)),int2(0,0),int2(normalW,normalH)-1);
  return decodeOct(viewNormalTexture.Load(int3(normalPixel,0)).xy);
@@ -109,11 +118,16 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  const bool sampleHorizons=max(radiusPixels.x,radiusPixels.y)>=.25;
 
  visibility+=saturate((10.0-radiusPixels.x)/100.0)*.5;
+ const float2 pixelCenter=float2(p)+.5,sizeMinusHalf=float2(size)-.5,invSize=1.0/float2(size);
  [unroll]for(uint d=0;d<directions;++d){
 
   float angle=(float(d)+localNoise.x)*(Pi/float(directions));
   float sinPhi,cosPhi;sincos(angle,sinPhi,cosPhi);
   float2 ray=float2(cosPhi,-sinPhi);
+  const float2 rayPixels=ray*radiusPixels;
+  // Tap distance is t*|rayPixels|; scaled by 2^-2.5 so that the exponent of
+  // the product is round(log2(distance)-3), the nearest relative mip.
+  const float mipDistanceScale=length(rayPixels)*.1767767;
 
   float3 screenTangent=float3(cosPhi,sinPhi,0);
   // bitangent is a unit vector orthogonal to viewDir, so their cross product
@@ -130,24 +144,25 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
    float stepNoise=frac(localNoise.y+float(d+step*steps)*.61803398875);
    float x=(float(step)+stepNoise)/float(steps);
    float t=x*x+minSampleDistance;
-   float2 floatOffset=ray*radiusPixels*t;
-   float offsetLength=max(length(floatOffset),1.0);
-   float relativeMip=clamp(log2(offsetLength)-3.0,0.0,float(settings.maxSampleMip));
-   int2 offset=int2(round(floatOffset));if(!any(offset))continue;
-   int2 pixel0=clamp(p+offset,int2(0,0),size-1),pixel1=clamp(p-offset,int2(0,0),size-1);
-   // The sampler picks the nearest mip. Taps below one relative level stay
-   // on the base level instead of rounding up at 0.5.
-   float lod=float(GTAO_HALF_RES)+(relativeMip<1.0?0.0:relativeMip);
-   float depth0=horizonDepth.SampleLevel((float2(pixel0)+.5)/float2(size),lod).r;
-   float depth1=horizonDepth.SampleLevel((float2(pixel1)+.5)/float2(size),lod).r;
+   float2 floatOffset=round(rayPixels*t);
+   if(all(floatOffset==0.0))continue;
+   // Distances below 16 pixels (relative mip < 1) stay on the base level;
+   // beyond that the exponent bits give the nearest pyramid level directly.
+   float distance=t*mipDistanceScale*5.656854;
+   int mip=distance<16.0?0:min(int(asuint(t*mipDistanceScale)>>23)-127,int(settings.maxSampleMip));
+   // float(mip) through the mantissa of 2^23, again avoiding an I2F.
+   float lod=asfloat(uint(GTAO_HALF_RES+mip)|0x4B000000u)-8388608.0;
+   float2 pixel0=clamp(pixelCenter+floatOffset,.5,sizeMinusHalf),pixel1=clamp(pixelCenter-floatOffset,.5,sizeMinusHalf);
+   float depth0=horizonDepth.SampleLevel(pixel0*invSize,lod).r;
+   float depth1=horizonDepth.SampleLevel(pixel1*invSize,lod).r;
    if(depth0<BackgroundDepth){
-    float3 v=positionFromDepth(pixel0,depth0,positionScale,positionBias)-center;float dist2=dot(v,v);
+    float3 v=positionFromPixelCenter(pixel0,depth0,positionScale,positionBias)-center;float dist2=dot(v,v);
     if(dist2>=1e-6){float invDistance=rsqrt(dist2);float sampleDistance=dist2*invDistance;
      float sampleHorizonCos=dot(v,viewDir)*invDistance;float weight=saturate(sampleDistance*falloffMul+falloffAdd);
      sampleHorizonCos=lerp(lowHorizon[0],sampleHorizonCos,weight);horizonCos[0]=max(horizonCos[0],sampleHorizonCos);}
    }
    if(depth1<BackgroundDepth){
-    float3 v=positionFromDepth(pixel1,depth1,positionScale,positionBias)-center;float dist2=dot(v,v);
+    float3 v=positionFromPixelCenter(pixel1,depth1,positionScale,positionBias)-center;float dist2=dot(v,v);
     if(dist2>=1e-6){float invDistance=rsqrt(dist2);float sampleDistance=dist2*invDistance;
      float sampleHorizonCos=dot(v,viewDir)*invDistance;float weight=saturate(sampleDistance*falloffMul+falloffAdd);
      sampleHorizonCos=lerp(lowHorizon[1],sampleHorizonCos,weight);horizonCos[1]=max(horizonCos[1],sampleHorizonCos);}

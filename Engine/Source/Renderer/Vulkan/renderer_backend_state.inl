@@ -60,8 +60,16 @@ VkFramebuffer sceneViewportFramebuffer = VK_NULL_HANDLE;
 // This pass starts from the descriptor's sampled layout instead of
 // discarding the cached image through an UNDEFINED transition.
 ForwardPass sceneViewportForwardPass;
+// Scene View depth prepass and resolved shadow visibility, as in the Game
+// View: lighting then shades every pixel once and reads its shadow, instead
+// of running the virtual-shadow filter for every overdrawn fragment.
+ForwardPass sceneViewportDepthPrepass;
+HdrBuffer sceneViewportVelocity;
+HdrBuffer sceneViewportNormals;
+DirectionalVisibilityPass sceneDirectionalVisibilityPass;
 VkDescriptorSet gameViewportDescriptor = VK_NULL_HANDLE;
 std::array<VkDescriptorSet, 2> gameViewportTemporalDescriptors{};
+VkDescriptorSet gameViewportDisplayDescriptor = VK_NULL_HANDLE;
 VkDescriptorSet sceneViewportDescriptor = VK_NULL_HANDLE;
 bool editorUiActive = false;
 bool sceneResourcesInitialized = false;
@@ -82,7 +90,131 @@ HdrBuffer velocityBuffer;
 // Octahedrally encoded view-space normals written by the opaque depth prepass.
 HdrBuffer gtaoViewNormalBuffer;
 RtContactShadowPass rtContactShadowPass;
+// Ray-traced shadows of point and spot lights; its masks always exist so the
+// forward binding is valid, and start cleared ("no receiver").
+LocalLightShadowPass localLightShadowPass;
+TileLightCullingPass tileLightCulling;
+DeferredLocalLightingPass deferredLocalLighting;
+// Set while recording a frame whose Game View local lights are deferred.
+bool deferredLocalThisFrame = false;
+// Visibility-buffer prototype (GAMENGINE_VISBUFFER=1): the depth prepass
+// writes triangle ids and a compute pass shades the PBR slots from them.
+VisibilityBufferPass visibilityBuffer;
+bool visibilityResolveThisFrame = false;
+// Any material displaces its vertices (the resolve has no displacement).
+bool materialsDisplaced = true;
+static bool visibilityBufferRequested() noexcept {
+    static const bool requested = [] {
+        const char* value = std::getenv("GAMENGINE_VISBUFFER");
+        return value != nullptr && std::string_view{value} == "1";
+    }();
+    return requested;
+}
+// Set when this frame's tracer drew stochastic light samples (MegaLights).
+bool megaLightsTracedThisFrame = false;
+// TransformSystem world-change serial the renderable sync last consumed.
+std::uint64_t renderableWorldTransformSerial = 0;
+std::array<bool, MAX_FRAMES_IN_FLIGHT> localShadowMaskInitialized{};
+// Shadow rays trace whichever acceleration structure is faster on this GPU.
+// Cluster (Mega Geometry) traversal is hardware accelerated only on recent
+// architectures, so it is measured on the real scene rather than assumed:
+// alternating trial phases time both, then the faster one is kept.
+enum class ShadowTraceBackend : std::uint8_t { Measuring, Cluster, Classic };
+// GAMENGINE_SHADOW_BACKEND=cluster|classic skips the timing trial.
+ShadowTraceBackend shadowTraceBackend{[] {
+    const char* forced = std::getenv("GAMENGINE_SHADOW_BACKEND");
+    if (forced != nullptr && std::string_view{forced} == "cluster") {
+        return ShadowTraceBackend::Cluster;
+    }
+    if (forced != nullptr && std::string_view{forced} == "classic") {
+        return ShadowTraceBackend::Classic;
+    }
+    return ShadowTraceBackend::Measuring;
+}()};
+std::uint32_t shadowTraceTrialFrame{};
+std::array<bool, MAX_FRAMES_IN_FLIGHT> shadowTraceSampled{};
+std::array<bool, MAX_FRAMES_IN_FLIGHT> shadowTraceUsedCluster{};
+// [0] classic triangle TLAS, [1] cluster scene: shadow pass GPU milliseconds.
+std::array<std::vector<float>, 2> shadowTraceSamples;
+// Where the measured winner is kept (project Library, per GPU and driver), so
+// the trial runs once instead of on every launch: it traced the slower
+// backend for half of its ~200 frames and built both structures meanwhile.
+std::filesystem::path shadowTraceDecisionPath;
+
+void loadShadowTraceDecision(const std::filesystem::path& directory) {
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(vulkanDevice.physical(), &properties);
+    shadowTraceDecisionPath = directory / ("shadow-trace-" + std::to_string(properties.vendorID) + "-" +
+                                          std::to_string(properties.deviceID) + "-" +
+                                          std::to_string(properties.driverVersion) + ".txt");
+    // GAMENGINE_SHADOW_BACKEND already chose one.
+    if (shadowTraceBackend != ShadowTraceBackend::Measuring)
+        return;
+    std::ifstream input(shadowTraceDecisionPath);
+    std::string backend;
+    if (!(input >> backend))
+        return;
+    if (backend == "cluster")
+        shadowTraceBackend = ShadowTraceBackend::Cluster;
+    else if (backend == "classic")
+        shadowTraceBackend = ShadowTraceBackend::Classic;
+}
+
+void saveShadowTraceDecision(const float classicMs, const float clusterMs) const noexcept {
+    if (shadowTraceDecisionPath.empty())
+        return;
+    std::error_code error;
+    std::filesystem::create_directories(shadowTraceDecisionPath.parent_path(), error);
+    std::ofstream output(shadowTraceDecisionPath, std::ios::trunc);
+    // First token: the winner; the timings are informational. Delete the
+    // file to measure again.
+    output << (shadowTraceBackend == ShadowTraceBackend::Cluster ? "cluster" : "classic") << "\nclassic_ms "
+           << classicMs << "\ncluster_ms " << clusterMs << '\n';
+}
+// Game View screen-space flags as written to the frame UBO, before the local
+// shadow bit is known.
+std::uint32_t gameScreenSpaceEffects{1};
 DirectionalVisibilityPass directionalVisibilityPass;
+SsgiPass ssgiPass;
+// Debug HDR readback (Renderer::requestHdrCapture).
+bool hdrCaptureRequested{false};
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> hdrCaptureBuffers{};
+std::array<bool, MAX_FRAMES_IN_FLIGHT> hdrCapturePending{};
+std::vector<std::uint16_t> hdrCapturePixels;
+VkExtent2D hdrCaptureExtent{};
+bool hdrCaptureReady{false};
+// Readback of the final presented image (Renderer::requestFrameCapture).
+bool frameCaptureRequested{false};
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> frameCaptureBuffers{};
+std::array<bool, MAX_FRAMES_IN_FLIGHT> frameCapturePending{};
+std::array<VkExtent2D, MAX_FRAMES_IN_FLIGHT> frameCaptureExtents{};
+std::vector<std::uint8_t> frameCapturePixels;
+VkExtent2D frameCaptureExtent{};
+bool frameCaptureReady{false};
+DdgiPass ddgiPass;
+ClusterRayTracingScene clusterScene;
+// Mega Geometry scene shared by DDGI and ray-traced local light shadows.
+// Set whenever meshlet geometry or its heap buffers change; the cluster
+// BLASes are then rebuilt before the next trace.
+bool clusterGeometryDirty{true};
+std::uint64_t clusterTopologyRevision{~std::uint64_t{0}};
+bool ddgiTracedThisFrame{false};
+std::vector<ClusterRayTracingScene::InstanceInput> clusterInstances;
+std::vector<ClusterRayTracingScene::BlasInput> clusterBlases;
+std::vector<ClusterRayTracingScene::VariantInput> clusterVariants;
+// World bounds of each cluster scene instance; DDGI wakes probes around moves.
+std::vector<std::array<float, 6>> clusterInstanceBounds;
+// Probe-cache change detection between consecutive DDGI frames.
+std::vector<std::array<float, 6>> ddgiPreviousBounds;
+std::vector<std::array<float, 12>> ddgiPreviousTransforms;
+std::vector<std::array<float, 6>> ddgiWakeBoxes;
+std::uint64_t ddgiLightHash{};
+VkImageView ddgiEnvironmentView{VK_NULL_HANDLE};
+// Current Game View space to the clip space of the last captured SSGI
+// radiance. Built before previousGameView advances to this frame.
+Mat4 ssgiViewToPreviousClip;
+// The viewport graph traced SSGI this frame, so the lit HDR must be captured.
+bool ssgiTracedThisFrame{false};
 AccelerationStructureManager accelerationStructures;
 bool rayTracingBlasDirty{true};
 // TLAS input is reconstructed only when ECS render state changes. Each
@@ -122,8 +254,14 @@ DepthBuffer hiZDepthBuffer;
 ForwardPass & forwardPass;
 ForwardPass lightingForwardPass;
 WaterPass waterPass;
+// Transmissive materials over the lit Game View / Scene View (Hi-Z SSR).
 GlassPass glassPass;
 GlassPass sceneGlassPass;
+// Glass resources (scene snapshot with mips, depth pyramid, private depth:
+// ~40 MiB per view at 1080p) are created on the first frame that draws
+// glass, from these parameters, not for every scene.
+GlassPass::CreateInfo glassPassInfo{};
+GlassPass::CreateInfo sceneGlassPassInfo{};
 Water::VirtualWaterRenderer virtualWaterRenderer;
 Water::VirtualWaterRenderer sceneVirtualWaterRenderer;
 GraphicsPipeline & particlePipeline;
@@ -148,8 +286,21 @@ std::uint64_t reflectionProbeComponentRevision = 0;
 std::uint64_t reflectionProbeTransformRevision = 0;
 std::uint32_t reflectionProbeBufferDirtyMask = (1U << MAX_FRAMES_IN_FLIGHT) - 1U;
 std::filesystem::path environmentEquirectangularPath;
+// What the live IBL maps were built from. A scene reload (leaving Play mode,
+// undo past a snapshot) keeps them when nothing here changed: rebuilding
+// meant decoding the whole panorama again, about two seconds per reload.
+struct IblBuildKey final {
+    std::filesystem::path environment;
+    std::filesystem::file_time_type modified{};
+    std::filesystem::path library;
+    IblQuality quality{};
+    bool operator==(const IblBuildKey&) const = default;
+};
+std::optional<IblBuildKey> builtIblKey;
 // Caches belong to the opened game project, never beside the Editor executable.
 std::filesystem::path projectRoot;
+// Parsed IES light profiles by resolved path (nothing for unreadable files).
+std::unordered_map<std::string, std::optional<LightProfileTable>> iesProfileCache;
 // Terrain height input for procedural grass generation. It is kept
 // separate from material textures so compute can sample it directly.
 Texture2D grassHeightTexture;
@@ -228,6 +379,9 @@ const PbrDebugView& pbrDebugView;
 const IblQuality& iblQuality;
 const ShadowDebugView& shadowDebugView;
 const GrassRenderSettings& grassSettings;
+const SsgiSettings& ssgiSettings;
+const DdgiSettings& ddgiSettings;
+const PostProcessSettings& postProcessSettings;
 Assets::AssetManager& assetManager;
 SceneGpuResources sceneGpu;
 CameraController cameraController;
@@ -241,7 +395,6 @@ std::vector<GPUMaterialData>& materials;
 std::uint32_t& materialSlots;
 std::uint64_t& lastTransformRevision;
 std::uint64_t& lastMeshRendererRevision;
-std::uint64_t lastGlassDestructionRevision{std::numeric_limits<std::uint64_t>::max()};
 std::uint64_t& lastTerrainGrassRevision;
 std::uint64_t& lastParentRevision;
 std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyTransforms;
@@ -259,11 +412,26 @@ Buffer meshletBuffer;
 Buffer meshletClusterBuffer;
 Buffer meshletVertexBuffer;
 Buffer meshletTriangleBuffer;
-Buffer meshletIndexBuffer;
 std::uint32_t globalMeshletCount{};
 std::uint32_t meshletVisibleCapacity{};
+// Meshlet draw streams pack material slots like drawBinOffsets: slot s owns
+// commands [meshletBinOffsets[s], meshletBinOffsets[s + 1]). They follow the
+// 32 per-slot draw counts in meshletIndexedDrawCountBuffers (meshlet_build_indexed).
+std::array<std::uint32_t, Culling::DrawBinOffsetCount> meshletBinOffsets{};
+// Commands meshletIndexedIndirectBuffers hold for packed slots (excluding
+// the maxDrawCount tail vkCmdDrawIndexedIndirectCount requires).
+std::uint32_t meshletBinBudget{};
 // The indexed meshlet forward path consumes visibleMeshletBuffers.
 bool meshletForwardPathActive = true;
+// Set whenever the material table changes; the depth prepass then re-checks
+// whether any material is displaced (see ForwardPass::useReducedShaders).
+bool displacedMaterialsDirty = true;
+// Changes whenever something the depth buffer shows may have changed apart
+// from the camera: a renderable's transform, material or culling data, mesh
+// geometry, or the scene itself. The VSM page-request cache keys on it
+// instead of the registry-wide revisions, which also move with the camera
+// entity and invalidated the cache on every frame of a still view.
+std::uint64_t depthContentRevision = 0;
 // Geometry Heap. Mesh ranges are never derived from dense ECS order.
 // MeshId is a stable indirection handle; the allocation below is its
 // current physical location and may therefore be recycled or moved.
@@ -350,6 +518,10 @@ std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletIndexedIndirectBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletIndexedDrawCountBuffers;
 std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> meshletIndexedIndirectDraws;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletCullingUniformBuffers;
+// Mesh-shader forward path: per-slot visible meshlet entries (packed like
+// meshletBinOffsets) and one VkDrawMeshTasksIndirectCommandEXT per slot.
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletDrawListBuffers;
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletDrawCommandBuffers;
 // GPU-driven grass compaction: count -> prefix -> scatter -> indirect.
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinCountBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinOffsetBuffers;
@@ -464,6 +636,27 @@ std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceTransformBuffers;
 // Parallel identity stream: transform compaction is page-local and
 // must not discard the source GPU-scene instance ID.
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowVisibleInstanceBuffers;
+// Per-meshlet VSM caster refinement (shadow_meshlet_refine.slang): per page,
+// the objects gpu_culling hands over, and the meshlet draws built from them.
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowMeshletObjectBuffers;
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowMeshletObjectCountBuffers;
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowMeshletCommandBuffers;
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowMeshletCommandCountBuffers;
+// Mesh-shader casters: one VkDrawMeshTasksIndirectCommandEXT per page.
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowMeshletTaskCommandBuffers;
+std::uint32_t shadowMeshletPassCapacity = 0;
+// The same per-page lists for the two-sided (foliage, alpha-tested) stream.
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedMeshletObjectBuffers;
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedMeshletObjectCountBuffers;
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedMeshletCommandBuffers;
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedMeshletCommandCountBuffers;
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedMeshletTaskCommandBuffers;
+std::uint32_t shadowTwoSidedMeshletPassCapacity = 0;
+// Per-page capacities of the VSM caster lists, [0] single-sided and [1]
+// two-sided: commands (shadow casters of that category) and compact
+// instance transforms. Each of the 256 page slots reserves this much.
+std::array<std::uint32_t, 2> shadowPageCasterCapacity{};
+std::array<std::uint32_t, 2> shadowPageInstanceCapacity{};
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedInstanceTransformBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedVisibleInstanceBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceTransformCountBuffers;
@@ -506,6 +699,8 @@ std::array<Buffer, MAX_FRAMES_IN_FLIGHT> clusteredLightIndexBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightRangeBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightIndexBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> clusteredLightingUniformBuffers;
+// Every point and spot light of the frame, read by cluster culling and forward lighting.
+std::array<Buffer, MAX_FRAMES_IN_FLIGHT> localLightBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightingUniformBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& drawCountBuffers = viewRenderScratch.drawCountBuffers;
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& foliageDrawCountBuffers = viewRenderScratch.foliageDrawCountBuffers;
@@ -539,6 +734,9 @@ VkDescriptorSetLayout instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout meshletCullingDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout meshletDispatchDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout meshletIndirectDescriptorSetLayout = VK_NULL_HANDLE;
+// Set 1 of the mesh-shader forward pipelines (MeshletDraw.slang). Created
+// once with the forward passes, which embed it in their pipeline layouts.
+VkDescriptorSetLayout meshletDrawDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout grassBuildDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout grassDispatchBuildDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout grassPrefixDescriptorSetLayout = VK_NULL_HANDLE;
@@ -554,6 +752,7 @@ VkDescriptorSetLayout grassShadowPageCullDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout clusteredLightingDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout vsmPageMarkingDescriptorSetLayout = VK_NULL_HANDLE;
 VkDescriptorSetLayout vsmPageCompactDescriptorSetLayout = VK_NULL_HANDLE;
+VkDescriptorSetLayout shadowMeshletRefineDescriptorSetLayout = VK_NULL_HANDLE;
 VkPipelineLayout hiZCopyPipelineLayout = VK_NULL_HANDLE;
 VkPipelineLayout hiZReducePipelineLayout = VK_NULL_HANDLE;
 VkPipelineLayout cullingPipelineLayout = VK_NULL_HANDLE;
@@ -576,6 +775,7 @@ VkPipelineLayout grassShadowPageCullPipelineLayout = VK_NULL_HANDLE;
 VkPipelineLayout clusteredLightingPipelineLayout = VK_NULL_HANDLE;
 VkPipelineLayout vsmPageMarkingPipelineLayout = VK_NULL_HANDLE;
 VkPipelineLayout vsmPageCompactPipelineLayout = VK_NULL_HANDLE;
+VkPipelineLayout shadowMeshletRefinePipelineLayout = VK_NULL_HANDLE;
 VkPipeline hiZCopyPipeline = VK_NULL_HANDLE;
 VkPipeline hiZReducePipeline = VK_NULL_HANDLE;
 VkPipeline cullingPipeline = VK_NULL_HANDLE;
@@ -583,6 +783,10 @@ VkPipeline instanceCullingPipeline = VK_NULL_HANDLE;
 VkPipeline meshletCullingPipeline = VK_NULL_HANDLE;
 VkPipeline meshletDispatchPipeline = VK_NULL_HANDLE;
 VkPipeline meshletIndirectPipeline = VK_NULL_HANDLE;
+// meshlet_build_mesh_draws / meshlet_build_mesh_commands; they reuse the
+// meshlet-indirect and meshlet-dispatch pipeline layouts.
+VkPipeline meshletDrawBinPipeline = VK_NULL_HANDLE;
+VkPipeline meshletDrawCommandPipeline = VK_NULL_HANDLE;
 VkPipeline grassBuildPipeline = VK_NULL_HANDLE;
 VkPipeline grassDispatchBuildPipeline = VK_NULL_HANDLE;
 VkPipeline grassPrefixPipeline = VK_NULL_HANDLE;
@@ -599,14 +803,27 @@ VkPipeline grassShadowPageCullPipeline = VK_NULL_HANDLE;
 VkPipeline clusteredLightingPipeline = VK_NULL_HANDLE;
 VkPipeline vsmPageMarkingPipeline = VK_NULL_HANDLE;
 VkPipeline vsmPageCompactPipeline = VK_NULL_HANDLE;
+VkPipeline shadowMeshletRefinePipeline = VK_NULL_HANDLE;
+// Mesh-shader casters: the refine variant listing meshlets, and the pass
+// deriving the per-page mesh-task commands from its counts.
+VkPipeline shadowMeshletMeshRefinePipeline = VK_NULL_HANDLE;
+VkPipeline shadowMeshletMeshCommandPipeline = VK_NULL_HANDLE;
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> instanceCullSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletCullSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletDispatchSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletIndirectSets{};
+std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletDrawBinSets{};
+std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletDrawCommandSets{};
+std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletDrawSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> clusteredLightingSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightingSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> vsmPageMarkingSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> vsmPageCompactSets{};
+std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> shadowMeshletRefineSets{};
+// Set 1 of the mesh-shader caster pipeline (shadow_meshlet_mesh.slang).
+std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> shadowMeshletDrawSets{};
+std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedMeshletRefineSets{};
+std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedMeshletDrawSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassBuildSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassVisibleDispatchBuildSets{};
 std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassStreamDispatchBuildSets{};
@@ -631,6 +848,10 @@ std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPacke
 std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedScatterSets{};
 std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedFinalizeSets{};
 std::vector<Culling::GPUObjectData> gpuObjects;
+// First command of each material program slot in the binned indirect
+// streams, for the single-sided [0] and two-sided/foliage [1] lists. Slots
+// are packed back to back, sized by their object counts.
+std::array<std::array<std::uint32_t, Culling::DrawBinOffsetCount>, 2> drawBinOffsets{};
 // Old and new bounds of renderables whose shadow contribution changed
 // in this frame. ShadowPass evicts only overlapping virtual pages
 // instead of rebuilding the complete atlas for one moving body/blade.
@@ -697,6 +918,9 @@ std::uint64_t renderGraphComputeTimelineValue{};
 VkSemaphore renderGraphTransferTimeline{};
 std::uint64_t renderGraphTransferTimelineValue{};
 bool presentationGraphSubmittedThisFrame{};
+// Set once vkAcquireNextImageKHR has succeeded for the current frame slot.
+bool swapchainImageAcquired{};
+std::uint32_t acquiredImageIndex{};
 // Final timeline values of the viewport graph, joined by the presentation submission.
 std::array<std::uint64_t, 3> viewportGraphCompletion{};
 
@@ -748,14 +972,14 @@ static constexpr uint8_t allFrameBits = static_cast<uint8_t>((1u << MAX_FRAMES_I
            sameVector(lhs.scale, rhs.scale);
 }
 
-static void copyGlassBackground(VkCommandBuffer buffer, VkImage source, VkImage snapshot, VkExtent2D extent,
+static void copySceneBackground(VkCommandBuffer buffer, VkImage source, VkImage snapshot, VkExtent2D extent,
                                 VkImageLayout sourceLayout) {
     VkImageMemoryBarrier2 before[2]{};
     for (auto& barrier : before) {
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        // The scene colour and the glass snapshot are only produced or
+        // The scene colour and its snapshot are only produced or
         // consumed by raster, compute and transfer work.
         barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -843,6 +1067,7 @@ void markDirty(
     const std::size_t index, uint8_t RenderableRecord::* dirtyFrames,
     std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyIndices) { // NOLINT(readability-named-parameter)
     RenderableRecord& record = renderables[index];
+    ++depthContentRevision;
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
         const uint8_t bit = frameBit(frame);
         if ((record.*dirtyFrames & bit) == 0) {
@@ -852,19 +1077,3 @@ void markDirty(
     record.*dirtyFrames |= allFrameBits;
 }
 
-struct GlassAtlasOwner {
-    Entity entity{NullEntity};
-    std::uint64_t uuid{};
-    bool operator==(const GlassAtlasOwner&) const = default;
-};
-std::array<GlassAtlasOwner, 512> glassAtlasOwners{};
-unsigned glassAtlasPaneCount{};
-// synchronizeGlassAtlasSlots() runs from both renderFrame() and
-// updateRenderableBuffers(). The slot layout only depends on these
-// revisions, so the second call per frame becomes a handful of counter
-// reads instead of rescanning every pane and rebuilding the slot map.
-const Registry* glassAtlasSyncedRegistry = nullptr;
-std::uint64_t glassAtlasStructureRevision = std::numeric_limits<std::uint64_t>::max();
-std::uint64_t glassAtlasComponentRevision = std::numeric_limits<std::uint64_t>::max();
-std::uint64_t glassAtlasMeshRevision = std::numeric_limits<std::uint64_t>::max();
-std::uint64_t glassAtlasUuidRevision = std::numeric_limits<std::uint64_t>::max();

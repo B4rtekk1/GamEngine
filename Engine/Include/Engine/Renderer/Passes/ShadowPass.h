@@ -24,8 +24,19 @@ class GPUCullingPass;
 class IndexedIndirectDrawCount;
 } // namespace Culling
 
+class GpuTimestampProfiler;
+
 class ShadowPass final {
   public:
+    /**
+     * Value stored in a dirty object's localAabbMin.w when its bounds move
+     * every frame without an ECS edit (wind-driven grass). Such bounds always
+     * invalidate clip level 0, but coarser levels only every 2/4/8 frames:
+     * their texels are large enough that per-frame sway is barely visible,
+     * and they cover most of the cached pages.
+     */
+    static constexpr float AnimatedDirtyBoundsFlag = 1.0F;
+
     ShadowPass() {
         invalidateCache();
     }
@@ -69,8 +80,65 @@ class ShadowPass final {
     /** Binds the full-resolution GTAO visibility texture for one safe frame slot. */
     void setGtaoTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
     void setContactShadowTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
+    void setSsgiTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
+    /** Binds the frame slot's buffer of every point and spot light (LocalLightGPU records). */
+    void setLocalLights(std::uint32_t frameIndex, VkBuffer lights) const;
+    /** Game View's depth-bounded tile light lists (TileLightCullingPass). */
+    void setTileLights(std::uint32_t frameIndex, VkBuffer lists) const;
+    /** Binds the frame slot's LocalLightShadowPass mask (sampled as uint2). */
+    void setLocalShadowMask(std::uint32_t frameIndex, const VkDescriptorImageInfo& mask) const;
+    void setDdgiResources(std::uint32_t frameIndex, const VkDescriptorImageInfo& irradiance,
+                          const VkDescriptorImageInfo& distance, VkBuffer volume, VkDeviceSize volumeSize) const;
+    /** Adds the ray generation stage to the bindings DDGI shades with. Call before create(). */
+    void setRayTracingStages(bool enabled) noexcept {
+        rayTracingStages_ = enabled;
+    }
+    /** Adds the mesh stage to every binding the vertex stage reads, for the
+     *  mesh-shader forward pipelines. Call before create(). */
+    void setMeshShaderStages(bool enabled) noexcept {
+        meshShaderStages_ = enabled;
+    }
+
+    /** Set 1 of the mesh-shader caster pipeline (Common/MeshletDraw.slang's
+     *  layout); null keeps meshlet casters on indexed draws. Call before create(). */
+    void setMeshletDrawLayout(VkDescriptorSetLayout layout) noexcept {
+        meshletDrawLayout_ = layout;
+    }
 
     void destroy() noexcept;
+
+    /// Meshlet draws one VSM page may emit; objects beyond it draw whole.
+    static constexpr std::uint32_t MeshletDrawsPerPage = 4096;
+    /** Workgroups sharing one page's object list in the meshlet refine (shader ObjectSlices). */
+    static constexpr std::uint32_t MeshletRefineObjectSlices = 16;
+
+    /**
+     * Per-meshlet caster refinement of one VSM stream (one-sided, or the
+     * two-sided foliage stream). Sections with meshlets are culled per
+     * meshlet against each page and drawn from the expanded meshlet index
+     * buffer, or with mesh tasks, instead of whole.
+     */
+    struct MeshletStream final {
+        VkPipeline refinePipeline = VK_NULL_HANDLE;
+        VkPipelineLayout refineLayout = VK_NULL_HANDLE;
+        VkDescriptorSet refineSet = VK_NULL_HANDLE;
+        VkBuffer objectCounts = VK_NULL_HANDLE;
+        VkBuffer commands = VK_NULL_HANDLE;
+        VkBuffer commandCounts = VK_NULL_HANDLE;
+        /// Index buffer the meshlet commands index (the shared index heap).
+        VkBuffer meshletIndexBuffer = VK_NULL_HANDLE;
+        std::uint32_t passCapacity = 0;
+        std::uint32_t meshletCount = 0;
+        // Mesh-shader casters (Shadow/shadow_meshlet_mesh.slang); all four
+        // set, the stream lists meshlets and draws them with mesh tasks.
+        /// shadow_meshlet_refine with SHADOW_MESH_TASKS.
+        VkPipeline meshRefinePipeline = VK_NULL_HANDLE;
+        /// shadow_meshlet_build_mesh_commands, on refineLayout and refineSet.
+        VkPipeline meshCommandPipeline = VK_NULL_HANDLE;
+        /// One VkDrawMeshTasksIndirectCommandEXT per page.
+        VkBuffer meshTaskCommands = VK_NULL_HANDLE;
+        VkDescriptorSet meshDrawSet = VK_NULL_HANDLE;
+    };
 
     void record(VkCommandBuffer commandBuffer, const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices,
                 std::uint32_t updateMask, VkBuffer vertexBuffer, VkBuffer instanceBuffer, VkBuffer indexBuffer,
@@ -80,7 +148,8 @@ class ShadowPass final {
                 const Culling::IndexedIndirectDrawCount& twoSidedIndirectDraw, std::uint32_t objectCount,
                 VkDescriptorSet grassDescriptorSet = VK_NULL_HANDLE,
                 const Culling::IndexedIndirectDrawCount* grassIndirectDraw = nullptr,
-                std::uint32_t grassCommandsPerPage = 0);
+                std::uint32_t grassCommandsPerPage = 0, const MeshletStream* meshletStream = nullptr,
+                const MeshletStream* twoSidedMeshletStream = nullptr);
 
     /** Exact page transforms used by record(), in its current page order.
      * The grass VSM culler consumes these before the render pass. */
@@ -96,6 +165,25 @@ class ShadowPass final {
                       std::uint32_t pageUpdateBudget = ShadowMap::PhysicalPageCount);
 
     void invalidateCache() noexcept;
+
+    /** What the last preparePages() did to the page cache. */
+    struct CacheStatistics final {
+        std::uint32_t newPages{};
+        std::uint32_t refreshedPages{};
+        std::uint32_t dirtyMarkedPages{};
+        std::uint32_t levelsScrolled{};
+        std::uint32_t levelsInvalidated{};
+        std::uint32_t deferredRequests{};
+        std::uint32_t residentPages{};
+    };
+    [[nodiscard]] const CacheStatistics& cacheStatistics() const noexcept {
+        return cacheStatistics_;
+    }
+    /** Optional GPU zones around the cull, refine and raster phases of record(). */
+    void setProfiler(const GpuTimestampProfiler* profiler, std::uint32_t frameIndex) noexcept {
+        profiler_ = profiler;
+        profilerFrame_ = frameIndex;
+    }
     [[nodiscard]] bool hasPendingPageUpdates() const noexcept {
         return pageUpdatesPending_;
     }
@@ -136,6 +224,9 @@ class ShadowPass final {
     // silently using the generic seven-binding contract.
     static constexpr std::uint32_t GrassClusterBinding = 3;
     static constexpr std::uint32_t GrassDeformationBinding = 7;
+    static constexpr std::uint32_t LocalLightBinding = 24;
+    static constexpr std::uint32_t LocalShadowMaskBinding = 25;
+    static constexpr std::uint32_t TileLightBinding = 26;
 
   private:
     struct PhysicalPage {
@@ -168,6 +259,9 @@ class ShadowPass final {
     std::array<Mat4, ShadowMap::ClipLevelCount> cachedClipMatrices_{};
     std::array<bool, ShadowMap::ClipLevelCount> cachedClipMatricesValid_{};
     std::vector<std::uint32_t> pagesToRender_;
+    CacheStatistics cacheStatistics_{};
+    const GpuTimestampProfiler* profiler_{};
+    std::uint32_t profilerFrame_{};
     // Requests that could not be assigned a physical tile within the
     // per-frame update budget. Keep them until they are rendered instead
     // of depending on a later GPU feedback pass to rediscover them.
@@ -181,6 +275,9 @@ class ShadowPass final {
     // render into the renderer-owned physical atlas.
     ShadowMap* shadowMap_{nullptr};
     VkDescriptorSetLayout descriptorSetLayout_{VK_NULL_HANDLE};
+    bool rayTracingStages_{false};
+    bool meshShaderStages_{false};
+    VkDescriptorSetLayout meshletDrawLayout_{VK_NULL_HANDLE};
     VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> descriptorSets_;
     std::vector<VkDescriptorSet> grassDescriptorSets_;
@@ -205,6 +302,12 @@ class ShadowPass final {
     VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};
     VkPipeline pipeline_{VK_NULL_HANDLE};
     VkPipeline opaquePipeline_{VK_NULL_HANDLE};
+    // Mesh-shader twin of opaquePipeline_ for the meshlet stream.
+    VkPipelineLayout meshletMeshPipelineLayout_{VK_NULL_HANDLE};
+    VkPipeline meshletMeshPipeline_{VK_NULL_HANDLE};
+    /// Two-sided stream: shadow_meshlet_mesh_alpha.spv, no culling.
+    VkPipeline meshletAlphaMeshPipeline_{VK_NULL_HANDLE};
+    PFN_vkCmdDrawMeshTasksIndirectEXT drawMeshTasksIndirect_{nullptr};
     VkPipeline twoSidedPipeline_{VK_NULL_HANDLE};
     VkPipeline grassPipeline_{VK_NULL_HANDLE};
 };

@@ -58,9 +58,8 @@ void WaterPass::create(const VkDevice device, const VkFormat colorFormat, const 
         // vertex attribute robustness/maintenance9, even when a variant does
         // not visibly use a value in its final fragment output.
         {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
-        {3, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, normal)},
+        {3, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, tangentFrame)},
         {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
-        {9, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, tangent)},
     };
     pipeline_.create(device, options);
     samples_ = samples;

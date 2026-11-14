@@ -1,5 +1,6 @@
 #include "Engine/Scene/TransformSystem.h"
 
+#include "Engine/Math/MatrixDecompose.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -18,11 +19,28 @@ struct HierarchyCache {
     std::uint32_t traversalGeneration{};
     bool initialized{false};
     std::unordered_map<Entity, std::vector<Entity>> children;
+    // Indexed by entity index. Most changed transforms are leaves; checking
+    // this byte skips a hash lookup in `children` for each of them.
+    std::vector<std::uint8_t> hasChildren;
     std::vector<std::uint32_t> dirtyGeneration;
     std::vector<std::uint32_t> resolvedGeneration;
     std::vector<std::uint32_t> visitingGeneration;
     std::vector<Entity> changedWorldTransforms;
+    // Every world-matrix change since logStart, tagged with its update's
+    // serial (see worldTransformChangesSince).
+    std::vector<TransformSystem::WorldTransformChange> changeLog;
+    std::uint64_t changeSerial{};
+    std::uint64_t logStart{};
+    bool logStarted{false};
+    // After trimming, the oldest retained update may have lost entries.
+    bool logStartPartial{false};
 };
+
+// Serials are global, so a rebuilt cache (new registry contents) never reuses
+// one a consumer stored before.
+std::uint64_t nextChangeSerial = 0;
+// Bounds the log; a consumer further behind rescans everything.
+constexpr std::size_t MaxChangeLogEntries = std::size_t{1} << 20;
 
 // Runtime-only adjacency avoids rebuilding UUID lookup and hierarchy on every tick.
 //
@@ -53,11 +71,13 @@ void rebuildHierarchy(Registry& registry, HierarchyCache& cache) {
     registry.view<UUIDComponent>(
         [&](const Entity entity, const UUIDComponent& uuid) { byUuid.emplace(uuid.value, entity); });
     cache.children.clear();
+    cache.hasChildren.assign(registry.entityIndexCapacity(), 0);
     registry.view<ParentComponent>([&](const Entity entity, ParentComponent& link) {
         const auto parent = byUuid.find(link.parentUuid);
         link.runtimeParent = parent == byUuid.end() ? NullEntity : parent->second;
         if (link.runtimeParent != NullEntity && link.runtimeParent != entity) {
             cache.children[link.runtimeParent].push_back(entity);
+            cache.hasChildren[entityIndex(link.runtimeParent)] = 1;
         }
     });
     cache.uuidRevision = registry.componentRevision<UUIDComponent>();
@@ -67,10 +87,8 @@ void rebuildHierarchy(Registry& registry, HierarchyCache& cache) {
 void decomposeWorldTrs(const Transform& transform) noexcept {
     glm::vec3 scale{};
     glm::vec3 translation{};
-    glm::vec3 skew{};
     glm::quat rotation{};
-    glm::vec4 perspective{};
-    if (glm::decompose(transform.cachedWorldMatrix.native(), scale, rotation, translation, skew, perspective)) {
+    if (decomposeAffineTrs(transform.cachedWorldMatrix.native(), scale, rotation, translation)) {
         transform.cachedWorldRotation = Vec3{glm::degrees(glm::eulerAngles(glm::conjugate(rotation)))};
         transform.cachedWorldScale = Vec3{scale};
     } else {
@@ -160,12 +178,29 @@ void TransformSystem::updateDirty(Registry& registry) {
         return;
     }
     cache.changedWorldTransforms.clear();
+    const std::uint64_t serial = ++nextChangeSerial;
+    if (!cache.logStarted) {
+        cache.logStarted = true;
+        cache.logStart = serial;
+    }
+    cache.changeSerial = serial;
+    if (cache.changeLog.size() > MaxChangeLogEntries) {
+        cache.changeLog.erase(cache.changeLog.begin(),
+                              cache.changeLog.begin() + static_cast<std::ptrdiff_t>(cache.changeLog.size() / 2));
+        cache.logStart = cache.changeLog.front().serial;
+        cache.logStartPartial = true;
+    }
     const Registry& readRegistry = registry;
 
+    // One tryGet per component replaces the former has()+get() pairs, each
+    // of which re-validated the entity and re-probed its pool.
     const auto resolve = [&](auto&& self, const Entity entity) -> void {
         const std::uint32_t index = entityIndex(entity);
-        if (!registry.valid(entity) || !registry.has<Transform>(entity) || index >= cache.resolvedGeneration.size() ||
-            cache.resolvedGeneration[index] == generation) {
+        if (index >= cache.resolvedGeneration.size() || cache.resolvedGeneration[index] == generation) {
+            return;
+        }
+        Transform* const transformPointer = registry.tryGet<Transform>(entity);
+        if (transformPointer == nullptr) {
             return;
         }
         if (cache.visitingGeneration[index] == generation) {
@@ -173,19 +208,18 @@ void TransformSystem::updateDirty(Registry& registry) {
         }
         cache.visitingGeneration[index] = generation;
 
-        Transform& transform = registry.get<Transform>(entity);
+        Transform& transform = *transformPointer;
         Entity parent = NullEntity;
-        if (readRegistry.has<ParentComponent>(entity)) {
-            parent = readRegistry.get<ParentComponent>(entity).runtimeParent;
-            if (parent != entity && readRegistry.has<Transform>(parent)) {
+        const Transform* parentTransform = nullptr;
+        if (const auto* link = readRegistry.tryGet<ParentComponent>(entity); link != nullptr) {
+            parent = link->runtimeParent;
+            parentTransform = parent != entity ? readRegistry.tryGet<Transform>(parent) : nullptr;
+            if (parentTransform != nullptr) {
                 self(self, parent);
             } else {
                 parent = NullEntity;
             }
         }
-        const Transform* parentTransform = parent != NullEntity && readRegistry.has<Transform>(parent)
-                                               ? &readRegistry.get<Transform>(parent)
-                                               : nullptr;
         const std::uint64_t parentRevision = parentTransform == nullptr ? 0 : parentTransform->worldRevision();
         const bool changed = cache.dirtyGeneration[index] == generation || !transform.worldCacheValid ||
                              transform.cachedParent != parent || transform.cachedParentWorldRevision != parentRevision;
@@ -201,13 +235,14 @@ void TransformSystem::updateDirty(Registry& registry) {
             transform.worldCacheValid = true;
             transform.worldTrsValid = false;
             cache.changedWorldTransforms.push_back(entity);
+            cache.changeLog.push_back({serial, entity});
         }
         cache.visitingGeneration[index] = 0;
         cache.resolvedGeneration[index] = generation;
         // Resolving an unchanged ancestor must not visit all its other
         // branches. Explicitly dirty descendants are resolved by the
         // outer work list; only a changed world matrix propagates here.
-        if (changed) {
+        if (changed && index < cache.hasChildren.size() && cache.hasChildren[index] != 0) {
             if (const auto children = cache.children.find(entity); children != cache.children.end()) {
                 for (const Entity child : children->second) {
                     self(self, child);
@@ -232,6 +267,28 @@ std::span<const Entity> TransformSystem::changedWorldTransforms(const Registry& 
         return {};
     }
     return cache->second.changedWorldTransforms;
+}
+
+std::uint64_t TransformSystem::worldTransformSerial(const Registry& registry) {
+    const auto cache = caches.find(registry.instanceId());
+    return cache == caches.end() ? 0 : cache->second.changeSerial;
+}
+
+std::span<const TransformSystem::WorldTransformChange>
+TransformSystem::worldTransformChangesSince(const Registry& registry, const std::uint64_t serial, bool& complete) {
+    const auto cache = caches.find(registry.instanceId());
+    if (cache == caches.end() || !cache->second.logStarted) {
+        // Nothing resolved yet; the first update reports every transform.
+        complete = true;
+        return {};
+    }
+    const HierarchyCache& entry = cache->second;
+    complete = entry.logStartPartial ? serial >= entry.logStart : serial + 1 >= entry.logStart;
+    const auto first = std::upper_bound(entry.changeLog.begin(), entry.changeLog.end(), serial,
+                                        [](const std::uint64_t value, const WorldTransformChange& change) {
+                                            return value < change.serial;
+                                        });
+    return {first, entry.changeLog.end()};
 }
 
 const Mat4& TransformSystem::worldMatrix(const Registry& registry, const Entity entity) {

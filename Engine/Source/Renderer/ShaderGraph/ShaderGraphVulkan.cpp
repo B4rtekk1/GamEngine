@@ -6,9 +6,11 @@
 #include <algorithm>
 #include <format>
 #include <fstream>
+#include <initializer_list>
 #include <regex>
 #include <stdexcept>
 #include <unordered_set>
+#include <vector>
 
 namespace Engine {
 namespace {
@@ -128,6 +130,10 @@ void appendSlangDependencyTree(std::string& input, const std::filesystem::path& 
 }
 } // namespace
 
+std::filesystem::path meshShaderGraphModule(const std::filesystem::path& module) {
+    return module.parent_path() / (module.stem().string() + "_meshshader" + module.extension().string());
+}
+
 ShaderProgramId ShaderGraphSlangCompiler::makeProgramId(const std::string_view generatedSurface) noexcept {
     // FNV-1a over generated code means a changed literal, topology, or
     // property expression cannot accidentally reuse a stale VkPipeline.
@@ -189,11 +195,12 @@ struct MaterialSurface
         const std::filesystem::path includeDirectory = forwardTemplate.parent_path().parent_path();
         std::string cacheInput;
         // Bump this if the generated declarations or invocation contract changes.
-        appendCacheInput(cacheInput, "shader-graph-cache-schema", "1");
+        appendCacheInput(cacheInput, "shader-graph-cache-schema", "2");
         appendCacheInput(cacheInput, "generated-surface", result.slang);
         appendCacheInput(cacheInput, "compile-flags",
                          std::string{"-target=spirv;-profile=glsl_460;-emit-spirv-directly;"} +
-                             ShaderGraphDebugInfoFlag + ";-matrix-layout-row-major;FORWARD_OUTPUT_VELOCITY=0,1");
+                             ShaderGraphDebugInfoFlag +
+                             ";-matrix-layout-row-major;FORWARD_OUTPUT_VELOCITY=0,1;FORWARD_MESH_SHADER=0,1");
         // Hash the compiler binary rather than querying --version: this avoids
         // an extra process on a warm start and invalidates the cache for every
         // compiler-version change.
@@ -207,7 +214,11 @@ struct MaterialSurface
         program.spirvPath = generatedDirectory / (stem + ".spv");
         program.noVelocitySpirvPath = generatedDirectory / (stem + "_no_velocity.spv");
 
-        if (isUsableCachedOutput(program.spirvPath) && isUsableCachedOutput(program.noVelocitySpirvPath)) {
+        program.meshSpirvPath = meshShaderGraphModule(program.spirvPath);
+        program.meshNoVelocitySpirvPath = meshShaderGraphModule(program.noVelocitySpirvPath);
+
+        if (isUsableCachedOutput(program.spirvPath) && isUsableCachedOutput(program.noVelocitySpirvPath) &&
+            isUsableCachedOutput(program.meshSpirvPath) && isUsableCachedOutput(program.meshNoVelocitySpirvPath)) {
             return result;
         }
 
@@ -218,104 +229,72 @@ struct MaterialSurface
         const std::string compiler = slangcPath.string();
         const std::string sourcePath = program.slangPath.string();
         const std::string includeDirectoryString = includeDirectory.string();
-        const std::string outputPath = program.spirvPath.string();
-        const std::string noVelocityOutputPath = program.noVelocitySpirvPath.string();
-        const char* arguments[] = {compiler.c_str(),
-                                   sourcePath.c_str(),
-                                   "-target",
-                                   "spirv",
-                                   "-profile",
-                                   "glsl_460",
-                                   "-emit-spirv-directly",
-                                   ShaderGraphDebugInfoFlag,
-                                   "-matrix-layout-row-major",
-                                   "-I",
-                                   includeDirectoryString.c_str(),
-                                   "-o",
-                                   outputPath.c_str(),
-                                   nullptr};
-
-        const SDL_PropertiesID properties = SDL_CreateProperties();
-        if (!properties) {
-            throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
-        }
-
-        SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, static_cast<void*>(arguments));
-        SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
-        SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
-
-        SDL_Process* process = SDL_CreateProcessWithProperties(properties);
-        SDL_DestroyProperties(properties);
-        if (!process) {
-            throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
-        }
-
-        size_t outputSize = 0;
-        int exitCode = -1;
-        void* processOutput = SDL_ReadProcess(process, &outputSize, &exitCode);
-        std::string compilerOutput;
-        if (processOutput) {
-            compilerOutput.assign(static_cast<const char*>(processOutput), outputSize);
-            SDL_free(processOutput);
-        }
-        SDL_DestroyProcess(process);
-
-        if (exitCode != 0) {
-            std::string message = "slangc failed while compiling generated Shader Graph module: " + slangcPath.string();
-            if (!compilerOutput.empty()) {
-                message += "\n\n" + compilerOutput;
-            } else {
-                message += "\nNo compiler output was captured.";
+        // Runs slangc for one module; false (with a diagnostic) on failure.
+        const auto compileModule = [&](const std::filesystem::path& output, const char* const profile,
+                                       const std::initializer_list<const char*> defines, const char* const what) {
+            const std::string outputPath = output.string();
+            std::vector<const char*> arguments{compiler.c_str(),
+                                               sourcePath.c_str(),
+                                               "-target",
+                                               "spirv",
+                                               "-profile",
+                                               profile,
+                                               "-emit-spirv-directly",
+                                               ShaderGraphDebugInfoFlag,
+                                               "-matrix-layout-row-major",
+                                               "-I",
+                                               includeDirectoryString.c_str()};
+            for (const char* const define : defines) {
+                arguments.push_back("-D");
+                arguments.push_back(define);
             }
-            result.diagnostics.push_back({std::move(message), {}});
-            return result;
-        }
+            arguments.push_back("-o");
+            arguments.push_back(outputPath.c_str());
+            arguments.push_back(nullptr);
 
-        const char* noVelocityArguments[] = {compiler.c_str(),
-                                             sourcePath.c_str(),
-                                             "-target",
-                                             "spirv",
-                                             "-profile",
-                                             "glsl_460",
-                                             "-emit-spirv-directly",
-                                             ShaderGraphDebugInfoFlag,
-                                             "-matrix-layout-row-major",
-                                             "-I",
-                                             includeDirectoryString.c_str(),
-                                             "-D",
-                                             "FORWARD_OUTPUT_VELOCITY=0",
-                                             "-o",
-                                             noVelocityOutputPath.c_str(),
-                                             nullptr};
-        const SDL_PropertiesID noVelocityProperties = SDL_CreateProperties();
-        if (!noVelocityProperties) {
-            throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
-        }
-        SDL_SetPointerProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
-                               static_cast<void*>(noVelocityArguments));
-        SDL_SetNumberProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
-        SDL_SetBooleanProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
-        SDL_Process* noVelocityProcess = SDL_CreateProcessWithProperties(noVelocityProperties);
-        SDL_DestroyProperties(noVelocityProperties);
-        if (!noVelocityProcess) {
-            throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
-        }
-        size_t noVelocityOutputSize = 0;
-        int noVelocityExitCode = -1;
-        void* noVelocityProcessOutput = SDL_ReadProcess(noVelocityProcess, &noVelocityOutputSize, &noVelocityExitCode);
-        std::string noVelocityCompilerOutput;
-        if (noVelocityProcessOutput) {
-            noVelocityCompilerOutput.assign(static_cast<const char*>(noVelocityProcessOutput), noVelocityOutputSize);
-            SDL_free(noVelocityProcessOutput);
-        }
-        SDL_DestroyProcess(noVelocityProcess);
-        if (noVelocityExitCode != 0) {
+            const SDL_PropertiesID properties = SDL_CreateProperties();
+            if (!properties)
+                throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
+            SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
+                                   static_cast<void*>(arguments.data()));
+            SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+            SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
+            SDL_Process* process = SDL_CreateProcessWithProperties(properties);
+            SDL_DestroyProperties(properties);
+            if (!process)
+                throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
+
+            size_t outputSize = 0;
+            int exitCode = -1;
+            void* processOutput = SDL_ReadProcess(process, &outputSize, &exitCode);
+            std::string compilerOutput;
+            if (processOutput) {
+                compilerOutput.assign(static_cast<const char*>(processOutput), outputSize);
+                SDL_free(processOutput);
+            }
+            SDL_DestroyProcess(process);
+            if (exitCode == 0)
+                return true;
             std::string message =
-                "slangc failed while compiling color-only generated Shader Graph module: " + slangcPath.string();
-            if (!noVelocityCompilerOutput.empty())
-                message += "\n\n" + noVelocityCompilerOutput;
+                std::string{"slangc failed while compiling "} + what + " Shader Graph module: " + slangcPath.string();
+            message += compilerOutput.empty() ? "\nNo compiler output was captured." : "\n\n" + compilerOutput;
             result.diagnostics.push_back({std::move(message), {}});
-        }
+            return false;
+        };
+
+        if (!compileModule(program.spirvPath, "glsl_460", {}, "generated"))
+            return result;
+        if (!compileModule(program.noVelocitySpirvPath, "glsl_460", {"FORWARD_OUTPUT_VELOCITY=0"},
+                           "color-only generated"))
+            return result;
+        // VK_EXT_mesh_shader twins (meshMain instead of the vertex stage);
+        // they need SPIR-V 1.4.
+        if (!compileModule(program.meshSpirvPath, "glsl_460+spirv_1_4", {"FORWARD_MESH_SHADER=1"},
+                           "mesh-shader generated"))
+            return result;
+        static_cast<void>(compileModule(program.meshNoVelocitySpirvPath, "glsl_460+spirv_1_4",
+                                        {"FORWARD_MESH_SHADER=1", "FORWARD_OUTPUT_VELOCITY=0"},
+                                        "color-only mesh-shader generated"));
     } catch (const std::exception& exception) {
         result.diagnostics.push_back({exception.what(), {}});
     }
@@ -352,7 +331,8 @@ ShaderGraphCompileResult ShaderGraphMaterialCompiler::resolve(Material& material
     return result;
 }
 
-void ShaderGraphPipelineCache::initialize(const VkDevice device, GraphicsPipelineOptions baseOptions) {
+void ShaderGraphPipelineCache::initialize(const VkDevice device, GraphicsPipelineOptions baseOptions,
+                                          const VkDescriptorSetLayout meshletDrawLayout) {
     if (device == VK_NULL_HANDLE)
         throw std::invalid_argument("Shader Graph pipeline cache requires a Vulkan device");
     if (device_ != VK_NULL_HANDLE)
@@ -362,6 +342,7 @@ void ShaderGraphPipelineCache::initialize(const VkDevice device, GraphicsPipelin
     // SPIR-V directly instead of passing through the timestamp cache.
     baseOptions.assetManager = nullptr;
     baseOptions_ = std::move(baseOptions);
+    meshletDrawLayout_ = meshletDrawLayout;
     for (auto& [program, entry] : entries_) {
         (void)program;
         createPipeline(entry);
@@ -376,7 +357,9 @@ void ShaderGraphPipelineCache::destroy() noexcept {
     for (auto& [program, entry] : entries_) {
         (void)program;
         entry.pipeline.reset();
+        entry.meshPipeline.reset();
     }
+    meshletDrawLayout_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
     baseOptions_ = {};
 }
@@ -392,6 +375,25 @@ void ShaderGraphPipelineCache::createPipeline(Entry& entry) {
     options.alphaBlendEnable = entry.state.transparent ? VK_TRUE : VK_FALSE;
     entry.pipeline = std::make_unique<GraphicsPipeline>();
     entry.pipeline->create(device_, options);
+
+    // Mesh-shader twin, as ForwardPass builds for the built-in programs.
+    // Blended materials stay on the indexed stream, which draws them after
+    // the opaque geometry; a module cooked before the twins existed has none.
+    entry.meshPipeline.reset();
+    const std::filesystem::path meshModule = meshShaderGraphModule(entry.spirv);
+    if (meshletDrawLayout_ == VK_NULL_HANDLE || entry.state.transparent || !isUsableCachedOutput(meshModule))
+        return;
+    options.shader = meshModule;
+    options.meshShader = true;
+    options.vertexBindings.clear();
+    options.vertexAttributes.clear();
+    options.descriptorSetLayouts.push_back(meshletDrawLayout_);
+    options.pushConstantSize = sizeof(std::uint32_t) * 2;
+    options.pushConstantStages = VK_SHADER_STAGE_MESH_BIT_EXT;
+    // meshMain culls back faces per primitive.
+    options.cullMode = VK_CULL_MODE_NONE;
+    entry.meshPipeline = std::make_unique<GraphicsPipeline>();
+    entry.meshPipeline->create(device_, options);
 }
 
 std::uint32_t ShaderGraphPipelineCache::getOrCreate(const ShaderProgramId program, const std::filesystem::path& spirv,
@@ -412,12 +414,25 @@ std::uint32_t ShaderGraphPipelineCache::getOrCreate(const ShaderProgramId progra
     if (entries_.size() >= MaterialProgramSlotCount - MaterialShaderCount)
         throw std::runtime_error("Shader Graph pipeline slot capacity exceeded");
     const std::uint32_t slot = static_cast<std::uint32_t>(MaterialShaderCount + entries_.size());
-    Entry entry{spirv, state, slot, nullptr};
+    Entry entry{spirv, state, slot, nullptr, nullptr};
     if (device_ != VK_NULL_HANDLE)
         createPipeline(entry);
     const auto [it, inserted] = entries_.emplace(program, std::move(entry));
     (void)inserted;
     return it->second.slot;
+}
+
+const GraphicsPipeline* ShaderGraphPipelineCache::findMesh(const std::uint32_t slot,
+                                                          bool* const doubleSided) const noexcept {
+    for (const auto& [id, entry] : entries_) {
+        (void)id;
+        if (entry.slot != slot)
+            continue;
+        if (doubleSided != nullptr)
+            *doubleSided = entry.state.doubleSided;
+        return entry.meshPipeline.get();
+    }
+    return nullptr;
 }
 
 const GraphicsPipeline* ShaderGraphPipelineCache::find(const std::uint32_t slot) const noexcept {

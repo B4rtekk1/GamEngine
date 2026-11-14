@@ -12,6 +12,9 @@ class HierarchyPanel final {
   public:
     enum class Action : uint8_t { None, Delete, Copy, Paste, Duplicate };
 
+    /** Opens the rename dialog for @p entity on the next draw. */
+    static void requestRename(Engine::Entity entity);
+
     [[nodiscard]] static Engine::Entity draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
                                              const std::vector<Engine::Entity>& selection, Action& action,
                                              Engine::Entity& actionEntity, bool canPaste, bool disabled, bool& isOpen);

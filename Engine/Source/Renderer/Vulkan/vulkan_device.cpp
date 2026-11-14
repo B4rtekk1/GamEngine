@@ -374,6 +374,59 @@ void VulkanDevice::selectPhysicalDevice(const VkInstance candidate) {
         rayQuerySupported_ =
             accelerationStructureFeatures.accelerationStructure == VK_TRUE && rayQueryFeatures.rayQuery == VK_TRUE;
     }
+    const auto hasExtension = [&extensions](const char* name) {
+        return std::ranges::any_of(extensions, [name](const VkExtensionProperties& extension) {
+            return std::strcmp(extension.extensionName, name) == 0;
+        });
+    };
+    // Slang declares both the EXT and the NV invocation-reorder capability
+    // for HitObject code, so the DDGI path needs both extensions.
+    if (rayQuerySupported_ && hasExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) &&
+        hasExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+        hasExtension(VK_NV_PARTITIONED_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+        hasExtension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME) &&
+        hasExtension(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME)) {
+        VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV reorderNv{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV,
+        };
+        VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT reorder{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT,
+            .pNext = &reorderNv,
+        };
+        VkPhysicalDevicePartitionedAccelerationStructureFeaturesNV partitioned{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PARTITIONED_ACCELERATION_STRUCTURE_FEATURES_NV,
+            .pNext = &reorder,
+        };
+        VkPhysicalDeviceClusterAccelerationStructureFeaturesNV clusters{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV,
+            .pNext = &partitioned,
+        };
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR pipeline{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
+            .pNext = &clusters,
+        };
+        VkPhysicalDeviceFeatures2 features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &pipeline,
+        };
+        vkGetPhysicalDeviceFeatures2(physicalDevice_, &features);
+        clusterRayTracingSupported_ =
+            features.features.shaderInt64 == VK_TRUE && pipeline.rayTracingPipeline == VK_TRUE &&
+            pipeline.rayTracingPipelineTraceRaysIndirect == VK_TRUE && clusters.clusterAccelerationStructure == VK_TRUE &&
+            partitioned.partitionedAccelerationStructure == VK_TRUE && reorder.rayTracingInvocationReorder == VK_TRUE &&
+            reorderNv.rayTracingInvocationReorder == VK_TRUE;
+    }
+    if (rayQuerySupported_ && hasExtension(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME)) {
+        VkPhysicalDeviceOpacityMicromapFeaturesEXT micromap{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT,
+        };
+        VkPhysicalDeviceFeatures2 features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &micromap,
+        };
+        vkGetPhysicalDeviceFeatures2(physicalDevice_, &features);
+        opacityMicromapSupported_ = micromap.micromap == VK_TRUE && features.features.shaderInt64 == VK_TRUE;
+    }
     queueFamilies_ = findQueueFamilies(physicalDevice_);
     VkPhysicalDeviceDepthStencilResolveProperties depthResolveProperties{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES,
@@ -445,6 +498,9 @@ void VulkanDevice::createLogicalDevice() {
     // Anisotropic filtering is optional in Vulkan. Enable it when the
     // selected GPU exposes it; texture samplers query the same capability.
     features2.features.samplerAnisotropy = availableCoreFeatures.samplerAnisotropy;
+    // The visibility-buffer prepass reads SV_PrimitiveID in its fragment
+    // stage, which SPIR-V compilers declare with the Geometry capability.
+    features2.features.geometryShader = availableCoreFeatures.geometryShader;
     features2.pNext = &features11;
 
     VkPhysicalDeviceMeshShaderFeaturesEXT enabledMeshFeatures{
@@ -473,6 +529,33 @@ void VulkanDevice::createLogicalDevice() {
         enabledAccelerationStructureFeatures.accelerationStructure = VK_TRUE;
         enabledRayQueryFeatures.rayQuery = VK_TRUE;
     }
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR enabledRayTracingPipelineFeatures{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
+        .rayTracingPipeline = VK_TRUE,
+        .rayTracingPipelineTraceRaysIndirect = VK_TRUE,
+    };
+    VkPhysicalDeviceClusterAccelerationStructureFeaturesNV enabledClusterFeatures{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV,
+        .clusterAccelerationStructure = VK_TRUE,
+    };
+    VkPhysicalDevicePartitionedAccelerationStructureFeaturesNV enabledPartitionedFeatures{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PARTITIONED_ACCELERATION_STRUCTURE_FEATURES_NV,
+        .partitionedAccelerationStructure = VK_TRUE,
+    };
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT enabledReorderFeatures{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT,
+        .rayTracingInvocationReorder = VK_TRUE,
+    };
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV enabledReorderNvFeatures{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV,
+        .rayTracingInvocationReorder = VK_TRUE,
+    };
+    if (clusterRayTracingSupported_ || opacityMicromapSupported_)
+        features2.features.shaderInt64 = VK_TRUE;
+    VkPhysicalDeviceOpacityMicromapFeaturesEXT enabledMicromapFeatures{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT,
+        .micromap = VK_TRUE,
+    };
 
     // Keep a single canonical feature chain.  Optional feature structs
     // are linked only after their extension set and feature bits passed
@@ -485,6 +568,19 @@ void VulkanDevice::createLogicalDevice() {
     if (rayQuerySupported_) {
         *nextFeature = &enabledAccelerationStructureFeatures;
         enabledAccelerationStructureFeatures.pNext = &enabledRayQueryFeatures;
+        nextFeature = &enabledRayQueryFeatures.pNext;
+    }
+    if (clusterRayTracingSupported_) {
+        *nextFeature = &enabledRayTracingPipelineFeatures;
+        enabledRayTracingPipelineFeatures.pNext = &enabledClusterFeatures;
+        enabledClusterFeatures.pNext = &enabledPartitionedFeatures;
+        enabledPartitionedFeatures.pNext = &enabledReorderFeatures;
+        enabledReorderFeatures.pNext = &enabledReorderNvFeatures;
+        nextFeature = &enabledReorderNvFeatures.pNext;
+    }
+    if (opacityMicromapSupported_) {
+        *nextFeature = &enabledMicromapFeatures;
+        nextFeature = &enabledMicromapFeatures.pNext;
     }
     std::vector<const char*> enabledExtensions(kRequiredDeviceExtensions.begin(), kRequiredDeviceExtensions.end());
     if (memoryBudgetExtensionSupported_) {
@@ -498,6 +594,15 @@ void VulkanDevice::createLogicalDevice() {
         enabledExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
         enabledExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
     }
+    if (clusterRayTracingSupported_) {
+        enabledExtensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+        enabledExtensions.push_back(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        enabledExtensions.push_back(VK_NV_PARTITIONED_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        enabledExtensions.push_back(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+        enabledExtensions.push_back(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+    }
+    if (opacityMicromapSupported_)
+        enabledExtensions.push_back(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME);
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());

@@ -11,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace Engine {
@@ -46,6 +47,37 @@ struct GpuProfileFrame final {
     std::uint64_t frameNumber{};
     float frameMilliseconds{};
     std::vector<GpuProfileEvent> events;
+};
+
+/** Directional virtual shadow map page cache, for profiling and tests. */
+struct VsmStatistics final {
+    /** Pages rasterized by the last prepared frame: newly mapped, and cached but dirty. */
+    std::uint32_t newPages{};
+    std::uint32_t refreshedPages{};
+    /** Cached pages that caster changes marked for a refresh. */
+    std::uint32_t dirtyMarkedPages{};
+    /** Clip levels that scrolled (pages kept) or were rebuilt from scratch. */
+    std::uint32_t levelsScrolled{};
+    std::uint32_t levelsInvalidated{};
+    /** Requested pages that did not fit this frame's budget. */
+    std::uint32_t deferredRequests{};
+    std::uint32_t residentPages{};
+    std::uint32_t pageBudget{};
+};
+
+/** DDGI probe cache and Mega Geometry scene state, for profiling and tests. */
+struct DdgiStatistics final {
+    /** Probes traced by the most recent completed frame; sleeping probes are not. */
+    std::uint32_t tracedProbes{};
+    std::uint32_t totalProbes{};
+    /** Ray tracing scene memory after the build, and after compaction freed build inputs. */
+    std::uint64_t sceneBytesBuilt{};
+    std::uint64_t sceneBytesCompacted{};
+    std::uint32_t clusters{};
+    std::uint32_t clusterTemplates{};
+    std::uint32_t displacedClusters{};
+    std::uint32_t clusterBlases{};
+    bool compacted{};
 };
 
 /** Public renderer facade. The concrete graphics backend is an implementation detail. */
@@ -97,6 +129,32 @@ class Renderer final {
     [[nodiscard]] PbrDebugView pbrDebugView() const noexcept;
     void setIblQuality(IblQuality quality) noexcept;
     [[nodiscard]] IblQuality iblQuality() const noexcept;
+    void setSsgiSettings(const SsgiSettings& settings) noexcept;
+    [[nodiscard]] const SsgiSettings& ssgiSettings() const noexcept;
+    /**
+     * Selects the GI technique and its parameters in one call. Scenes that
+     * store a choice apply it when they are initialized or reloaded.
+     */
+    void setGlobalIllumination(const GlobalIlluminationSettings& settings) noexcept;
+    [[nodiscard]] GlobalIlluminationSettings globalIllumination() const noexcept;
+    /** Exposure, display transform, colour grading and lens effects. */
+    void setPostProcessSettings(const PostProcessSettings& settings) noexcept;
+    [[nodiscard]] const PostProcessSettings& postProcessSettings() const noexcept;
+    /** DDGI replaces SSGI while it is enabled and the GPU supports it. */
+    void setDdgiSettings(const DdgiSettings& settings) noexcept;
+    [[nodiscard]] const DdgiSettings& ddgiSettings() const noexcept;
+    /** Whether the initialized device can trace DDGI (cluster ray tracing). */
+    [[nodiscard]] bool ddgiSupported() const noexcept;
+    [[nodiscard]] DdgiStatistics ddgiStatistics() const noexcept;
+    [[nodiscard]] VsmStatistics vsmStatistics() const noexcept;
+    /** Debug: copies the next frame's lit HDR scene (pre-TAA) back to the CPU. */
+    void requestHdrCapture() noexcept;
+    /** Retrieves a finished capture as RGBA half floats; false while none is ready. */
+    bool takeHdrCapture(std::uint32_t& width, std::uint32_t& height, std::vector<std::uint16_t>& rgbaHalf);
+    /** Copies the next presented frame (after tonemapping and UI) back to the CPU. */
+    void requestFrameCapture() noexcept;
+    /** Retrieves a finished frame capture as sRGB-encoded RGBA8; false while none is ready. */
+    bool takeFrameCapture(std::uint32_t& width, std::uint32_t& height, std::vector<std::uint8_t>& rgba);
 
     void setShadowDebugView(ShadowDebugView view) noexcept;
 
@@ -109,8 +167,14 @@ class Renderer final {
     [[nodiscard]] std::vector<GpuMemoryHeapBudget> gpuMemoryHeaps() const;
     [[nodiscard]] std::vector<GpuMemoryCategoryBudget> gpuMemoryCategories() const;
     [[nodiscard]] std::vector<GpuSceneMemoryAllocation> gpuSceneMemory() const;
+    /** Every VMA allocation (size, buffer/image usage) as VMA's JSON statistics; for memory analysis. */
+    [[nodiscard]] std::string gpuMemoryAllocationsJson() const;
 
-    /** Sets the project directory used for project-owned runtime caches. Must be called before initializeCore(). */
+    /**
+     * Sets the project directory used for project-owned content and runtime
+     * caches. May change after initialization (editor project switch); it
+     * applies from the next scene load. The pipeline cache keeps its first path.
+     */
     void setProjectRoot(std::filesystem::path root);
 
     void setEditorUiBackend(EditorUiBackend* backend) noexcept;
@@ -210,6 +274,14 @@ class Renderer final {
     IblQuality iblQuality_ = IblQuality::High;
     ShadowDebugView shadowDebugView_ = ShadowDebugView::Off;
     GrassRenderSettings grassSettings_{};
+    SsgiSettings ssgiSettings_{};
+    DdgiSettings ddgiSettings_{};
+    PostProcessSettings postProcessSettings_{};
+    // Post-process from RenderConfig, used for scenes that do not store their own.
+    PostProcessSettings configuredPostProcess_{};
+    // GI from RenderConfig, used for scenes that do not store their own.
+    GlobalIlluminationSettings configuredGlobalIllumination_{};
+    void applySceneSettings(const Scene& scene) noexcept;
     std::unique_ptr<State> state_;
     std::unique_ptr<Backend> backend_;
     EditorUiBackend* editorUiBackend_ = nullptr;

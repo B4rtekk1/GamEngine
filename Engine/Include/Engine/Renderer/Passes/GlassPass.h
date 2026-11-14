@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Engine/ECS/Components/GlassDestructionComponent.h"
-#include "Engine/Renderer/Vulkan/MemoryBudgetManager.h"
+#include "Engine/Renderer/Culling/HiZBuffer.h"
+#include "Engine/Renderer/Culling/HiZPass.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 
 #include <array>
@@ -10,79 +10,124 @@
 #include <vulkan/vulkan.h>
 
 namespace Engine {
-class Scene;
+namespace Assets {
+class AssetManager;
+}
 namespace Culling {
 class IndexedIndirectDrawCount;
 }
 
 /**
- * Dedicated compositing pass for glass surfaces.
+ * Composites transmissive (glass) materials over the finished opaque scene.
  *
- * It loads opaque HDR/depth, samples a copied opaque scene in the shader and
- * writes the composed GlassThin colour.  Keeping this out of ForwardPass
- * prevents glass from becoming an opaque depth-prepass material.
+ * One record() call, on a single-sample colour target that already holds
+ * the lit opaque scene (plus water and particles):
+ *  1. copies the colour into a mip-mapped snapshot. Rough (frosted) glass
+ *     refracts a wider footprint of it by sampling coarser mips;
+ *  2. reduces the scene depth into a MIN (closest-surface) hardware-depth
+ *     pyramid. Mip 0 is an exact copy, the coarse levels let reflection and
+ *     refraction rays skip empty screen space (Hi-Z traversal, see
+ *     Glass/glass_surface.slang);
+ *  3. draws the glass program slot. Every glass pixel composes its final
+ *     colour itself (refracted snapshot, Hi-Z SSR reflection with probe/sky
+ *     fallback, absorption, direct specular), so no blending is needed.
+ *
+ * The scene depth image is only read: Hi-Z culling may still read it on the
+ * async compute queue. Glass draws into a private depth target seeded with
+ * the opaque depth (pyramid mip 0), so panes behind opaque geometry are
+ * rejected by early depth testing and the nearest pane wins.
  */
 class GlassPass final {
   public:
-    void create(VkDevice device, VmaAllocator allocator, VkFormat colorFormat, VkFormat depthFormat,
-                VkSampleCountFlagBits samples, VkFormat depthResolveFormat, VkResolveModeFlagBits depthResolveMode,
-                VkDescriptorSetLayout sceneLayout, Assets::AssetManager& assets, bool velocity,
-                const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth,
-                unsigned paneCount = 0);
+    struct CreateInfo {
+        VkPhysicalDevice physicalDevice{VK_NULL_HANDLE};
+        VkDevice device{VK_NULL_HANDLE};
+        VmaAllocator allocator{VK_NULL_HANDLE};
+        Assets::AssetManager* assets{nullptr};
+        VkDescriptorSetLayout sceneLayout{VK_NULL_HANDLE};
+        VkExtent2D extent{};
+        /// Format of the single-sample scene depth that record() reads.
+        VkFormat depthFormat{VK_FORMAT_UNDEFINED};
+        VkImageView sceneDepthView{VK_NULL_HANDLE};
+        VkSampler sceneDepthSampler{VK_NULL_HANDLE};
+    };
+
+    struct RecordInfo {
+        /// Single-sample colour target in SHADER_READ_ONLY_OPTIMAL. It is
+        /// left in that layout, readable from fragment and compute shaders.
+        VkImage color{VK_NULL_HANDLE};
+        VkImageView colorView{VK_NULL_HANDLE};
+        /// Scene depth (the view in CreateInfo) in DEPTH_STENCIL_READ_ONLY_OPTIMAL.
+        VkImage depth{VK_NULL_HANDLE};
+        VkDescriptorSet sceneDescriptorSet{VK_NULL_HANDLE};
+        VkBuffer vertexBuffer{VK_NULL_HANDLE};
+        VkBuffer indexBuffer{VK_NULL_HANDLE};
+        /// Indexed streams holding the glass program slot: the single-sided
+        /// stream (back faces culled) and the foliage/two-sided stream.
+        const Culling::IndexedIndirectDrawCount* singleSided{nullptr};
+        const Culling::IndexedIndirectDrawCount* twoSided{nullptr};
+        /// Glass slot commands in each stream (the streams pack slots separately).
+        VkDeviceSize commandOffset{0};
+        VkDeviceSize twoSidedCommandOffset{0};
+        VkDeviceSize countOffset{0};
+    };
+
+    GlassPass() = default;
+    ~GlassPass();
+    GlassPass(const GlassPass&) = delete;
+    GlassPass& operator=(const GlassPass&) = delete;
+
+    void create(const CreateInfo& info);
     void destroy() noexcept;
-    [[nodiscard]] std::vector<GpuSceneMemoryAllocation> memoryAllocations() const;
-    /** Caller must retire all frames before resizing descriptor-backed storage. */
-    void resizeCrackAtlas(unsigned paneCount);
-    [[nodiscard]] bool needsCrackAtlasResize(unsigned paneCount) const noexcept;
-    /** Incrementally stamps changed pane regions on the GPU, before rendering. */
-    void recordCracks(VkCommandBuffer commandBuffer, const Scene& scene, std::uint32_t frameIndex);
-    void begin(VkCommandBuffer commandBuffer, VkImageView colorView, VkImageView depthView, VkImageView velocityView,
-               VkImageView colorResolveView, VkImageView depthResolveView, VkExtent2D extent,
-               VkDescriptorSet sceneDescriptorSet, std::uint32_t frameIndex, VkBuffer vertexBuffer,
-               VkBuffer indexBuffer) const;
-    void draw(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
-              const Culling::IndexedIndirectDrawCount& indirectDraw, VkDeviceSize commandOffset,
-              VkDeviceSize countOffset) const;
-    static void end(VkCommandBuffer commandBuffer);
+    [[nodiscard]] bool created() const noexcept {
+        return device_ != VK_NULL_HANDLE;
+    }
+    [[nodiscard]] VkExtent2D extent() const noexcept {
+        return extent_;
+    }
+
+    void record(VkCommandBuffer commandBuffer, const RecordInfo& info);
 
   private:
-    static constexpr std::uint32_t FramesInFlight = 2;
-    void createSceneDescriptors(const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth);
-    static constexpr unsigned AtlasSlots = 512, AtlasResolution = 256;
-    void createCrackResources(Assets::AssetManager& assets, unsigned paneCount);
-    void createCrackStorage(unsigned layers);
-    void destroyCrackStorage() noexcept;
-    unsigned atlasLayers_{};
-    VmaAllocator allocator_{};
-    VkImage crackAtlas_{};
-    VmaAllocation crackAtlasMemory_{};
-    VkImageView crackAtlasView_{};
-    VkSampler crackSampler_{};
-    VkPipeline crackPipeline_{};
-    VkPipelineLayout crackPipelineLayout_{};
-    VkDescriptorSetLayout crackEmptyLayout_{VK_NULL_HANDLE};
-    bool crackAtlasInitialized_{};
-    std::array<VkBuffer, FramesInFlight> crackMetadata_{};
-    std::array<VmaAllocation, FramesInFlight> crackMetadataMemory_{};
-    std::array<void*, FramesInFlight> crackMetadataMapped_{};
-    struct CrackSlot {
-        std::uint64_t uuid{};
-        std::size_t submitted{}, segmentOffset{};
-        std::uint32_t historyStart{};
-        bool reverse{};
-        std::vector<GlassCrackSegment> segments;
-        const Mesh* geometry{};
-        std::vector<std::uint8_t> exposureState;
-        std::array<glm::uvec4, 128> exposureMasks{};
-    };
-    std::array<CrackSlot, AtlasSlots> crackSlots_{};
-    GraphicsPipeline pipeline_;
+    void createImages();
+    void createPyramidPipelines();
+    void createGraphicsPipelines();
+    void createDescriptors();
+    void recordSnapshot(VkCommandBuffer commandBuffer, VkImage color);
+    void recordPyramid(VkCommandBuffer commandBuffer, VkImage sceneDepth);
+
+    CreateInfo info_{};
     VkDevice device_{VK_NULL_HANDLE};
-    VkDescriptorSetLayout sceneTextureLayout_{VK_NULL_HANDLE};
+    VkExtent2D extent_{};
+
+    // Mip-mapped copy of the scene colour the glass refracts and reflects.
+    VkImage snapshot_{VK_NULL_HANDLE};
+    VmaAllocation snapshotMemory_{VK_NULL_HANDLE};
+    VkImageView snapshotView_{VK_NULL_HANDLE};
+    VkSampler snapshotSampler_{VK_NULL_HANDLE};
+    std::uint32_t snapshotMips_{0};
+    bool snapshotInitialized_{false};
+
+    // Closest-surface hardware-depth pyramid.
+    Culling::HiZBuffer pyramid_;
+    Culling::HiZPass pyramidPass_;
+    bool pyramidInitialized_{false};
+    VkDescriptorSetLayout pyramidSetLayout_{VK_NULL_HANDLE};
+    VkPipelineLayout pyramidPipelineLayout_{VK_NULL_HANDLE};
+    VkPipeline pyramidInitPipeline_{VK_NULL_HANDLE};
+    VkPipeline pyramidReducePipeline_{VK_NULL_HANDLE};
+
+    // Private depth: glass-over-glass visibility only.
+    VkImage glassDepth_{VK_NULL_HANDLE};
+    VmaAllocation glassDepthMemory_{VK_NULL_HANDLE};
+    VkImageView glassDepthView_{VK_NULL_HANDLE};
+
+    GraphicsPipeline singleSidedPipeline_;
+    GraphicsPipeline twoSidedPipeline_;
+    // Copies the opaque depth (pyramid mip 0) into glassDepth_ first.
+    GraphicsPipeline depthSeedPipeline_;
+    VkDescriptorSetLayout glassSetLayout_{VK_NULL_HANDLE};
     VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
-    std::array<VkDescriptorSet, FramesInFlight> sceneTextureSets_{};
-    bool hasVelocity_{};
-    VkSampleCountFlagBits samples_{VK_SAMPLE_COUNT_1_BIT};
-    VkResolveModeFlagBits depthResolveMode_{VK_RESOLVE_MODE_NONE};
+    VkDescriptorSet glassSet_{VK_NULL_HANDLE};
 };
 } // namespace Engine

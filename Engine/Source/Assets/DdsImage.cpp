@@ -64,6 +64,107 @@ void color_block(const std::uint8_t* block, const bool opaque, std::array<std::a
 }
 } // namespace
 
+namespace {
+struct DdsLayout {
+    DdsBlockInfo info;
+    std::size_t payloadOffset{};
+};
+
+[[nodiscard]] std::optional<DdsLayout> parse_dds_layout(const std::uint8_t* bytes, const std::size_t size) {
+    if (size < 128 || word(bytes) != 0x20534444 || word(bytes + 4) != 124 || word(bytes + 76) != 32)
+        return std::nullopt;
+    DdsLayout layout;
+    layout.info.height = word(bytes + 12);
+    layout.info.width = word(bytes + 16);
+    // DDSD_MIPMAPCOUNT; without it the file holds the top level only.
+    layout.info.mipCount = (word(bytes + 8) & 0x20000U) != 0 ? std::max(word(bytes + 28), 1U) : 1U;
+    if (layout.info.width == 0 || layout.info.height == 0 || layout.info.width > 16384 ||
+        layout.info.height > 16384 || layout.info.mipCount > 15)
+        return std::nullopt;
+    const auto fourcc = word(bytes + 84);
+    layout.payloadOffset = 128;
+    if (fourcc == 0x31545844)
+        layout.info.format = DdsBlockFormat::BC1; // DXT1
+    else if (fourcc == 0x35545844)
+        layout.info.format = DdsBlockFormat::BC3; // DXT5
+    else if (fourcc == 0x32495441 || fourcc == 0x55354342)
+        layout.info.format = DdsBlockFormat::BC5; // ATI2 / BC5U
+    else if (fourcc == 0x30315844 && size >= 148) { // DX10
+        layout.payloadOffset = 148;
+        const auto dxgi = word(bytes + 128);
+        if (dxgi == 71 || dxgi == 72)
+            layout.info.format = DdsBlockFormat::BC1;
+        else if (dxgi == 77 || dxgi == 78)
+            layout.info.format = DdsBlockFormat::BC3;
+        else if (dxgi == 83 || dxgi == 84)
+            layout.info.format = DdsBlockFormat::BC5;
+        else
+            return std::nullopt;
+    } else
+        return std::nullopt;
+    std::uint32_t fullChain = 1;
+    for (std::uint32_t extent = std::max(layout.info.width, layout.info.height); extent > 1; extent /= 2)
+        ++fullChain;
+    layout.info.completeMipChain = layout.info.mipCount == fullChain;
+    return layout;
+}
+} // namespace
+
+std::optional<DdsBlockInfo> read_dds_block_info(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    std::array<std::uint8_t, 148> header{};
+    input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    const auto layout = parse_dds_layout(header.data(), static_cast<std::size_t>(input.gcount()));
+    if (!layout)
+        return std::nullopt;
+    return layout->info;
+}
+
+std::optional<CookedTexture> read_dds_blocks(const std::filesystem::path& path, const TextureFormat format) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input)
+        return std::nullopt;
+    const auto length = input.tellg();
+    if (length < 128)
+        return std::nullopt;
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
+    input.seekg(0);
+    input.read(reinterpret_cast<char*>(bytes.data()), length);
+    if (!input)
+        return std::nullopt;
+    const auto layout = parse_dds_layout(bytes.data(), bytes.size());
+    if (!layout)
+        return std::nullopt;
+    const DdsBlockFormat expected = format == TextureFormat::BC1_UNORM || format == TextureFormat::BC1_SRGB
+                                        ? DdsBlockFormat::BC1
+                                    : format == TextureFormat::BC3_UNORM || format == TextureFormat::BC3_SRGB
+                                        ? DdsBlockFormat::BC3
+                                    : format == TextureFormat::BC5_UNORM ? DdsBlockFormat::BC5
+                                                                         : DdsBlockFormat{0xff};
+    if (layout->info.format != expected)
+        return std::nullopt;
+    CookedTexture texture;
+    texture.width = layout->info.width;
+    texture.height = layout->info.height;
+    texture.format = format;
+    const std::uint32_t blockBytes = textureFormatBlockBytes(format);
+    std::uint64_t offset = layout->payloadOffset;
+    std::uint32_t width = texture.width;
+    std::uint32_t height = texture.height;
+    for (std::uint32_t mip = 0; mip < layout->info.mipCount; ++mip) {
+        const std::uint64_t mipBytes = std::uint64_t{(width + 3) / 4} * ((height + 3) / 4) * blockBytes;
+        if (offset + mipBytes > bytes.size())
+            return std::nullopt;
+        texture.mips.push_back({.offset = texture.data.size(), .size = mipBytes, .width = width, .height = height});
+        texture.data.insert(texture.data.end(), bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                            bytes.begin() + static_cast<std::ptrdiff_t>(offset + mipBytes));
+        offset += mipBytes;
+        width = std::max(1U, width / 2);
+        height = std::max(1U, height / 2);
+    }
+    return texture;
+}
+
 bool decode_dds_image(const std::filesystem::path& path, std::vector<std::uint8_t>& rgba, std::uint32_t& width,
                       std::uint32_t& height) {
     std::ifstream input(path, std::ios::binary | std::ios::ate);

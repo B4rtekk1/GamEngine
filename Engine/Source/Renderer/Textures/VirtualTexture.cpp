@@ -27,6 +27,14 @@ VkFormat vkFormat(const Assets::TextureFormat format) {
         return VK_FORMAT_BC7_UNORM_BLOCK;
     case Assets::TextureFormat::BC7_SRGB:
         return VK_FORMAT_BC7_SRGB_BLOCK;
+    case Assets::TextureFormat::BC1_UNORM:
+        return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case Assets::TextureFormat::BC1_SRGB:
+        return VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+    case Assets::TextureFormat::BC3_UNORM:
+        return VK_FORMAT_BC3_UNORM_BLOCK;
+    case Assets::TextureFormat::BC3_SRGB:
+        return VK_FORMAT_BC3_SRGB_BLOCK;
     }
     throw std::invalid_argument("Unknown virtual texture format");
 }
@@ -36,7 +44,7 @@ std::uint32_t blockExtent(const Assets::TextureFormat format) {
 std::uint32_t bytesPerBlock(const Assets::TextureFormat format) {
     if (format == Assets::TextureFormat::RGBA8_SRGB || format == Assets::TextureFormat::RGBA8_UNORM)
         return 4;
-    return format == Assets::TextureFormat::BC4_UNORM ? 8 : 16;
+    return Assets::textureFormatBlockBytes(format);
 }
 void transition(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                 VkAccessFlags2 sourceAccess, VkAccessFlags2 destinationAccess, VkPipelineStageFlags2 sourceStage,

@@ -56,8 +56,7 @@ float projectedExtentPixels(float4 clips[8], out float2 minUv, out float2 maxUv,
     }
     mn=clamp(mn,-1.0,1.0); mx=clamp(mx,-1.0,1.0);
     minUv=mn*0.5+0.5; maxUv=mx*0.5+0.5;
-    minUv.y=1.0-minUv.y; maxUv.y=1.0-maxUv.y;
-    float a=min(minUv.y,maxUv.y), b=max(minUv.y,maxUv.y); minUv.y=a; maxUv.y=b;
+    // The projection already flips Y for Vulkan; NDC maps to UV directly.
     float2 px=max((maxUv-minUv)*float2(culling.viewportWidth,culling.viewportHeight),0.0);
     return max(px.x,px.y);
 }
@@ -108,8 +107,11 @@ void main(uint3 tid:SV_DispatchThreadID) {
     GPUWaterPageHistory hist=(GPUWaterPageHistory)0;
     bool visible=false, frustumReject=false, hizReject=false, distanceReject=false;
     uint packed=0; float importance=0.0;
-    const bool geometryActive=(page.flags&WATER_PAGE_ACTIVE)!=0u && page.coverageClass!=0u;
     RendererInstanceData instance=instances[page.instanceIndex];
+    const int2 holeOffset=waterClipHoleOffset(page,instance,frame.cameraPosition.xyz);
+    const bool geometryActive=(page.flags&WATER_PAGE_ACTIVE)!=0u && page.coverageClass!=0u &&
+                              !waterClipPageCovered(page,holeOffset);
+    const uint drawBin=page.drawBin-page.stitchMask+waterClipStitchMask(page,holeOffset);
     int2 worldCoord=waterPageWorldCoord(page,instance,frame.cameraPosition.xyz);
     bool sameIdentity=prev.worldPageX==worldCoord.x && prev.worldPageZ==worldCoord.y;
 
@@ -132,16 +134,19 @@ void main(uint3 tid:SV_DispatchThreadID) {
                 const float projectedArea=max((maxUv.x-minUv.x)*(maxUv.y-minUv.y)*
                     culling.viewportWidth*culling.viewportHeight,1.0);
                 // Conservative page->tile candidate rasterization. False positives are
-                // allowed; every covered tile is marked so sparse classification has no
-                // false negatives. Dense mode simply ignores this mask.
-                const uint tilesX=(uint(culling.viewportWidth)+7u)/8u;
-                const uint tilesY=(uint(culling.viewportHeight)+7u)/8u;
-                int2 tileLo=int2(floor(saturate(minUv)*float2(culling.viewportWidth,culling.viewportHeight)/8.0));
-                int2 tileHi=int2(floor(saturate(maxUv)*float2(culling.viewportWidth,culling.viewportHeight)/8.0));
-                tileLo=clamp(tileLo,int2(0),int2(max(int(tilesX)-1,0),max(int(tilesY)-1,0)));
-                tileHi=clamp(tileHi,int2(0),int2(max(int(tilesX)-1,0),max(int(tilesY)-1,0)));
-                [loop] for(int ty=tileLo.y;ty<=tileHi.y;++ty) [loop] for(int tx=tileLo.x;tx<=tileHi.x;++tx){
-                    uint ignoredCandidate=0u;InterlockedOr(candidateMask[uint(ty)*tilesX+uint(tx)],1u,ignoredCandidate);
+                // allowed; every covered block of 4x4 tiles is marked so sparse
+                // classification has no false negatives. Dense mode ignores the mask,
+                // so the (serial, per-page) marking loop is skipped entirely there.
+                if(config.markCandidateTiles!=0u){
+                    const float blockPixels=8.0*float(WATER_CANDIDATE_BLOCK_TILES);
+                    const int2 blocks=int2(ceil(float2(culling.viewportWidth,culling.viewportHeight)/blockPixels));
+                    int2 blockLo=int2(floor(saturate(minUv)*float2(culling.viewportWidth,culling.viewportHeight)/blockPixels));
+                    int2 blockHi=int2(floor(saturate(maxUv)*float2(culling.viewportWidth,culling.viewportHeight)/blockPixels));
+                    blockLo=clamp(blockLo,int2(0),max(blocks-1,int2(0)));
+                    blockHi=clamp(blockHi,int2(0),max(blocks-1,int2(0)));
+                    [loop] for(int by=blockLo.y;by<=blockHi.y;++by) [loop] for(int bx=blockLo.x;bx<=blockHi.x;++bx){
+                        uint ignoredCandidate=0u;InterlockedOr(candidateMask[uint(by*blocks.x+bx)],1u,ignoredCandidate);
+                    }
                 }
                 const float edgeDistance=min(minUv.x,minUv.y);
                 const float edgeImportance=1.0+0.35*saturate(1.0-edgeDistance*8.0);
@@ -184,9 +189,9 @@ void main(uint3 tid:SV_DispatchThreadID) {
     currentHistory[id]=hist;
 
     if(visible) {
-        uint dst=0; InterlockedAdd(drawBinCounts[page.drawBin],1,dst);
+        uint dst=0; InterlockedAdd(drawBinCounts[drawBin],1,dst);
         if(dst<config.visiblePagesPerBin) {
-            uint slot=page.drawBin*config.visiblePagesPerBin+dst;
+            uint slot=drawBin*config.visiblePagesPerBin+dst;
             visiblePages[slot]=outPage;
             InterlockedAdd(stats[0].visiblePages,1u);
             if(!sameIdentity || prev.visibleAge==0u) InterlockedAdd(stats[0].newlyVisible,1u);

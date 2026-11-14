@@ -18,16 +18,32 @@ void cleanup() {
         particleComputePipeline = VK_NULL_HANDLE;
         particleComputePipelineLayout = VK_NULL_HANDLE;
         particleSystem.reset();
-        sceneViewportForwardPass.destroy();
+        destroySceneViewportForwardPass();
+        sceneViewportVelocity.destroy();
+        sceneViewportNormals.destroy();
         forwardPass.destroy();
         virtualWaterRenderer.destroy();
+        sceneVirtualWaterRenderer.destroy();
         lightingForwardPass.destroy();
         waterPass.destroy();
         glassPass.destroy();
+        sceneGlassPass.destroy();
         gtaoPass.destroy();
+        ssgiPass.destroy();
+        for (Buffer& capture : hdrCaptureBuffers)
+            capture.destroy();
+        for (Buffer& capture : frameCaptureBuffers)
+            capture.destroy();
         rtContactShadowPass.destroy();
+        localLightShadowPass.destroy();
+        tileLightCulling.destroy();
+        deferredLocalLighting.destroy();
+        visibilityBuffer.destroy();
         directionalVisibilityPass.destroy();
         accelerationStructures.destroy();
+        // The DDGI trace pipeline layout embeds the forward set layout.
+        clusterScene.destroy();
+        ddgiPass.destroy();
         shadowPass.destroy();
         sceneDescriptorPass.destroy();
         // Cubemap owns samplers, views, images and memory; the BRDF
@@ -35,12 +51,16 @@ void cleanup() {
         // the logical device and allocator still exist.  Otherwise
         // the member Cubemap destructors run after vkDestroyDevice().
         imageBasedLighting.destroy();
+        builtIblKey.reset();
         physicalShadowPagePool.destroy();
         destroyCullingResources();
+        if (meshletDrawDescriptorSetLayout != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(device, meshletDrawDescriptorSetLayout, nullptr);
+            meshletDrawDescriptorSetLayout = VK_NULL_HANDLE;
+        }
         indexBuffer.destroy();
         vertexBuffer.destroy();
         meshletTriangleBuffer.destroy();
-        meshletIndexBuffer.destroy();
         meshletVertexBuffer.destroy();
         meshletBuffer.destroy();
         meshletClusterBuffer.destroy();

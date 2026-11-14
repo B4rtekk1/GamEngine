@@ -657,17 +657,56 @@ TextureFormat default_texture_format(const std::filesystem::path& source) {
     return source_texture_format(source);
 }
 
+namespace {
+// The cook-cache key's sRGB bit, as earlier versions computed it (RGBA8_SRGB
+// keeps false so existing cache entries stay valid).
+[[nodiscard]] bool cache_key_srgb(const TextureFormat format) noexcept {
+    return format == TextureFormat::BC7_SRGB || format == TextureFormat::BC1_SRGB ||
+           format == TextureFormat::BC3_SRGB;
+}
+
+// A DDS that is already block compressed with a complete mip chain is copied
+// into the .gtex block for block: re-encoding DXT data to BC7 would cost
+// minutes for a large set, compress the artefacts a second time and double
+// the size of BC1 maps. Returns the format such a copy has when @p requested
+// can be served by it; alpha-tested maps whose mips must preserve coverage
+// still go through the encoder.
+[[nodiscard]] std::optional<TextureFormat> dds_passthrough_format(const std::filesystem::path& source,
+                                                                  const TextureFormat requested,
+                                                                  const CutoutMipSettings cutout) {
+    const auto extension = source.extension();
+    if ((extension != ".dds" && extension != ".DDS") || cutout.channel != CutoutChannel::None)
+        return std::nullopt;
+    const auto info = read_dds_block_info(source);
+    if (!info || !info->completeMipChain)
+        return std::nullopt;
+    const bool srgb = textureFormatIsSrgb(requested);
+    switch (info->format) {
+    case DdsBlockFormat::BC1:
+        return srgb ? TextureFormat::BC1_SRGB : TextureFormat::BC1_UNORM;
+    case DdsBlockFormat::BC3:
+        return srgb ? TextureFormat::BC3_SRGB : TextureFormat::BC3_UNORM;
+    case DdsBlockFormat::BC5:
+        // Two channels only serve tangent-space normals.
+        if (requested == TextureFormat::BC5_UNORM)
+            return TextureFormat::BC5_UNORM;
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+} // namespace
+
 bool current_source_texture(const std::filesystem::path& source, const std::filesystem::path& output,
                             const TextureFormat format) {
     const auto sourceHash = CookCache::hash_file(source);
     if (!sourceHash)
         return false;
-    const auto key = CookCache::texture_key(
-        {.sourceHash = *sourceHash, .format = format, .srgb = format == TextureFormat::BC7_SRGB});
+    const TextureFormat stored = dds_passthrough_format(source, format, {}).value_or(format);
+    const auto key = CookCache::texture_key({.sourceHash = *sourceHash, .format = stored, .srgb = cache_key_srgb(stored)});
     if (!CookCache::artifact_has_key(output, key))
         return false;
     const auto cooked = load_gtex(output);
-    return cooked && cooked->format == format;
+    return cooked && cooked->format == stored;
 }
 
 namespace {
@@ -678,7 +717,7 @@ resolve_cached_texture(const std::uint64_t sourceHash, const std::filesystem::pa
     const CookCache::TextureCookKey settings{
         .sourceHash = sourceHash,
         .format = format,
-        .srgb = format == TextureFormat::BC7_SRGB,
+        .srgb = cache_key_srgb(format),
         .cutoutChannel = static_cast<std::uint32_t>(cutout.channel),
         .alphaCutoff = cutout.cutoff,
     };
@@ -734,6 +773,20 @@ TextureCookResult cook_source_texture_cached(const std::filesystem::path& source
         timings->sourceHashMilliseconds += milliseconds(std::chrono::steady_clock::now() - hashStarted);
     if (!sourceHash)
         return TextureCookResult::Failed;
+    if (const auto passthrough = dds_passthrough_format(source, format, cutout)) {
+        return resolve_cached_texture(
+            *sourceHash, output, *passthrough, cacheRoot,
+            [&] {
+                const auto decodeStarted = std::chrono::steady_clock::now();
+                auto blocks = read_dds_blocks(source, *passthrough);
+                if (timings != nullptr)
+                    timings->decodeMilliseconds += milliseconds(std::chrono::steady_clock::now() - decodeStarted);
+                if (!blocks)
+                    throw std::runtime_error("cannot read source DDS blocks");
+                return std::move(*blocks);
+            },
+            timings, cutout);
+    }
     return resolve_cached_texture(
         *sourceHash, output, format, cacheRoot,
         [&] {
@@ -814,6 +867,8 @@ TextureCookSummary cook_all_textures(const std::filesystem::path& assetRoot, Tex
 
     for (const auto& source : sources) {
         wait_if_paused(progress);
+        if (progress != nullptr)
+            progress->setCurrent(source.filename().string());
         auto output = source;
         output.replace_extension(".gtex");
         switch (cook_source_texture_cached(source, output, default_texture_format(source),
@@ -858,10 +913,14 @@ TextureCookSummary cook_all_gltf_meshes(const std::filesystem::path& assetRoot, 
             sources.push_back(it->path());
     }
     summary.discovered = static_cast<std::uint32_t>(sources.size());
+    // Model images are added to the texture count as each model is read.
+    summary.progress = progress;
     if (progress != nullptr)
-        progress->discovered.store(summary.discovered, std::memory_order_release);
+        progress->modelsDiscovered.store(summary.discovered, std::memory_order_release);
     for (const auto& source : sources) {
         wait_if_paused(progress);
+        if (progress != nullptr)
+            progress->setCurrent(source.filename().string());
         auto cooked = source;
         cooked.replace_extension(".gmesh");
         const auto scanStarted = std::chrono::steady_clock::now();
@@ -878,7 +937,7 @@ TextureCookSummary cook_all_gltf_meshes(const std::filesystem::path& assetRoot, 
             summary.errors += source.string() + ": could not cook mesh\n";
         }
         if (progress != nullptr)
-            progress->completed.fetch_add(1, std::memory_order_release);
+            progress->modelsCompleted.fetch_add(1, std::memory_order_release);
     }
     return summary;
 }

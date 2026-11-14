@@ -31,25 +31,16 @@ static_assert(sizeof(FileHeader) == 24);
 static_assert(sizeof(FileMip) == 24);
 
 [[nodiscard]] bool supported_format(const TextureFormat format) noexcept {
-    return format >= TextureFormat::RGBA8_SRGB && format <= TextureFormat::BC7_SRGB;
+    return format >= TextureFormat::RGBA8_SRGB && format <= TextureFormat::BC3_SRGB;
 }
 
 [[nodiscard]] std::uint64_t mip_size(const TextureFormat format, const std::uint32_t width,
                                      const std::uint32_t height) noexcept {
     if (width == 0 || height == 0)
         return 0;
-    switch (format) {
-    case TextureFormat::RGBA8_SRGB:
-    case TextureFormat::RGBA8_UNORM:
+    if (format == TextureFormat::RGBA8_SRGB || format == TextureFormat::RGBA8_UNORM)
         return static_cast<std::uint64_t>(width) * height * 4;
-    case TextureFormat::BC4_UNORM:
-        return static_cast<std::uint64_t>((width + 3) / 4) * ((height + 3) / 4) * 8;
-    case TextureFormat::BC5_UNORM:
-    case TextureFormat::BC7_UNORM:
-    case TextureFormat::BC7_SRGB:
-        return static_cast<std::uint64_t>((width + 3) / 4) * ((height + 3) / 4) * 16;
-    }
-    return 0;
+    return static_cast<std::uint64_t>((width + 3) / 4) * ((height + 3) / 4) * textureFormatBlockBytes(format);
 }
 } // namespace
 
@@ -81,7 +72,7 @@ std::optional<GtexTexture> load_gtex(const std::filesystem::path& path) {
     stream.read(reinterpret_cast<char*>(&header), sizeof(header));
     if (!stream || !std::equal(kMagic.begin(), kMagic.end(), header.magic) || header.version != kVersion ||
         header.mipCount == 0 || header.mipCount > 32 ||
-        header.format > static_cast<std::uint32_t>(TextureFormat::BC7_SRGB))
+        header.format > static_cast<std::uint32_t>(TextureFormat::BC3_SRGB))
         return std::nullopt;
     const std::uint64_t tableBytes = static_cast<std::uint64_t>(header.mipCount) * sizeof(FileMip);
     const std::uint64_t headerBytes = sizeof(FileHeader) + tableBytes;

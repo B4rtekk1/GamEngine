@@ -6,6 +6,7 @@
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
+#include "Engine/Renderer/Vulkan/depth_buffer.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/Water/VirtualWaterTypes.h"
@@ -37,6 +38,7 @@ class VirtualWaterRenderer final {
     VirtualWaterRenderer& operator=(const VirtualWaterRenderer&) = delete;
     static constexpr std::uint32_t FramesInFlight = 2;
 
+    /** depthFormat is kept for API compatibility; water renders into its own D32 depth target. */
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator, Assets::AssetManager& assets,
                 VkExtent2D extent, VkFormat depthFormat, VkImageView depthView, VkDescriptorSetLayout sceneLayout,
                 VkImageView hdrTargetView, VkDescriptorImageInfo opaqueColor, VkDescriptorImageInfo opaqueDepth,
@@ -57,7 +59,7 @@ class VirtualWaterRenderer final {
     void recordPrepass(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkDescriptorSet sceneSet,
                        VkBuffer vertexBuffer, VkBuffer indexBuffer,
                        const Culling::IndexedIndirectDrawCount& authoredWaterDraw, VkDeviceSize authoredCommandOffset,
-                       VkDeviceSize authoredCountOffset) const;
+                       VkDeviceSize authoredCountOffset);
     void recordAdaptiveShading(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkDescriptorSet sceneSet);
     void recordComposite(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkDescriptorSet sceneSet) const;
 
@@ -78,6 +80,10 @@ class VirtualWaterRenderer final {
 
     [[nodiscard]] bool active() const noexcept {
         return active_;
+    }
+    /** Extent of the screen-space water targets (1x1 while the scene has no water). */
+    [[nodiscard]] VkExtent2D extent() const noexcept {
+        return extent_;
     }
     [[nodiscard]] std::uint32_t pageCount() const noexcept {
         return pageCount_;
@@ -118,7 +124,8 @@ class VirtualWaterRenderer final {
         std::uint32_t tier{}, pad0{}, pad1{}, pad2{};
     };
     struct StatePush {
-        std::uint32_t eventCount{}, pageCount{}, frameIndex{}, pad{};
+        // frameCounter is waterFrameCounter_, not the frame-in-flight slot.
+        std::uint32_t eventCount{}, pageCount{}, frameCounter{}, pad{};
         float deltaTime{}, pad1{}, pad2{}, pad3{};
     };
 
@@ -139,7 +146,11 @@ class VirtualWaterRenderer final {
     // True when stateCellsScratch_ contains the most recently committed simulation state.
     bool stateCurrentScratch_{};
 
+    // GPU-written and GPU-read-mostly buffers live in device-local memory.
+    // Host data reaches them through pagesUpload_ and recorded fills; see
+    // flushPendingGpuWork().
     Buffer pages_;
+    Buffer pagesUpload_;
     Buffer drawTemplates_;
     // Reusable clipmap page topology, owned by Virtual Water rather than ECS.
     Buffer oceanVertexBuffer_;
@@ -164,6 +175,9 @@ class VirtualWaterRenderer final {
     std::vector<GPUWaterInteractionEvent> pendingInteractions_;
 
     HdrBuffer surface_;
+    // Water-only depth, seeded from opaque depth every frame so overlapping
+    // water surfaces resolve by depth instead of draw/atomic order.
+    DepthBuffer waterDepth_;
     HdrBuffer meta_;
     HdrBuffer velocity_;
     std::array<HdrBuffer, FramesInFlight> lighting_;
@@ -177,6 +191,7 @@ class VirtualWaterRenderer final {
     WaterFrameBudget frameBudget_{};
     WaterDynamicThresholds dynamicThresholds_{};
     std::array<Buffer, FramesInFlight> importanceHistogram_;
+    std::array<Buffer, FramesInFlight> importanceReadback_;
     std::array<Buffer, FramesInFlight> candidateTiles_;
     std::array<Buffer, FramesInFlight> tileLists_;
     std::array<Buffer, FramesInFlight> tileCounts_;
@@ -193,6 +208,11 @@ class VirtualWaterRenderer final {
     bool stateInitialized_{};
     float measuredGpuMsEma_{};
     bool denseTileClassification_{true};
+    // Device-local resources start undefined; these record their initial
+    // contents into the next command buffer that touches water.
+    bool pendingFullReset_{};
+    bool pendingMappingReset_{};
+    std::uint32_t pendingPageUploadCount_{};
 
     VkDescriptorSetLayout cullLayout_{VK_NULL_HANDLE};
     VkDescriptorSetLayout buildLayout_{VK_NULL_HANDLE};
@@ -206,6 +226,8 @@ class VirtualWaterRenderer final {
     VkDescriptorSetLayout authoredLayout_{VK_NULL_HANDLE};
     VkDescriptorSetLayout sssrInitLayout_{VK_NULL_HANDLE};
     VkDescriptorSetLayout sssrReduceLayout_{VK_NULL_HANDLE};
+    VkDescriptorSetLayout depthInitLayout_{VK_NULL_HANDLE};
+    VkDescriptorSet depthInitSet_{VK_NULL_HANDLE};
     VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, FramesInFlight> cullSets_{};
     std::array<VkDescriptorSet, FramesInFlight> buildSets_{};
@@ -239,6 +261,7 @@ class VirtualWaterRenderer final {
     VkPipeline sssrInitPipeline_{VK_NULL_HANDLE};
     VkPipeline sssrReducePipeline_{VK_NULL_HANDLE};
 
+    GraphicsPipeline depthInitPipeline_;
     GraphicsPipeline prepassPipeline_;
     GraphicsPipeline farPrepassPipeline_;
     GraphicsPipeline authoredPrepassPipeline_;
@@ -260,8 +283,10 @@ class VirtualWaterRenderer final {
     void createBuffers();
     void createOceanGeometry();
     void createDescriptors(VkDescriptorSetLayout sceneLayout);
-    void createPipelines(VkDescriptorSetLayout sceneLayout, VkFormat depthFormat);
+    void createPipelines(VkDescriptorSetLayout sceneLayout);
     void writeDescriptors();
+    void flushPendingGpuWork(VkCommandBuffer commandBuffer);
+    void writeDepthInitDescriptor();
     [[nodiscard]] VkPipeline makeCompute(const char* shader, VkPipelineLayout layout) const;
 };
 } // namespace Water

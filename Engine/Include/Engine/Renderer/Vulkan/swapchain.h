@@ -54,6 +54,11 @@ class Swapchain final {
         return images_.size();
     }
 
+    /** Whether images can be copied from, for frame captures. */
+    [[nodiscard]] bool supportsCapture() const noexcept {
+        return supportsCapture_;
+    }
+
   private:
     SDL_Window* window_ = nullptr;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -62,6 +67,7 @@ class Swapchain final {
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat imageFormat_ = VK_FORMAT_UNDEFINED;
     VkExtent2D extent_{};
+    bool supportsCapture_ = false;
     VkPresentModeKHR presentMode_ = VK_PRESENT_MODE_FIFO_KHR;
     std::vector<VkPresentModeKHR> supportedPresentModes_;
     std::vector<VkImage> images_;

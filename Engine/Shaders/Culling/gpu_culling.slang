@@ -37,6 +37,12 @@ struct ShadowInstanceTransform { float4 row0; float4 row1; float4 row2; };
 // cannot be used to recover the meshlet range of the original instance.
 struct ShadowVisibleInstance { uint sourceInstanceId; uint shadowTransformIndex; };
 [[vk::binding(14, 0)]] RWStructuredBuffer<ShadowVisibleInstance> shadowVisibleInstances;
+// Per page: objects whose meshlets shadow_meshlet_refine culls against the
+// page instead of drawing the whole section. x: object index, y: first
+// page-local transform, z: the (emptied) section command slot to restore if
+// the page's meshlet command budget runs out.
+[[vk::binding(15, 0)]] RWStructuredBuffer<uint4> shadowMeshletObjects;
+[[vk::binding(16, 0)]] RWStructuredBuffer<uint> shadowMeshletObjectCounts;
 
 struct CullingPushConstants
 {
@@ -45,7 +51,8 @@ struct CullingPushConstants
     uint sourceCount;
     uint candidateLevel;
     // 0: direct object input, 1: emit clip-level candidates,
-    // 2: consume the candidate list for a virtual-shadow page.
+    // 2: consume the candidate list for a virtual-shadow page,
+    // 6: emit the candidates of several clip levels at once.
     uint mode;
     uint shaderFilter;
     uint pageWorkOffset;
@@ -73,7 +80,7 @@ ShadowInstanceTransform makeShadowTransform(RendererInstanceData instance)
     return result;
 }
 
-void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot,
+void appendDraw(bool visible, CullingObjectData objectData, uint objectIndex, uint drawSlot,
                 bool emitShadowTransforms)
 {
     // Reserve one contiguous range per wave.  Calling this from every active
@@ -132,6 +139,18 @@ void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot,
                     ShadowVisibleInstance(source, destination + instanceOffset);
             }
             command.firstInstance = destination;
+            // Only the LOD0 indices are covered by the object's meshlets.
+            if (objectData.meshletCount != 0 && command.indexCount == objectData.indexCount)
+            {
+                uint meshletObject;
+                InterlockedAdd(shadowMeshletObjectCounts[drawSlot], 1u, meshletObject);
+                if (meshletObject < culling.maxDrawCount)
+                {
+                    shadowMeshletObjects[drawSlot * culling.maxDrawCount + meshletObject] =
+                        uint4(objectIndex, destination, destinationIndex, 0u);
+                    command.instanceCount = 0;
+                }
+            }
         }
         else
         {
@@ -166,7 +185,8 @@ void appendBinnedDraw(bool visible, CullingObjectData objectData)
             continue;
 
         const uint destinationIndex = waveBase + WavePrefixCountBits(inBin);
-        if (destinationIndex >= culling.maxDrawCount)
+        const uint binStart = cullingBinOffset(culling, bin);
+        if (destinationIndex >= cullingBinOffset(culling, bin + 1u) - binStart)
             continue;
 
         IndexedDrawCommand command;
@@ -186,24 +206,24 @@ void appendBinnedDraw(bool visible, CullingObjectData objectData)
         command.firstIndex = objectData.firstIndex;
         command.vertexOffset = int(objectData.vertexOffset);
         command.firstInstance = objectData.firstInstance;
-        commands[bin * culling.maxDrawCount + destinationIndex] = command;
+        commands[binStart + destinationIndex] = command;
 
     }
 }
 
-void appendCandidate(bool visible, uint objectIndex)
+void appendCandidate(bool visible, uint objectIndex, uint level)
 {
     const uint visibleInWave = WaveActiveCountBits(visible);
     uint waveBase = 0;
     if (WaveIsFirstLane() && visibleInWave != 0)
-        InterlockedAdd(candidateCounts[pushConstants.candidateLevel], visibleInWave, waveBase);
+        InterlockedAdd(candidateCounts[level], visibleInWave, waveBase);
     waveBase = WaveReadLaneFirst(waveBase);
     if (!visible)
         return;
 
     const uint destinationIndex = waveBase + WavePrefixCountBits(visible);
     if (destinationIndex < culling.maxDrawCount)
-        candidateObjectIndices[pushConstants.candidateLevel * culling.maxDrawCount + destinationIndex] = objectIndex;
+        candidateObjectIndices[level * culling.maxDrawCount + destinationIndex] = objectIndex;
 }
 
 bool outsideFrustum(float4 clipPositions[8])
@@ -281,13 +301,10 @@ bool occlusionTest(float4 clipPositions[8])
 
     minimumNdc = clamp(minimumNdc, -1.0, 1.0);
     maximumNdc = clamp(maximumNdc, -1.0, 1.0);
+    // The camera projection already flips Y for Vulkan, so NDC maps to the
+    // depth image without another flip (matches the velocity shaders).
     float2 minimumUv = minimumNdc * 0.5 + 0.5;
     float2 maximumUv = maximumNdc * 0.5 + 0.5;
-    minimumUv.y = 1.0 - minimumUv.y;
-    maximumUv.y = 1.0 - maximumUv.y;
-    float temporaryY = minimumUv.y;
-    minimumUv.y = min(temporaryY, maximumUv.y);
-    maximumUv.y = max(temporaryY, maximumUv.y);
     minimumUv = clamp(minimumUv, 0.0, 1.0);
     maximumUv = clamp(maximumUv, 0.0, 1.0);
 
@@ -362,6 +379,35 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         }
     }
 
+    // Mode 6 builds the candidate lists of several clip levels in one pass:
+    // shadowPageWork[pageWorkOffset + i] holds level i's matrix and clipLevel.
+    // Each object is loaded and transformed to world space once.
+    if (pushConstants.mode == 6)
+    {
+        const float boundsPadding = max(culling.aabbExpansion,
+            length(objectData.localAabbMax.xyz - objectData.localAabbMin.xyz) *
+            (objectData.instanceCount == 1 ? 0.05 : 0.02));
+        float4 worldCorners[8];
+        for (uint i = 0; i < 8; ++i)
+            worldCorners[i] = mul(float4(lerp(objectData.localAabbMin.xyz - boundsPadding,
+                                              objectData.localAabbMax.xyz + boundsPadding,
+                                              UNIT_AABB_CORNERS[i]), 1.0), objectData.model);
+        for (uint entry = 0; entry < pushConstants.pageWorkCount; ++entry)
+        {
+            const ShadowPageWork level = shadowPageWork[pushConstants.pageWorkOffset + entry];
+            bool levelVisible = visible;
+            if (levelVisible && culling.enableFrustumCulling != 0)
+            {
+                float4 clipPositions[8];
+                for (uint i = 0; i < 8; ++i)
+                    clipPositions[i] = mul(worldCorners[i], level.viewProjection);
+                levelVisible = !outsideFrustum(clipPositions);
+            }
+            appendCandidate(levelVisible, objectIndex, level.clipLevel);
+        }
+        return;
+    }
+
     if (visible && culling.enableFrustumCulling != 0)
     {
 
@@ -411,11 +457,11 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     // mode is a dispatch-wide push constant, hence every active lane enters
     // exactly one compaction routine and its wave operations stay uniform.
     if (pushConstants.mode == 1)
-        appendCandidate(visible, objectIndex);
+        appendCandidate(visible, objectIndex, pushConstants.candidateLevel);
     else if (pushConstants.mode == 3)
         appendBinnedDraw(visible, objectData);
     else
-        appendDraw(visible, objectData,
+        appendDraw(visible, objectData, objectIndex,
                    batchedShadowPages ? pageWork.drawSlot : pushConstants.drawSlot,
                    batchedShadowPages && culling.shadowPass != 0 && culling.maxShadowInstances != 0);
 }

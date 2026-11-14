@@ -5,6 +5,7 @@
 #include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
+#include "Engine/Scripting/Console.h"
 
 #include <string>
 #include <string_view>
@@ -18,6 +19,9 @@ class Physics;
 class Script {
   public:
     virtual ~Script() = default;
+
+    /** Browser-style log: console.log(...), console.warn(...), console.error(...). See Console. */
+    static constexpr const Console& console = Engine::console;
 
     [[nodiscard]] Entity entity() const noexcept {
         return entity_;

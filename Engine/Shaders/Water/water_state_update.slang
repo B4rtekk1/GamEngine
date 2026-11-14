@@ -15,8 +15,10 @@ import Water.VirtualWaterShared;
 [[vk::binding(8,1)]] RWStructuredBuffer<GPUWaterStateCell> stateCellsWrite;
 [[vk::binding(9,1)]] RWStructuredBuffer<GPUWaterFrameBudget> frameBudget;
 
+// frameCounter is the monotonically increasing water frame number (not the
+// frame-in-flight slot): update phases and LRU ages are derived from it.
 struct Push {
-    uint eventCount, pageCount, frameIndex, pad;
+    uint eventCount, pageCount, frameCounter, pad;
     float deltaTime, pad1, pad2, pad3;
 };
 [[vk::push_constant]] ConstantBuffer<Push> push;
@@ -176,14 +178,16 @@ void main(uint3 groupId:SV_GroupID,uint3 localId:SV_GroupThreadID) {
         groupNewAllocation=valid&&physical.inactiveSeconds<0.0?1u:0u;
         groupVisible=(history[pageId].packedQuality&WATER_VALID_FLAG)!=0u?1u:0u;
         bool eventHit=false;
-        [loop]for(uint e=0u;e<push.eventCount;++e)eventHit=eventHit||eventTouchesPage(events[e],page,instance);
+        // Most clipmap pages carry no state; skip their event tests.
+        if(valid)
+            [loop]for(uint e=0u;e<push.eventCount;++e)eventHit=eventHit||eventTouchesPage(events[e],page,instance);
         groupEventHit=eventHit?1u:0u;
         groupMaxFoamBits=0u;groupMaxVelocityBits=0u;groupMaxInteractionBits=0u;
         groupDoUpdate=0u;groupSubsteps=1u;
         if(valid){
             const uint period=waterUpdatePeriod(physical.updateRatePacked);
             const uint phase=waterUpdatePhase(physical.updateRatePacked)%period;
-            bool due=((push.frameIndex+period-phase)%period)==0u;
+            bool due=((push.frameCounter+period-phase)%period)==0u;
             due=due||eventHit||groupNewAllocation!=0u||physical.tier!=groupTargetTier;
             if(due){
                 const uint resolution=waterStateTierResolution(groupTargetTier);
@@ -210,6 +214,11 @@ void main(uint3 groupId:SV_GroupID,uint3 localId:SV_GroupThreadID) {
     GPUWaterPhysicalState physical=physicalStates[groupSlot];
     if(physical.generation!=groupGeneration)return;
     if(groupDoUpdate==0u){
+        // The cell buffers ping-pong every frame, so a page that is not due
+        // must still carry its state forward. Otherwise the next frame reads
+        // the two-frame-old copy and multi-rate pages oscillate in time.
+        const uint cell=groupSlot*WATER_STATE_CELLS_PER_PAGE+localId.y*WATER_STATE_RESOLUTION+localId.x;
+        stateCellsWrite[cell]=stateCellsRead[cell];
         if(localId.x==0u&&localId.y==0u){
             physical.inactiveSeconds=(groupVisible!=0u||groupEventHit!=0u)?0.0:max(physical.inactiveSeconds,0.0)+push.deltaTime;
             physicalStates[groupSlot]=physical;
@@ -296,8 +305,8 @@ void main(uint3 groupId:SV_GroupID,uint3 localId:SV_GroupThreadID) {
         physical=physicalStates[groupSlot];
         physical.foam=asfloat(groupMaxFoamBits);physical.maxVelocity=asfloat(groupMaxVelocityBits);
         physical.interaction=asfloat(groupMaxInteractionBits);physical.inactiveSeconds=(groupVisible!=0u||groupEventHit!=0u)?0.0:max(physical.inactiveSeconds,0.0)+push.deltaTime;
-        physical.tier=groupTargetTier;physical.lastSimulatedFrame=push.frameIndex;
-        if(groupEventHit!=0u)physical.lastInteractionFrame=push.frameIndex;
+        physical.tier=groupTargetTier;physical.lastSimulatedFrame=push.frameCounter;
+        if(groupEventHit!=0u)physical.lastInteractionFrame=push.frameCounter;
         physicalStates[groupSlot]=physical;
     }
 }

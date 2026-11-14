@@ -2,12 +2,32 @@
 
 #include "Engine/Math/Math.h"
 
+#include <cstdint>
+#include <filesystem>
+
 namespace Engine {
 enum class LightType : uint8_t {
     Directional,
     Point,
     Spot,
 };
+
+/**
+ * Photometric profile of a point or spot light: how its intensity varies with
+ * the angle from the light's forward axis (local -Z). Built-in shapes model
+ * common fixtures; Ies reads an IESNA LM-63 file. Profiles are authored for a
+ * lamp aimed down (IES nadir = forward), so rotate such lights to point down.
+ */
+enum class LightProfile : uint8_t {
+    None,
+    Downlight,
+    Lampshade,
+    Sconce,
+    Lantern,
+    Globe,
+    Ies,
+};
+inline constexpr int LightProfileCount = 7;
 
 struct LightComponent {
     LightType type = LightType::Directional;
@@ -28,5 +48,10 @@ struct LightComponent {
     // Selects the sole directional light currently consumed by the forward
     // renderer. It does not control whether this light itself is enabled.
     bool mainLight = false;
+
+    // Point and spot lights only; see LightProfile.
+    LightProfile profile = LightProfile::None;
+    /// IESNA LM-63 file for LightProfile::Ies, relative to the asset root.
+    std::filesystem::path iesProfile{};
 };
 } // namespace Engine

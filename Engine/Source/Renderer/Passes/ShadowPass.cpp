@@ -7,6 +7,8 @@
 #include "Engine/Renderer/Lighting/ReflectionProbeManager.h"
 #include "Engine/Renderer/Lighting/VsmPagePolicy.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
+#include "Engine/Core/Profiler.h"
+#include "Engine/Renderer/Vulkan/GpuTimestampProfiler.h"
 #include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 #include "Engine/Renderer/shader_loader.h"
@@ -21,6 +23,16 @@
 #include <vector>
 
 namespace Engine {
+namespace {
+// PushConstants of Shadow/shadow_meshlet_mesh.slang.
+struct MeshletMeshPushConstants final {
+    Mat4 lightSpace;
+    std::uint32_t page{};
+    std::uint32_t entriesPerPage{};
+    float pageResolution{};
+};
+static_assert(sizeof(MeshletMeshPushConstants) == 76);
+} // namespace
 namespace {
 // Receiver-side bias tracks the virtual-shadow texel footprint. Raster bias
 // provides a second line of defense for caster rasterization; keep it
@@ -83,7 +95,7 @@ void ShadowPass::create(
         }
 
         // This is a compact list, not an array indexed by binding number.
-        VkDescriptorSetLayoutBinding bindings[20]{};
+        VkDescriptorSetLayoutBinding bindings[27]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
@@ -128,6 +140,34 @@ void ShadowPass::create(
                         nullptr}; // RT contact visibility
         bindings[19] = {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
                         nullptr}; // resolved directional visibility
+        bindings[20] = {20, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                        nullptr}; // full-res screen-space GI
+        bindings[21] = {21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                        nullptr}; // DDGI irradiance atlas
+        bindings[22] = {22, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                        nullptr}; // DDGI distance atlas
+        bindings[23] = {23, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                        nullptr}; // DDGI volume
+        bindings[24] = {LocalLightBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                        nullptr}; // every local light; see setLocalLights()
+        bindings[25] = {LocalShadowMaskBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // see setLocalShadowMask()
+        bindings[26] = {TileLightBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                        nullptr}; // depth-bounded tile light lists; see setTileLights()
+        // The DDGI ray generation shader binds this set directly to shade hits
+        // with the frame data, materials, their textures and the sky.
+        if (rayTracingStages_)
+            for (const std::uint32_t binding : {1U, 2U, 11U, 13U})
+                bindings[binding].stageFlags |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        // Mesh-shader forward pipelines run the vertex programs in meshMain.
+        // The visibility-buffer resolve (VisibilityBufferPass) runs both the
+        // vertex and the fragment programs in one compute shader.
+        if (meshShaderStages_)
+            for (VkDescriptorSetLayoutBinding& binding : bindings) {
+                if ((binding.stageFlags & VK_SHADER_STAGE_VERTEX_BIT) != 0)
+                    binding.stageFlags |= VK_SHADER_STAGE_MESH_BIT_EXT;
+                binding.stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
+            }
         const VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr,
                                                          0, static_cast<std::uint32_t>(std::size(bindings)), bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &descriptorSetLayout_) != VK_SUCCESS) {
@@ -136,12 +176,12 @@ void ShadowPass::create(
 
         const std::uint32_t frameCount = static_cast<std::uint32_t>(uniformBuffers.size());
         // Six descriptor sets are allocated per frame. Each carries shadow,
-        // IBL and material samplers, one UBO and seven SSBOs.
+        // IBL and material samplers, two UBOs and nine SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-             frameCount * 6U * (MaxMaterialTextures + 10U + ReflectionProbeManager::TextureDescriptorCount)},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 6U * 8U},
+             frameCount * 6U * (MaxMaterialTextures + 14U + ReflectionProbeManager::TextureDescriptorCount)},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U * 2U},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 6U * 10U},
         };
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = frameCount * 6;
@@ -211,7 +251,7 @@ void ShadowPass::create(
             const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
             std::vector<VkDescriptorImageInfo> reflectionTextures(ReflectionProbeManager::TextureDescriptorCount,
                                                                   imageBasedLighting[1]);
-            VkWriteDescriptorSet writes[18]{};
+            VkWriteDescriptorSet writes[22]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                          nullptr,
                          descriptorSets_[frame],
@@ -345,6 +385,26 @@ void ShadowPass::create(
                           &linearImageInfo,
                           nullptr,
                           nullptr};
+            // Replaced with the SSGI result once that pass exists. Forward
+            // samples it only while the frame flags SSGI as active.
+            writes[18] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                          nullptr,
+                          descriptorSets_[frame],
+                          20,
+                          0,
+                          1,
+                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                          materialTextures.data(),
+                          nullptr,
+                          nullptr};
+            // DDGI fallbacks until setDdgiResources(); the frame UBO is only a
+            // placeholder of the right type and is never read as a volume.
+            writes[19] = writes[18];
+            writes[19].dstBinding = 21;
+            writes[20] = writes[18];
+            writes[20].dstBinding = 22;
+            writes[21] = writes[1];
+            writes[21].dstBinding = 23;
             // Standard forward consumes bindings 3/7 as the clustered range
             // headers and compact light-index list.  Grass descriptors below
             // retain their vertex-only cluster/deformation bindings.
@@ -415,7 +475,7 @@ void ShadowPass::create(
         const VkVertexInputAttributeDescription attributes[] = {
             {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
             {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
-            {3, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, normal)},
+            {3, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, tangentFrame)},
             {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
             {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
         };
@@ -470,6 +530,55 @@ void ShadowPass::create(
                                       &opaquePipeline_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create opaque shadow pipeline");
         }
+        if (meshShaderStages_ && meshletDrawLayout_ != VK_NULL_HANDLE) {
+            // Same state as the opaque pipeline; meshMain emits the primitives.
+            const VkDescriptorSetLayout meshSetLayouts[] = {descriptorSetLayout_, meshletDrawLayout_};
+            const VkPushConstantRange meshPushConstants{VK_SHADER_STAGE_MESH_BIT_EXT, 0,
+                                                        sizeof(MeshletMeshPushConstants)};
+            VkPipelineLayoutCreateInfo meshLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            meshLayoutInfo.setLayoutCount = std::size(meshSetLayouts);
+            meshLayoutInfo.pSetLayouts = meshSetLayouts;
+            meshLayoutInfo.pushConstantRangeCount = 1;
+            meshLayoutInfo.pPushConstantRanges = &meshPushConstants;
+            if (vkCreatePipelineLayout(device_, &meshLayoutInfo, nullptr, &meshletMeshPipelineLayout_) != VK_SUCCESS)
+                throw std::runtime_error("Could not create mesh-shader shadow pipeline layout");
+            const auto meshShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_meshlet_mesh.spv");
+            const VkPipelineShaderStageCreateInfo meshStage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                                            nullptr,
+                                                            0,
+                                                            VK_SHADER_STAGE_MESH_BIT_EXT,
+                                                            meshShader.get(),
+                                                            "main",
+                                                            nullptr};
+            VkGraphicsPipelineCreateInfo meshPipelineInfo = pipelineInfo;
+            meshPipelineInfo.stageCount = 1;
+            meshPipelineInfo.pStages = &meshStage;
+            meshPipelineInfo.pVertexInputState = nullptr;
+            meshPipelineInfo.pInputAssemblyState = nullptr;
+            meshPipelineInfo.layout = meshletMeshPipelineLayout_;
+            if (vkCreateGraphicsPipelines(device_, PipelineCache::get(device_), 1, &meshPipelineInfo, nullptr,
+                                          &meshletMeshPipeline_) != VK_SUCCESS)
+                throw std::runtime_error("Could not create mesh-shader shadow pipeline");
+            // Two-sided (foliage) casters: both faces, alpha-tested fragments.
+            const auto alphaShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_meshlet_mesh_alpha.spv");
+            const std::array alphaStages{
+                VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                                                VK_SHADER_STAGE_MESH_BIT_EXT, alphaShader.get(), "meshMain", nullptr},
+                VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                                                VK_SHADER_STAGE_FRAGMENT_BIT, alphaShader.get(), "fragmentMain",
+                                                nullptr},
+            };
+            VkPipelineRasterizationStateCreateInfo twoSidedRasterizer = rasterizer;
+            twoSidedRasterizer.cullMode = VK_CULL_MODE_NONE;
+            meshPipelineInfo.stageCount = static_cast<std::uint32_t>(alphaStages.size());
+            meshPipelineInfo.pStages = alphaStages.data();
+            meshPipelineInfo.pRasterizationState = &twoSidedRasterizer;
+            if (vkCreateGraphicsPipelines(device_, PipelineCache::get(device_), 1, &meshPipelineInfo, nullptr,
+                                          &meshletAlphaMeshPipeline_) != VK_SUCCESS)
+                throw std::runtime_error("Could not create alpha-tested mesh-shader shadow pipeline");
+            drawMeshTasksIndirect_ = reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(
+                vkGetDeviceProcAddr(device_, "vkCmdDrawMeshTasksIndirectEXT"));
+        }
         pipelineInfo.stageCount = std::size(stages);
         pipelineInfo.pStages = stages.data();
         if (vkCreateGraphicsPipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo, nullptr, &pipeline_) !=
@@ -521,6 +630,97 @@ void ShadowPass::setGtaoTexture(const std::uint32_t frameIndex, const VkDescript
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
     gtaoDescriptorCache_[frameIndex] = texture;
     gtaoDescriptorCacheValid_[frameIndex] = true;
+}
+
+void ShadowPass::setLocalLights(const std::uint32_t frameIndex, const VkBuffer lights) const {
+    const VkDescriptorBufferInfo info{lights, 0, VK_WHOLE_SIZE};
+    // Only forward shading reads the lights, but every set shares the layout;
+    // a valid buffer keeps any pipeline that statically declares it safe.
+    for (const auto* sets : {&descriptorSets_, &grassDescriptorSets_, &grassVelocityDescriptorSets_,
+                             &grassShadowDescriptorSets_, &shadowDescriptorSets_, &shadowTwoSidedDescriptorSets_}) {
+        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                         nullptr,
+                                         sets->at(frameIndex),
+                                         LocalLightBinding,
+                                         0,
+                                         1,
+                                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                         nullptr,
+                                         &info,
+                                         nullptr};
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+}
+
+void ShadowPass::setTileLights(const std::uint32_t frameIndex, const VkBuffer lists) const {
+    const VkDescriptorBufferInfo info{lists, 0, VK_WHOLE_SIZE};
+    for (const auto* sets : {&descriptorSets_, &grassDescriptorSets_, &grassVelocityDescriptorSets_,
+                             &grassShadowDescriptorSets_, &shadowDescriptorSets_, &shadowTwoSidedDescriptorSets_}) {
+        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                         nullptr,
+                                         sets->at(frameIndex),
+                                         TileLightBinding,
+                                         0,
+                                         1,
+                                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                         nullptr,
+                                         &info,
+                                         nullptr};
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+}
+
+void ShadowPass::setLocalShadowMask(const std::uint32_t frameIndex, const VkDescriptorImageInfo& mask) const {
+    for (const auto* sets : {&descriptorSets_, &grassDescriptorSets_, &grassVelocityDescriptorSets_,
+                             &grassShadowDescriptorSets_, &shadowDescriptorSets_, &shadowTwoSidedDescriptorSets_}) {
+        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                         nullptr,
+                                         sets->at(frameIndex),
+                                         LocalShadowMaskBinding,
+                                         0,
+                                         1,
+                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                         &mask,
+                                         nullptr,
+                                         nullptr};
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+}
+
+void ShadowPass::setSsgiTexture(const std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const {
+    const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     nullptr,
+                                     descriptorSets_.at(frameIndex),
+                                     20,
+                                     0,
+                                     1,
+                                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                     &texture,
+                                     nullptr,
+                                     nullptr};
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void ShadowPass::setDdgiResources(const std::uint32_t frameIndex, const VkDescriptorImageInfo& irradiance,
+                                  const VkDescriptorImageInfo& distance, const VkBuffer volume,
+                                  const VkDeviceSize volumeSize) const {
+    const VkDescriptorBufferInfo volumeInfo{volume, 0, volumeSize};
+    std::array<VkWriteDescriptorSet, 3> writes{};
+    for (auto& write : writes) {
+        write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = descriptorSets_.at(frameIndex);
+        write.descriptorCount = 1;
+    }
+    writes[0].dstBinding = 21;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &irradiance;
+    writes[1].dstBinding = 22;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo = &distance;
+    writes[2].dstBinding = 23;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[2].pBufferInfo = &volumeInfo;
+    vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 void ShadowPass::setContactShadowTexture(const std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const {
@@ -795,6 +995,12 @@ void ShadowPass::destroy() noexcept {
             vkDestroyPipeline(device_, twoSidedPipeline_, nullptr);
         if (opaquePipeline_ != VK_NULL_HANDLE)
             vkDestroyPipeline(device_, opaquePipeline_, nullptr);
+        if (meshletMeshPipeline_ != VK_NULL_HANDLE)
+            vkDestroyPipeline(device_, meshletMeshPipeline_, nullptr);
+        if (meshletAlphaMeshPipeline_ != VK_NULL_HANDLE)
+            vkDestroyPipeline(device_, meshletAlphaMeshPipeline_, nullptr);
+        if (meshletMeshPipelineLayout_ != VK_NULL_HANDLE)
+            vkDestroyPipelineLayout(device_, meshletMeshPipelineLayout_, nullptr);
         if (pipeline_ != VK_NULL_HANDLE)
             vkDestroyPipeline(device_, pipeline_, nullptr);
         if (pipelineLayout_ != VK_NULL_HANDLE)
@@ -806,6 +1012,10 @@ void ShadowPass::destroy() noexcept {
     }
     pipeline_ = VK_NULL_HANDLE;
     opaquePipeline_ = VK_NULL_HANDLE;
+    meshletMeshPipeline_ = VK_NULL_HANDLE;
+    meshletAlphaMeshPipeline_ = VK_NULL_HANDLE;
+    meshletMeshPipelineLayout_ = VK_NULL_HANDLE;
+    drawMeshTasksIndirect_ = nullptr;
     twoSidedPipeline_ = VK_NULL_HANDLE;
     grassPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
@@ -948,10 +1158,11 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
     if (!pendingPageCommits_.empty())
         invalidateCache();
     ++cacheClock_;
+    cacheStatistics_ = {};
     pagesToRender_.clear();
     pendingPageCommits_.clear();
     preparedFrameIndex_ = frameIndex;
-    const std::uint32_t maxPageUpdates = std::min(pageUpdateBudget, ShadowMap::PhysicalPageCount);
+    const std::uint32_t maxPageUpdates = std::min(pageUpdateBudget, ShadowMap::MaxPageUpdatesPerFrame);
     pageUpdatesPending_ = false;
 
     // A queued virtual coordinate is meaningful only for the clipmap layout
@@ -974,9 +1185,16 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
             const glm::vec3 maximum{object.localAabbMax.x, object.localAabbMax.y, object.localAabbMax.z};
             const glm::mat4 model = gpuMatrix(object.model);
             const glm::vec3 extent = maximum - minimum;
+            const bool animated = object.localAabbMin.w == AnimatedDirtyBoundsFlag;
             for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
                 if (requireCachedMatrix && !cachedClipMatricesValid_[level])
                     continue;
+                if (animated && level > 0) {
+                    // Stagger levels so their refreshes land on different frames.
+                    const std::uint64_t period = std::uint64_t{1} << std::min(level, 3u);
+                    if (((cacheClock_ + level) & (period - 1)) != 0)
+                        continue;
+                }
                 // The projection is linear in homogeneous coordinates, so the
                 // eight corners are the projected minimum corner plus sums of
                 // the three projected box edges. This replaces a mat4*mat4 per
@@ -1015,6 +1233,8 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
                         const std::uint32_t physical = pageTable_[key];
                         if (physical == ShadowMap::InvalidPage)
                             continue;
+                        if (!physicalPages_[physical].dirty)
+                            ++cacheStatistics_.dirtyMarkedPages;
                         physicalPages_[physical].dirty = true;
                     }
                 }
@@ -1057,8 +1277,11 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
                 for (std::uint32_t x = 0; x < ShadowMap::VirtualPagesPerAxis; ++x)
                     pageTable_[virtualPageIndex(level, x, y)] = remapped[y * ShadowMap::VirtualPagesPerAxis + x];
             cachedClipMatrices_[level] = clipMatrices[level];
+            ++cacheStatistics_.levelsScrolled;
             continue;
         }
+        if (cachedClipMatricesValid_[level])
+            ++cacheStatistics_.levelsInvalidated;
         for (std::uint32_t y = 0; y < ShadowMap::VirtualPagesPerAxis; ++y) {
             for (std::uint32_t x = 0; x < ShadowMap::VirtualPagesPerAxis; ++x) {
                 const std::uint32_t index = virtualPageIndex(level, x, y);
@@ -1146,8 +1369,8 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
     // missed at a detailed level can then fall through to a resident coarse
     // level instead of producing a fully lit, page-shaped hole.
     constexpr std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelBudgets{
-        48, 32, 24, 20, 16, 16, ShadowMap::FallbackPageCount};
-    static_assert(48 + 32 + 24 + 20 + 16 + 16 + ShadowMap::FallbackPageCount == ShadowMap::PhysicalPageCount);
+        256, 192, 144, 112, 112, 108, ShadowMap::FallbackPageCount};
+    static_assert(256 + 192 + 144 + 112 + 112 + 108 + ShadowMap::FallbackPageCount == ShadowMap::PhysicalPageCount);
     std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelCounts{};
     const auto requestRectangle = [&](const std::uint32_t level, const std::int32_t minimumX,
                                       const std::int32_t minimumY, const std::int32_t maximumX,
@@ -1198,7 +1421,7 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
             if (requested[key])
                 continue;
             const std::uint32_t level = key / pagesPerLevelForRequests;
-            // Protect only the admitted working set (at most 256 pages).
+            // Protect only the admitted working set (at most the pool size).
             // Protecting every dilated GPU request can pin the entire
             // atlas and prevent a missing fallback from ever getting a tile.
             if (levelCounts[level] >= levelBudgets[level] || requests.size() >= ShadowMap::PhysicalPageCount) {
@@ -1328,6 +1551,7 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
             // rasterized it. The explicit commit below runs after that pass.
             pendingPageCommits_.push_back({key, physical, evictedVirtualPage});
             pagesToRender_.push_back(physical);
+            ++cacheStatistics_.newPages;
             scheduled[physical] = true;
         } else {
             physicalPages_[physical].lastUsed = cacheClock_;
@@ -1352,6 +1576,7 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
             break;
         pagesToRender_.push_back(physical);
         scheduled[physical] = true;
+        ++cacheStatistics_.refreshedPages;
     }
 
     deferredRequests_.clear();
@@ -1359,6 +1584,9 @@ void ShadowPass::preparePages(const std::array<Mat4, ShadowMap::ClipLevelCount>&
     for (std::uint32_t key = 0; key < ShadowMap::VirtualPageCount; ++key)
         if (deferred[key])
             deferredRequests_.push_back(key);
+    cacheStatistics_.deferredRequests = static_cast<std::uint32_t>(deferredRequests_.size());
+    for (const PhysicalPage& page : physicalPages_)
+        cacheStatistics_.residentPages += page.allocated ? 1U : 0U;
     for (std::uint32_t physical = 0; physical < physicalPages_.size(); ++physical)
         if (physicalPages_[physical].allocated && physicalPages_[physical].dirty && !scheduled[physical])
             pageUpdatesPending_ = true;
@@ -1418,7 +1646,8 @@ void ShadowPass::record(
     const Culling::GPUCullingPass& cullingPass, const Culling::IndexedIndirectDrawCount& indirectDraw,
     const Culling::GPUCullingPass& twoSidedCullingPass, const Culling::IndexedIndirectDrawCount& twoSidedIndirectDraw,
     const std::uint32_t objectCount, const VkDescriptorSet grassDescriptorSet,
-    const Culling::IndexedIndirectDrawCount* const grassIndirectDraw, const std::uint32_t grassCommandsPerPage) {
+    const Culling::IndexedIndirectDrawCount* const grassIndirectDraw, const std::uint32_t grassCommandsPerPage,
+    const MeshletStream* const meshletStream, const MeshletStream* const twoSidedMeshletStream) {
     (void)updateMask;
     const bool hasGrassCasters = grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr &&
                                  grassIndirectDraw->valid() && grassCommandsPerPage != 0;
@@ -1433,25 +1662,49 @@ void ShadowPass::record(
     // cached; this is the steady state for both editor and play mode.
     if (atlasInitialized_ && pagesToRender_.empty())
         return;
+    const auto meshletsUsable = [&](const MeshletStream* const stream) {
+        return objectCount != 0 && stream != nullptr && stream->refinePipeline != VK_NULL_HANDLE &&
+               stream->refineSet != VK_NULL_HANDLE && stream->meshletIndexBuffer != VK_NULL_HANDLE &&
+               stream->meshletCount != 0;
+    };
+    // Rasterize the listed meshlets with mesh tasks instead of indexed draws.
+    const auto meshTasksUsable = [&](const MeshletStream* const stream, const VkPipeline pipeline) {
+        return meshletsUsable(stream) && pipeline != VK_NULL_HANDLE && drawMeshTasksIndirect_ != nullptr &&
+               stream->meshRefinePipeline != VK_NULL_HANDLE && stream->meshCommandPipeline != VK_NULL_HANDLE &&
+               stream->meshTaskCommands != VK_NULL_HANDLE && stream->meshDrawSet != VK_NULL_HANDLE;
+    };
+    const bool useMeshlets = meshletsUsable(meshletStream);
+    const bool useMeshShaders = meshTasksUsable(meshletStream, meshletMeshPipeline_);
+    // The two-sided (foliage) stream keeps its alpha test in either path.
+    const bool useTwoSidedMeshlets = meshletsUsable(twoSidedMeshletStream);
+    const bool useTwoSidedMeshShaders = meshTasksUsable(twoSidedMeshletStream, meshletAlphaMeshPipeline_);
+    // Streams refined this frame, with whether each draws mesh tasks.
+    std::array<std::pair<const MeshletStream*, bool>, 2> refinedStreams{};
+    std::size_t refinedStreamCount = 0;
+    if (useMeshlets)
+        refinedStreams[refinedStreamCount++] = {meshletStream, useMeshShaders};
+    if (useTwoSidedMeshlets)
+        refinedStreams[refinedStreamCount++] = {twoSidedMeshletStream, useTwoSidedMeshShaders};
+    const bool anyMeshShaders = useMeshShaders || useTwoSidedMeshShaders;
+    static const ProfileNameId cullZone = Profiler::registerName("Shadow.CasterCull");
+    static const ProfileNameId refineZone = Profiler::registerName("Shadow.MeshletRefine");
+    static const ProfileNameId rasterZone = Profiler::registerName("Shadow.Raster");
+    const auto beginZone = [&](const ProfileNameId name) {
+        if (profiler_ != nullptr)
+            profiler_->beginZone(commandBuffer, profilerFrame_, name);
+    };
+    const auto endZone = [&] {
+        if (profiler_ != nullptr)
+            profiler_->endZone(commandBuffer, profilerFrame_);
+    };
     // Compute all page-specific indirect lists before the render pass:
     // dispatches, fills and their barriers are invalid inside a render pass.
     if (objectCount != 0) {
+        beginZone(cullZone);
         std::array<bool, ShadowMap::ClipLevelCount> activeLevels{};
         for (const std::uint32_t physical : pagesToRender_)
             activeLevels[physicalPages_[physical].level] = true;
 
-        // Cull the full caster set once per clip level. Page culling below
-        // consumes only this compact list instead of scanning every caster.
-        for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
-            if (activeLevels[level])
-                cullingPass.recordCandidates(commandBuffer, objectCount, clipMatrices[level], level);
-            if (activeLevels[level])
-                twoSidedCullingPass.recordCandidates(commandBuffer, objectCount, clipMatrices[level], level);
-        }
-        // prepareCandidateReads() emits a global memory dependency, so one
-        // call publishes both the one-sided and two-sided candidate lists.
-        // Issuing it twice in a row only duplicated the barrier.
-        cullingPass.prepareCandidateReads(commandBuffer);
         // The second dispatch dimension selects an active virtual page.  This
         // replaces the former one-dispatch-per-page pattern with a single
         // compute launch for each material-sidedness stream.
@@ -1477,9 +1730,129 @@ void ShadowPass::record(
                          [](const Culling::ShadowPageWork& left, const Culling::ShadowPageWork& right) {
                              return left.clipLevel < right.clipLevel;
                          });
-        cullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
-        twoSidedCullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
+
+        // A few pages are rendered per frame, so these dispatches are tiny and
+        // the cost is in the dependency chain between them. Both streams and
+        // every active level therefore share one barrier per phase instead
+        // of a fill/barrier/dispatch round trip per level and per stream.
+        const auto computeBarrier = [&](const VkPipelineStageFlags2 srcStage, const VkAccessFlags2 srcAccess,
+                                        const VkPipelineStageFlags2 dstStage, const VkAccessFlags2 dstAccess) {
+            const VkMemoryBarrier2 barrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                           .srcStageMask = srcStage,
+                                           .srcAccessMask = srcAccess,
+                                           .dstStageMask = dstStage,
+                                           .dstAccessMask = dstAccess};
+            const VkDependencyInfo dependency{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        };
+        // The level entries follow the page entries in the page-work buffer.
+        std::vector<Culling::ShadowPageWork> levelWork;
+        for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level)
+            if (activeLevels[level])
+                levelWork.push_back(
+                    Culling::ShadowPageWork{.viewProjection = clipMatrices[level].native(), .clipLevel = level});
+        cullingPass.clearCandidateCounts(commandBuffer);
+        twoSidedCullingPass.clearCandidateCounts(commandBuffer);
+        cullingPass.preparePageCull(commandBuffer, pageWork);
+        twoSidedCullingPass.preparePageCull(commandBuffer, pageWork);
+        for (std::size_t stream = 0; stream < refinedStreamCount; ++stream) {
+            // gpu_culling appends to the per-page object lists below.
+            const VkDeviceSize countBytes = sizeof(std::uint32_t) * pageWork.size();
+            vkCmdFillBuffer(commandBuffer, refinedStreams[stream].first->objectCounts, 0, countBytes, 0);
+            vkCmdFillBuffer(commandBuffer, refinedStreams[stream].first->commandCounts, 0, countBytes, 0);
+        }
+        computeBarrier(VK_PIPELINE_STAGE_2_HOST_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                       VK_ACCESS_2_HOST_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        // Cull the full caster set against every active clip level in one
+        // pass per stream. Page culling below consumes only these compact
+        // lists instead of scanning every caster.
+        cullingPass.recordCandidateLevels(commandBuffer, objectCount, levelWork,
+                                          static_cast<std::uint32_t>(pageWork.size()));
+        twoSidedCullingPass.recordCandidateLevels(commandBuffer, objectCount, levelWork,
+                                                  static_cast<std::uint32_t>(pageWork.size()));
+        computeBarrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+        cullingPass.recordPageDispatchArgs(commandBuffer, pageWork);
+        twoSidedCullingPass.recordPageDispatchArgs(commandBuffer, pageWork);
+        computeBarrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+        cullingPass.recordPageCull(commandBuffer, objectCount, pageWork);
+        twoSidedCullingPass.recordPageCull(commandBuffer, objectCount, pageWork);
+        endZone();
+        if (refinedStreamCount != 0) {
+            beginZone(refineZone);
+            // The page cull wrote the object lists, the transforms and the
+            // emptied section commands the refinement may restore.
+            const VkMemoryBarrier2 cullBarrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                               .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                               .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+            const VkDependencyInfo cullDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                                  .memoryBarrierCount = 1,
+                                                  .pMemoryBarriers = &cullBarrier};
+            vkCmdPipelineBarrier2(commandBuffer, &cullDependency);
+            // Both streams share the refine layout; each binds its own set
+            // and per-page object capacity. Their dispatches are independent.
+            const auto pushRefineSettings = [&](const MeshletStream& stream) {
+                const std::array<std::uint32_t, 4> refineSettings{static_cast<std::uint32_t>(pageWork.size()),
+                                                                  stream.passCapacity, MeshletDrawsPerPage,
+                                                                  stream.meshletCount};
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, stream.refineLayout, 0, 1,
+                                        &stream.refineSet, 0, nullptr);
+                vkCmdPushConstants(commandBuffer, stream.refineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                   sizeof(refineSettings), refineSettings.data());
+            };
+            for (std::size_t index = 0; index < refinedStreamCount; ++index) {
+                const auto& [stream, meshTasks] = refinedStreams[index];
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  meshTasks ? stream->meshRefinePipeline : stream->refinePipeline);
+                pushRefineSettings(*stream);
+                vkCmdDispatch(commandBuffer, static_cast<std::uint32_t>(pageWork.size()), MeshletRefineObjectSlices,
+                              1);
+            }
+            if (anyMeshShaders) {
+                // Entry counts are final: derive each page's mesh-task
+                // command. Same layout, set and push constants as the refine.
+                const VkMemoryBarrier2 countBarrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                                    .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                    .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                                    .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                    .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                const VkDependencyInfo countDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                                       .memoryBarrierCount = 1,
+                                                       .pMemoryBarriers = &countBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &countDependency);
+                for (std::size_t index = 0; index < refinedStreamCount; ++index) {
+                    const auto& [stream, meshTasks] = refinedStreams[index];
+                    if (!meshTasks)
+                        continue;
+                    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, stream->meshCommandPipeline);
+                    pushRefineSettings(*stream);
+                    vkCmdDispatch(commandBuffer, (static_cast<std::uint32_t>(pageWork.size()) + 63U) / 64U, 1, 1);
+                }
+            }
+            // The mesh stage also reads the entries and their counts as storage.
+            const VkMemoryBarrier2 drawBarrier{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                                (anyMeshShaders ? VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT : VK_PIPELINE_STAGE_2_NONE),
+                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT |
+                                 (anyMeshShaders ? VK_ACCESS_2_SHADER_STORAGE_READ_BIT : VK_ACCESS_2_NONE)};
+            const VkDependencyInfo drawDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                                  .memoryBarrierCount = 1,
+                                                  .pMemoryBarriers = &drawBarrier};
+            vkCmdPipelineBarrier2(commandBuffer, &drawDependency);
+            endZone();
+        }
     }
+    beginZone(rasterZone);
 
     VkImageMemoryBarrier2 atlasBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     const bool physicalAtlasInitialized = shadowMap_->initialized();
@@ -1553,7 +1926,7 @@ void ShadowPass::record(
     // pipelines and descriptor sets for every page. Depth-only output is order
     // independent, so opaque, two-sided and grass streams can be drawn as
     // separate sweeps over the pages.
-    const auto setPageState = [&](const std::size_t pageIndex) {
+    const auto setPageState = [&](const std::size_t pageIndex, const bool meshStage = false) {
         const std::uint32_t physical = pagesToRender_[pageIndex];
         const PhysicalPage& page = physicalPages_[physical];
         vkCmdSetDepthBias(commandBuffer, DepthBiasConstant[page.level], 0.0F, DepthBiasSlope[page.level]);
@@ -1578,6 +1951,15 @@ void ShadowPass::record(
         pageTransform[3][1] =
             static_cast<float>(ShadowMap::VirtualPagesPerAxis) - 2.0F * static_cast<float>(page.virtualY) - 1.0F;
         const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
+        if (meshStage) {
+            const MeshletMeshPushConstants constants{.lightSpace = pageMatrix,
+                                                     .page = static_cast<std::uint32_t>(pageIndex),
+                                                     .entriesPerPage = MeshletDrawsPerPage,
+                                                     .pageResolution = static_cast<float>(ShadowMap::PageResolution)};
+            vkCmdPushConstants(commandBuffer, meshletMeshPipelineLayout_, VK_SHADER_STAGE_MESH_BIT_EXT, 0,
+                               sizeof(constants), &constants);
+            return;
+        }
         vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Mat4), &pageMatrix);
     };
     if (objectCount != 0 && indirectDraw.valid()) {
@@ -1588,6 +1970,31 @@ void ShadowPass::record(
                                 sizeof(std::uint32_t) * pageIndex);
         }
     }
+    if (useMeshShaders) {
+        // One workgroup per listed meshlet; the later sweeps rebind their
+        // own pipeline, descriptor set and push constants.
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshletMeshPipeline_);
+        const VkDescriptorSet meshSets[] = {sceneDescriptorSet, meshletStream->meshDrawSet};
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshletMeshPipelineLayout_, 0,
+                                std::size(meshSets), meshSets, 0, nullptr);
+        for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+            setPageState(pageIndex, true);
+            drawMeshTasksIndirect_(commandBuffer, meshletStream->meshTaskCommands,
+                                   sizeof(VkDrawMeshTasksIndirectCommandEXT) * pageIndex, 1,
+                                   sizeof(VkDrawMeshTasksIndirectCommandEXT));
+        }
+    } else if (useMeshlets) {
+        // Same pipeline and per-page state; only the index source differs.
+        vkCmdBindIndexBuffer(commandBuffer, meshletStream->meshletIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+            setPageState(pageIndex);
+            vkCmdDrawIndexedIndirectCount(
+                commandBuffer, meshletStream->commands,
+                sizeof(VkDrawIndexedIndirectCommand) * MeshletDrawsPerPage * pageIndex, meshletStream->commandCounts,
+                sizeof(std::uint32_t) * pageIndex, MeshletDrawsPerPage, sizeof(VkDrawIndexedIndirectCommand));
+        }
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    }
     if (objectCount != 0 && twoSidedIndirectDraw.valid()) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, twoSidedPipeline_);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
@@ -1597,6 +2004,31 @@ void ShadowPass::record(
             twoSidedIndirectDraw.record(
                 commandBuffer, sizeof(VkDrawIndexedIndirectCommand) * twoSidedCullingPass.maxDrawCount() * pageIndex,
                 sizeof(std::uint32_t) * pageIndex);
+        }
+        if (useTwoSidedMeshShaders) {
+            // Alpha-tested mesh casters over the two-sided transforms.
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshletAlphaMeshPipeline_);
+            const VkDescriptorSet meshSets[] = {twoSidedSceneDescriptorSet, twoSidedMeshletStream->meshDrawSet};
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshletMeshPipelineLayout_, 0,
+                                    std::size(meshSets), meshSets, 0, nullptr);
+            for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+                setPageState(pageIndex, true);
+                drawMeshTasksIndirect_(commandBuffer, twoSidedMeshletStream->meshTaskCommands,
+                                       sizeof(VkDrawMeshTasksIndirectCommandEXT) * pageIndex, 1,
+                                       sizeof(VkDrawMeshTasksIndirectCommandEXT));
+            }
+        } else if (useTwoSidedMeshlets) {
+            // Still bound: the two-sided pipeline and set; only the index
+            // source differs.
+            vkCmdBindIndexBuffer(commandBuffer, twoSidedMeshletStream->meshletIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+                setPageState(pageIndex);
+                vkCmdDrawIndexedIndirectCount(commandBuffer, twoSidedMeshletStream->commands,
+                                              sizeof(VkDrawIndexedIndirectCommand) * MeshletDrawsPerPage * pageIndex,
+                                              twoSidedMeshletStream->commandCounts, sizeof(std::uint32_t) * pageIndex,
+                                              MeshletDrawsPerPage, sizeof(VkDrawIndexedIndirectCommand));
+            }
+            vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
         }
     }
     if (grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr && grassIndirectDraw->valid()) {
@@ -1631,6 +2063,7 @@ void ShadowPass::record(
     atlasToSampledDependency.imageMemoryBarrierCount = 1;
     atlasToSampledDependency.pImageMemoryBarriers = &atlasToSampled;
     vkCmdPipelineBarrier2(commandBuffer, &atlasToSampledDependency);
+    endZone();
 
     // This is the sole publication point for new/recycled mappings. It is
     // deliberately after rendering ends: the depth attachment write is

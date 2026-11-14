@@ -205,6 +205,62 @@ void badge(const char* text, const ImVec4 background, const ImVec4 foreground) {
     drawList->AddText({origin.x + padding.x, origin.y + padding.y}, ImGui::GetColorU32(foreground), text);
 }
 
+bool beginDialog(const char* id, const float width) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, {0.5F, 0.5F});
+    ImGui::SetNextWindowSizeConstraints({width, 0.0F}, {width, viewport->WorkSize.y});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {20.0F, 18.0F});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.0F, 8.0F});
+    const bool open = ImGui::BeginPopupModal(id, nullptr,
+                                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+                                                 ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleVar(3);
+    return open;
+}
+
+void dialogHeader(const Icon icon, const ImVec4 iconColor, const char* title, const char* description) {
+    const float iconSize = ImGui::GetFontSize() * 1.5F;
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImGui::Dummy({iconSize, iconSize});
+    drawIcon(ImGui::GetWindowDrawList(), icon, {origin.x + iconSize * 0.5F, origin.y + iconSize * 0.5F}, iconSize,
+             ImGui::GetColorU32(iconColor));
+    ImGui::SameLine(0.0F, 10.0F);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.12F);
+    const float titleHeight = ImGui::GetTextLineHeight();
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (iconSize - titleHeight) * 0.5F);
+    ImGui::TextUnformatted(title);
+    ImGui::PopFont();
+    if (description != nullptr && *description != '\0') {
+        ImGui::PushStyleColor(ImGuiCol_Text, colors().textSecondary);
+        ImGui::PushTextWrapPos(0.0F);
+        ImGui::TextUnformatted(description);
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+    ImGui::Dummy({0.0F, 2.0F});
+}
+
+void fieldLabel(const char* label) {
+    ImGui::TextDisabled("%s", label);
+    ImGui::SetNextItemWidth(-1.0F);
+}
+
+void dialogFooter(const int count, const float width) {
+    ImGui::Dummy({0.0F, 4.0F});
+    ImGui::PushStyleColor(ImGuiCol_Separator, colors().border);
+    ImGui::Separator();
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.0F, 2.0F});
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float total = width * static_cast<float>(count) + spacing * static_cast<float>(count - 1);
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - total));
+}
+
+bool dialogEscapePressed() {
+    return ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+}
+
 } // namespace EditorUI
 
 // NOLINTEND(readability-magic-numbers)

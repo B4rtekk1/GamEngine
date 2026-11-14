@@ -573,7 +573,7 @@ class Registry {
         std::uint32_t batch{};
         bool castShadow{};
         bool materialOverride{};
-        bool glassThin{};
+        bool glass{};
         bool twoSided{};
         std::uint8_t alphaMode{};
         std::uint8_t shadowCacheMode{};
@@ -593,7 +593,9 @@ class Registry {
             .batch = renderer.cullingBatch,
             .castShadow = renderer.castShadow,
             .materialOverride = renderer.materialOverride,
-            .glassThin = usesGlassThin(renderer.material.pbr),
+            // Glass draws from its own program slot, so toggling transmission
+            // moves the renderable to another culling bin.
+            .glass = renderer.materialOverride && usesGlass(renderer.material.pbr),
             .twoSided = renderer.materialOverride && renderer.material.pbr.doubleSided,
             .alphaMode = renderer.materialOverride ? static_cast<std::uint8_t>(renderer.material.pbr.alphaMode)
                                                    : std::uint8_t{0},

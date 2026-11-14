@@ -32,7 +32,7 @@ class SceneSerializer final {
      * lossless binary sidecar (<scene>.terrain).  This avoids formatting and parsing every height/colour as decimal
      * text.
      */
-    static constexpr std::uint32_t FormatVersion = 33;
+    static constexpr std::uint32_t FormatVersion = 37;
 
     /** @brief Writes a scene to a text file. */
     static void save(const Registry& registry, const std::filesystem::path& path);

@@ -11,7 +11,11 @@ class ShadowMap final {
     static constexpr uint32_t ClipLevelCount = 7;
     static constexpr uint32_t PageResolution = 256;
     static constexpr uint32_t VirtualPagesPerAxis = 32;
-    static constexpr uint32_t PhysicalPagesPerAxis = 16;
+    // 1024 resident pages. A dense view at High quality needs well over a
+    // hundred finest-level pages, plus the overlapping coarser levels; the
+    // former 256-page pool forced most of the screen onto a coarse fallback
+    // level and evicted pages the camera returned to a moment later.
+    static constexpr uint32_t PhysicalPagesPerAxis = 32;
     /// Maximum number of virtual pages refreshed in a single frame.
     static constexpr uint32_t VirtualResolution = PageResolution * VirtualPagesPerAxis;
     static constexpr uint32_t Resolution = PageResolution * PhysicalPagesPerAxis;
@@ -27,7 +31,9 @@ class ShadowMap final {
     // available. Allow the allocator to refresh the complete atlas in a
     // frame so camera cuts and large receiver footprints do not leave
     // tiled holes in directional shadows.
-    static constexpr uint32_t MaxPageUpdatesPerFrame = PhysicalPageCount;
+    // This also sizes every per-page scratch buffer, so it stays independent
+    // of the (larger) pool: the rest of the pool fills over later frames.
+    static constexpr uint32_t MaxPageUpdatesPerFrame = 256;
     // Each updated page gets an independent caster slice. Bound the VSM
     // scratch allocation even when a scene contains many render sections.
     static constexpr uint32_t MaxCasterInstancesPerPage = 2048;

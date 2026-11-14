@@ -17,9 +17,39 @@
 #include <cmath>
 #include <cstdio>
 #include <exception>
+#include <limits>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+namespace {
+Engine::Entity pendingRename = Engine::NullEntity;
+
+struct HierarchyTreeKey {
+    const void* scene = nullptr;
+    std::uint64_t structuralRevision = 0;
+    std::uint64_t uuidRevision = 0;
+    std::uint64_t parentRevision = 0;
+    std::uint64_t orderRevision = 0;
+
+    bool operator==(const HierarchyTreeKey&) const = default;
+};
+
+struct HierarchyTreeCache {
+    HierarchyTreeKey key;
+    bool valid = false;
+    std::unordered_map<Engine::Entity, std::vector<Engine::Entity>> children;
+    std::vector<Engine::Entity> roots;
+    std::unordered_map<Engine::UUID, Engine::Entity> byUuid;
+};
+
+HierarchyTreeCache hierarchyTreeCache;
+} // namespace
+
+void HierarchyPanel::requestRename(const Engine::Entity entity) {
+    pendingRename = entity;
+}
 
 Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
                                     const std::vector<Engine::Entity>& selection, Action& action,
@@ -58,8 +88,6 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
         ImGui::Separator();
         if (ImGui::MenuItem("3D Object/Cube"))
             clicked = scene.createCube();
-        if (ImGui::MenuItem("3D Object/Glass"))
-            clicked = scene.createGlass();
         if (ImGui::MenuItem("3D Object/Sphere"))
             clicked = scene.createSphere();
         if (ImGui::MenuItem("3D Object/Capsule"))
@@ -68,6 +96,8 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
             clicked = scene.createPlane();
         if (ImGui::MenuItem("3D Object/Ramp"))
             clicked = scene.createRamp();
+        if (ImGui::MenuItem("3D Object/Glass Pane"))
+            clicked = scene.createGlassPane();
         ImGui::Separator();
         if (ImGui::MenuItem("Camera"))
             clicked = scene.createCamera();
@@ -90,20 +120,14 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
             return;
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::modelPayload)) {
             try {
-                clicked =
-                    Editor::AssetDragDrop::instantiateModel(scene, content, Editor::AssetDragDrop::modelPath(*payload));
-                if (parent != Engine::NullEntity && clicked != Engine::NullEntity && canParent(clicked) &&
-                    scene.editor().valid(parent) && scene.editor().valid(clicked) &&
-                    scene.editor().has<Engine::UUIDComponent>(parent)) {
-                    const Engine::ParentComponent link{.parentUuid =
-                                                           scene.editor().read<Engine::UUIDComponent>(parent).value};
-                    if (scene.editor().has<Engine::ParentComponent>(clicked)) {
-                        scene.editor().patch<Engine::ParentComponent>(clicked,
-                                                                      [&](auto& component) { component = link; });
-                    } else {
-                        scene.editor().add<Engine::ParentComponent>(clicked, link);
-                    }
-                }
+                // Loaded in the background; the parent link is applied when
+                // the entity is created.
+                std::optional<Engine::UUID> parentUuid;
+                if (parent != Engine::NullEntity && scene.editor().valid(parent) &&
+                    scene.editor().has<Engine::UUIDComponent>(parent))
+                    parentUuid = scene.editor().read<Engine::UUIDComponent>(parent).value;
+                Editor::AssetDragDrop::requestModel(content, Editor::AssetDragDrop::modelPath(*payload), std::nullopt,
+                                                    parentUuid);
                 assetDropError.clear();
             } catch (const std::exception& exception) {
                 assetDropError = exception.what();
@@ -163,44 +187,62 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
 
         // Parent links use persistent UUIDs, rather than recyclable ECS ids.
         // This makes the hierarchy survive save/load and entity reallocation.
-        std::unordered_map<Engine::UUID, Engine::Entity> byUuid;
-        std::vector<Engine::Entity> entities;
-        entities.reserve(scene.editor().size());
-        scene.editor().view<>([&](const Engine::Entity entity) {
-            entities.push_back(entity);
-            if (scene.editor().has<Engine::UUIDComponent>(entity)) {
-                byUuid.emplace(scene.editor().read<Engine::UUIDComponent>(entity).value, entity);
-            }
-        });
-        std::unordered_map<Engine::Entity, std::vector<Engine::Entity>> children;
-        std::vector<Engine::Entity> roots;
-        for (const Engine::Entity entity : entities) {
-            if (scene.editor().has<Engine::ParentComponent>(entity)) {
-                const Engine::UUID parent = scene.editor().read<Engine::ParentComponent>(entity).parentUuid;
-                if (const auto found = byUuid.find(parent); found != byUuid.end()) {
-                    children[found->second].push_back(entity);
-                    continue;
+        // The tree only depends on entity membership, UUIDs, parent links and
+        // sibling order, so it is rebuilt when one of those revisions moves
+        // instead of on every editor frame.
+        HierarchyTreeCache& tree = hierarchyTreeCache;
+        const auto editor = scene.editor();
+        const HierarchyTreeKey key{&scene, editor.structuralRevision(),
+                                   editor.componentRevision<Engine::UUIDComponent>(),
+                                   editor.componentRevision<Engine::ParentComponent>(),
+                                   editor.componentRevision<Engine::HierarchyOrderComponent>()};
+        if (!tree.valid || tree.key != key) {
+            tree.children.clear();
+            tree.roots.clear();
+            tree.byUuid.clear();
+            auto& byUuid = tree.byUuid;
+            std::vector<Engine::Entity> entities;
+            entities.reserve(scene.editor().size());
+            byUuid.reserve(scene.editor().size());
+            scene.editor().view<>([&](const Engine::Entity entity) {
+                entities.push_back(entity);
+                if (scene.editor().has<Engine::UUIDComponent>(entity)) {
+                    byUuid.emplace(scene.editor().read<Engine::UUIDComponent>(entity).value, entity);
                 }
+            });
+            for (const Engine::Entity entity : entities) {
+                if (scene.editor().has<Engine::ParentComponent>(entity)) {
+                    const Engine::UUID parent = scene.editor().read<Engine::ParentComponent>(entity).parentUuid;
+                    if (const auto found = byUuid.find(parent); found != byUuid.end()) {
+                        tree.children[found->second].push_back(entity);
+                        continue;
+                    }
+                }
+                tree.roots.push_back(entity);
             }
-            roots.push_back(entity);
-        }
 
-        const auto sortByHierarchyOrder = [&](std::vector<Engine::Entity>& siblings) {
-            std::ranges::sort(siblings, [&](const Engine::Entity left, const Engine::Entity right) {
+            const auto sortByHierarchyOrder = [&](std::vector<Engine::Entity>& siblings) {
                 const auto orderOf = [&](const Engine::Entity entity) {
                     return scene.editor().has<Engine::HierarchyOrderComponent>(entity)
                                ? scene.editor().read<Engine::HierarchyOrderComponent>(entity).value
                                : std::numeric_limits<std::uint32_t>::max();
                 };
-                const std::uint32_t leftOrder = orderOf(left);
-                const std::uint32_t rightOrder = orderOf(right);
-                return leftOrder == rightOrder ? left < right : leftOrder < rightOrder;
-            });
-        };
-        sortByHierarchyOrder(roots);
-        for (auto& [parent, siblings] : children) {
-            sortByHierarchyOrder(siblings);
+                std::ranges::sort(siblings, [&](const Engine::Entity left, const Engine::Entity right) {
+                    const std::uint32_t leftOrder = orderOf(left);
+                    const std::uint32_t rightOrder = orderOf(right);
+                    return leftOrder == rightOrder ? left < right : leftOrder < rightOrder;
+                });
+            };
+            sortByHierarchyOrder(tree.roots);
+            for (auto& [parent, siblings] : tree.children) {
+                sortByHierarchyOrder(siblings);
+            }
+            tree.key = key;
+            tree.valid = true;
         }
+        const auto& children = tree.children;
+        const auto& byUuid = tree.byUuid;
+        const auto& roots = tree.roots;
 
         std::unordered_set<Engine::Entity> visited;
         const auto drawRowControls = [&](const Engine::Entity entity) {
@@ -266,6 +308,14 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, Engine::Assets::
             // and distinguishes them by generation.
             std::snprintf(label, sizeof(label), "%*s%s##%llu", iconSpaces, "", name,
                           static_cast<unsigned long long>(entity));
+            if (pendingRename == entity && !disabled) {
+                renameEntity = entity;
+                renameValue = name;
+                renameError.clear();
+                focusRenameInput = true;
+                openRenamePopup = true;
+                pendingRename = Engine::NullEntity;
+            }
             const auto drawContextMenu = [&] {
                 if (!ImGui::BeginPopupContextItem()) {
                     return;

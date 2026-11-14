@@ -1,7 +1,8 @@
-GAMENGINE_SCENE 28
+GAMENGINE_SCENE 34
 SETTINGS AA Off
 MESHES 1
-MESH_ASSET 0 "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/DEMO/Assets/Sponza/glTF/Sponza.gmesh"
+MESH 0 0 0 0 0
+INDICES
 ENTITIES 4
 ENTITY
 IDENTITY 27 "Camera"

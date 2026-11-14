@@ -223,6 +223,32 @@ void createMaterialTextures() {
                 for (const auto& mip : image.gtex->mips)
                     textureBytes += mip.size;
         const bool compactInitialMips = textureBytes > 512ULL * 1024 * 1024;
+        // Cutout cards clamp their textures so mip filtering cannot pull in
+        // the opposite edge. A cutout material that tiles (Bistro's leaf-
+        // strewn cobblestone, for instance) must repeat instead: clamped, every
+        // pixel outside [0, 1] read the same edge texel and the surface came
+        // out as one flat colour. Decide from the UVs the material really uses.
+        std::vector<bool> tiledMaterials;
+        const auto materialTiles = [&](const std::size_t materialIndex) {
+            if (tiledMaterials.empty()) {
+                tiledMaterials.assign(active.materials->size(), false);
+                constexpr float Slack = 0.01F;
+                const auto outside = [](const Vec2& uv) {
+                    return uv.x() < -Slack || uv.x() > 1.0F + Slack || uv.y() < -Slack || uv.y() > 1.0F + Slack;
+                };
+                for (const Vertex& vertex : mesh.vertices) {
+                    if (vertex.materialIndex >= tiledMaterials.size() || tiledMaterials[vertex.materialIndex])
+                        continue;
+                    const PBRMaterial& material = (*active.materials)[vertex.materialIndex];
+                    const auto& transform = material.textureTransforms[0];
+                    const Vec2& uv = transform.texCoord == 1 ? vertex.texCoord1 : vertex.texCoord;
+                    if (outside(uv) || std::abs(transform.scaleX) > 1.0F + Slack ||
+                        std::abs(transform.scaleY) > 1.0F + Slack)
+                        tiledMaterials[vertex.materialIndex] = true;
+                }
+            }
+            return materialIndex < tiledMaterials.size() && tiledMaterials[materialIndex];
+        };
         auto& ids = meshTextureIds[active.owner];
         if (ids.size() < mesh.images.size())
             ids.resize(mesh.images.size());
@@ -245,14 +271,25 @@ void createMaterialTextures() {
                 ids[i] = id;
                 const bool srgb = std::ranges::any_of(*active.materials, [i](const PBRMaterial& material) {
                     const auto index = static_cast<std::int32_t>(i);
-                    return material.baseColorTexture == index || material.emissiveTexture == index;
+                    return material.baseColorTexture == index || material.emissiveTexture == index ||
+                           material.dirtTexture == index;
                 });
-                const bool alphaCard = std::ranges::any_of(*active.materials, [i](const PBRMaterial& material) {
+                bool alphaCard = false;
+                bool tiled = false;
+                for (std::size_t materialIndex = 0; materialIndex < active.materials->size(); ++materialIndex) {
+                    const PBRMaterial& material = (*active.materials)[materialIndex];
                     const auto index = static_cast<std::int32_t>(i);
-                    return (material.alphaMode == AlphaMode::Mask ||
-                            material.shadingModel == MaterialShadingModel::Foliage) &&
-                           (material.baseColorTexture == index || material.opacityTexture == index);
-                });
+                    if (material.baseColorTexture != index && material.opacityTexture != index)
+                        continue;
+                    if (material.alphaMode == AlphaMode::Mask ||
+                        material.shadingModel == MaterialShadingModel::Foliage)
+                        alphaCard = true;
+                    // Any tiling user of the image needs it to repeat.
+                    if (materialTiles(materialIndex))
+                        tiled = true;
+                }
+                if (tiled)
+                    alphaCard = false;
                 uploadImage(mesh.images[i], srgb,
                             alphaCard ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT,
                             compactInitialMips, gpu.texture);
@@ -404,18 +441,26 @@ void createMaterialTextures() {
          transform(MaterialTextureSlot::Specular), transform(MaterialTextureSlot::SpecularColor)},
         transformRows1,
     };
+    // Glass inputs. UV sets use the same encoding as the main slots (bit 0
+    // UV1, bit 1 identity transform) so the shader skips the affine work.
     packed.glassParams = {std::clamp(source.transmission, 0.0F, 1.0F), std::max(source.ior, 1.0F),
                           std::max(source.thickness, 0.0F), std::clamp(source.dirtIntensity, 0.0F, 1.0F)};
-    packed.glassAttenuation = {source.attenuationColor.r(), source.attenuationColor.g(), source.attenuationColor.b(),
+    packed.glassAttenuation = {std::clamp(source.attenuationColor.r(), 0.0F, 1.0F),
+                               std::clamp(source.attenuationColor.g(), 0.0F, 1.0F),
+                               std::clamp(source.attenuationColor.b(), 0.0F, 1.0F),
                                std::max(source.attenuationDistance, 0.0F)};
     packed.glassTextureIndices = {textureIndex(source.transmissionTexture), textureIndex(source.thicknessTexture),
                                   textureIndex(source.dirtTexture), -1};
     for (std::size_t i = 0; i < source.glassTextureTransforms.size(); ++i) {
         const auto& uv = source.glassTextureTransforms[i];
-        const float c = std::cos(uv.rotation), s = std::sin(uv.rotation);
-        packed.glassTextureCoordinateSets[i] = uv.texCoord;
-        packed.glassTextureTransforms[i] = {c * uv.scaleX, -s * uv.scaleY, uv.offsetX, uv.offsetY};
-        packed.glassTextureRows1[i] = {s * uv.scaleX, c * uv.scaleY, 0.0F, 0.0F};
+        const bool identity = uv.offsetX == 0.0F && uv.offsetY == 0.0F && uv.scaleX == 1.0F && uv.scaleY == 1.0F &&
+                              uv.rotation == 0.0F;
+        const float cosine = std::cos(uv.rotation);
+        const float sine = std::sin(uv.rotation);
+        packed.glassTextureCoordinateSets[static_cast<glm::length_t>(i)] =
+            static_cast<int>(uv.texCoord) | (identity ? 2 : 0);
+        packed.glassTextureTransforms[i] = {cosine * uv.scaleX, -sine * uv.scaleY, uv.offsetX, uv.offsetY};
+        packed.glassTextureRows1[i] = {sine * uv.scaleX, cosine * uv.scaleY, 0.0F, 0.0F};
     }
     if (water != nullptr) {
         const std::int32_t normalMap = textureIndex(water->normalMap);
@@ -459,7 +504,6 @@ void createMeshBuffers() {
         meshletClusterBuffer.destroy();
         meshletVertexBuffer.destroy();
         meshletTriangleBuffer.destroy();
-        meshletIndexBuffer.destroy();
         meshletHeapAllocations.clear();
         meshletHeapFreeRanges.clear();
         meshletClusterHeapFreeRanges.clear();
@@ -791,6 +835,8 @@ void createMeshBuffers() {
         });
         sceneGpu.renderableIndices[entity].push_back(instanceIndex);
     });
+    // The mesh-shader draw sets bind the vertex heap as a storage buffer.
+    bool vertexHeapReallocated = false;
     if (vertexCount == 0 || indexCount == 0) {
         // The empty-scene path below keeps valid dummy bindings.
     } else {
@@ -811,6 +857,7 @@ void createMeshBuffers() {
         const bool growIndexHeap =
             compactGeometryHeap || indexBuffer.handle() == VK_NULL_HANDLE || indexBuffer.size() < requiredIndexBytes;
         if (growVertexHeap) {
+            vertexHeapReallocated = true;
             vertexBuffer.createDeviceLocalEmpty(
                 device, geometryCapacity(requiredVertexBytes),
                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -965,12 +1012,25 @@ void createMeshBuffers() {
             meshletUploads.push_back({mesh, geometry->second, allocation});
     }
     globalMeshletCount = meshletHeapHighWater;
-    const auto growCapacity = [](const std::uint32_t required) { return std::max(1U, required + required / 2U + 1U); };
+    // Same growth policy as the vertex/index heaps: generous headroom for
+    // small heaps, 32 MiB pages once a heap is large. A flat 1.5x left a
+    // third of the ~330 MiB meshlet heaps of a city scene empty.
+    const auto heapCapacityBytes = [](const VkDeviceSize required) {
+        constexpr VkDeviceSize smallLimit = 16ULL * 1024 * 1024;
+        constexpr VkDeviceSize largeLimit = 128ULL * 1024 * 1024;
+        constexpr VkDeviceSize page = 32ULL * 1024 * 1024;
+        if (required < smallLimit)
+            return required + required / 2 + 1;
+        if (required < largeLimit)
+            return required + required / 4 + 1;
+        return ((required + page - 1) / page) * page;
+    };
     const auto ensureMeshletHeap = [&](Buffer& buffer, const std::uint32_t required, const VkDeviceSize elementSize) {
         const VkDeviceSize requiredBytes = elementSize * std::max(1U, required);
         if (buffer.handle() != VK_NULL_HANDLE && buffer.size() >= requiredBytes)
             return false;
-        buffer.createDeviceLocalEmpty(device, elementSize * growCapacity(required), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        const VkDeviceSize capacity = heapCapacityBytes(requiredBytes);
+        buffer.createDeviceLocalEmpty(device, capacity - capacity % elementSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                       vulkanDevice.allocator());
         return true;
     };
@@ -979,15 +1039,7 @@ void createMeshBuffers() {
         ensureMeshletHeap(meshletClusterBuffer, meshletClusterHeapHighWater, sizeof(Culling::GpuMeshletCluster)) |
         ensureMeshletHeap(meshletVertexBuffer, meshletVertexHeapHighWater, sizeof(std::uint32_t)) |
         ensureMeshletHeap(meshletTriangleBuffer, meshletTriangleHeapHighWater, sizeof(std::uint32_t));
-    const VkDeviceSize meshletIndexBytes = sizeof(std::uint32_t) * 3ULL * std::max(1U, meshletTriangleHeapHighWater);
-    const bool meshletIndexReallocated =
-        vulkanDevice.supportsMeshShaders() &&
-        (meshletIndexBuffer.handle() == VK_NULL_HANDLE || meshletIndexBuffer.size() < meshletIndexBytes);
-    if (meshletIndexReallocated)
-        meshletIndexBuffer.createDeviceLocalEmpty(
-            device, sizeof(std::uint32_t) * 3ULL * growCapacity(meshletTriangleHeapHighWater),
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-    if (meshletHeapReallocated || meshletIndexReallocated) {
+    if (meshletHeapReallocated) {
         // A capacity increase replaces all four backing buffers. Their
         // stable offsets remain valid, but every live allocation must
         // be restored once into the enlarged heap.
@@ -1020,17 +1072,53 @@ void createMeshBuffers() {
             triangles.size() != upload.allocation.triangleCount) {
             throw std::runtime_error("Invalid meshlet payload during GPU scene upload");
         }
-        std::vector<std::uint32_t> expandedIndices;
-        if (vulkanDevice.supportsMeshShaders()) {
-            expandedIndices.resize(triangles.size() * 3U);
-            for (const Culling::GpuMeshlet& meshlet : meshlets) {
-                for (std::uint32_t triangle = 0; triangle < meshlet.range.w; ++triangle) {
-                    const std::uint32_t packed = triangles[meshlet.range.z + triangle];
-                    const std::size_t destination = 3ULL * (meshlet.range.z + triangle);
-                    expandedIndices[destination] = vertices[meshlet.range.x + (packed & 0xffU)];
-                    expandedIndices[destination + 1U] = vertices[meshlet.range.x + ((packed >> 8U) & 0xffU)];
-                    expandedIndices[destination + 2U] = vertices[meshlet.range.x + ((packed >> 16U) & 0xffU)];
+        // Meshlets are cut sequentially from each render section's index
+        // range (build_meshlets), so their triangles already sit, in order,
+        // in the shared index heap. Record each meshlet's first index there
+        // (material.y): indexed meshlet draws then read the index heap
+        // instead of a second, meshlet-ordered copy of every index.
+        {
+            const Mesh& mesh = *upload.mesh;
+            const auto sectionsCoverMeshlets = [&] {
+                if (mesh.renderSections.empty())
+                    return false;
+                std::uint32_t next = 0;
+                for (const Mesh::RenderSection& section : mesh.renderSections) {
+                    if (section.firstMeshlet != next || section.meshletCount > meshlets.size() - next)
+                        return false;
+                    next += section.meshletCount;
                 }
+                return next == meshlets.size();
+            };
+            const auto assignRange = [&](const std::uint32_t firstMeshlet, const std::uint32_t meshletCount,
+                                         const std::uint32_t firstIndex, const std::uint32_t indexCount) {
+                if (meshletCount == 0)
+                    return;
+                const std::uint32_t baseTriangle = meshlets[firstMeshlet].range.z;
+                for (std::uint32_t m = firstMeshlet; m < firstMeshlet + meshletCount; ++m) {
+                    Culling::GpuMeshlet& meshlet = meshlets[m];
+                    const std::uint64_t local = 3ULL * (meshlet.range.z - baseTriangle);
+                    if (meshlet.range.z < baseTriangle || local + 3ULL * meshlet.range.w > indexCount)
+                        throw std::runtime_error("Meshlet triangles exceed their render section");
+                    const std::size_t meshIndex = firstIndex + static_cast<std::size_t>(local);
+                    for (std::uint32_t triangle = 0; triangle < meshlet.range.w; ++triangle) {
+                        const std::uint32_t packed = triangles[meshlet.range.z + triangle];
+                        for (std::uint32_t corner = 0; corner < 3U; ++corner) {
+                            const std::uint32_t vertex =
+                                vertices[meshlet.range.x + ((packed >> (8U * corner)) & 0xffU)];
+                            if (vertex != upload.geometry.firstVertex + mesh.indices[meshIndex + 3U * triangle + corner])
+                                throw std::runtime_error("Meshlet triangle order diverges from the index buffer");
+                        }
+                    }
+                    meshlet.material.y = upload.geometry.firstIndex + static_cast<std::uint32_t>(meshIndex);
+                }
+            };
+            if (sectionsCoverMeshlets()) {
+                for (const Mesh::RenderSection& section : mesh.renderSections)
+                    assignRange(section.firstMeshlet, section.meshletCount, section.firstIndex, section.indexCount);
+            } else {
+                assignRange(0U, static_cast<std::uint32_t>(meshlets.size()), 0U,
+                            static_cast<std::uint32_t>(mesh.indices.size()));
             }
         }
         // appendMeshletPayload/ClusterPayload are also used by the
@@ -1054,14 +1142,10 @@ void createMeshBuffers() {
         meshletTriangleBuffer.uploadDeviceLocal(triangles.data(), sizeof(std::uint32_t) * triangles.size(),
                                                 sizeof(std::uint32_t) * upload.allocation.firstTriangle, commandPool,
                                                 vulkanDevice.graphicsQueue());
-        if (!expandedIndices.empty())
-            meshletIndexBuffer.uploadDeviceLocal(expandedIndices.data(), sizeof(std::uint32_t) * expandedIndices.size(),
-                                                 sizeof(std::uint32_t) * 3ULL * upload.allocation.firstTriangle,
-                                                 commandPool, vulkanDevice.graphicsQueue());
     }
     // Descriptors change only on heap growth, never for an ordinary
     // streamed asset upload.
-    if (meshletHeapReallocated && cullingDescriptorPool != VK_NULL_HANDLE) {
+    if ((meshletHeapReallocated || vertexHeapReallocated) && cullingDescriptorPool != VK_NULL_HANDLE) {
         for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
             refreshGPUSceneDescriptors(frame);
     }
@@ -1074,6 +1158,12 @@ void createMeshBuffers() {
         const Mesh* const mesh = source.get();
         const MeshAssetMetadata& metadata = renderer.mesh.resource()->metadata;
         const MeshUploadRecord& planned = rendererUploads.at(entity);
+        // Geometry and meshlets are keyed by the first resource seen for a
+        // source Mesh (see meshResources). Two handles to one cached model --
+        // the same asset added twice, or a prefab of a model already in the
+        // scene -- must both resolve through that key; looking up their own
+        // resource threw std::out_of_range and aborted the scene sync.
+        const void* const geometryKey = meshResources.at(mesh);
         renderer.firstIndex = planned.firstIndex;
         const std::uint32_t firstVertex = planned.firstVertex;
         const AABB localBounds = metadata.bounds;
@@ -1081,13 +1171,13 @@ void createMeshBuffers() {
         // draw path can therefore stop consulting MeshSourceData
         // once all batches use MeshGpuResource directly.
         if (const auto& resource = renderer.mesh.resource()) {
-            resource->handle = geometryHeapMeshIds.at(resource.get());
+            resource->handle = geometryHeapMeshIds.at(geometryKey);
             resource->firstVertex = firstVertex;
             resource->vertexCount = mesh->vertexCount();
             resource->firstIndex = renderer.firstIndex;
             resource->indexCount = mesh->indexCount();
             resource->meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size());
-            resource->firstMeshlet = firstMeshlets.contains(resource.get()) ? firstMeshlets.at(resource.get()) : 0U;
+            resource->firstMeshlet = firstMeshlets.contains(geometryKey) ? firstMeshlets.at(geometryKey) : 0U;
             resource->bounds = localBounds;
         }
         // Culling must use the same parent-composed matrix as the
@@ -1100,6 +1190,12 @@ void createMeshBuffers() {
             (renderer.material.pbr.doubleSided || renderer.material.pbr.alphaMode == AlphaMode::Mask ||
              renderer.material.pbr.alphaMode == AlphaMode::Blend);
         const auto resolveShaderSlot = [&]() {
+            if (const char* forced = std::getenv("GE_DEBUG_GRAPH")) { // TEMP-DEBUG
+                const ShaderGraphProgram program{0x1234U, {}, forced}; // TEMP-DEBUG
+                const std::uint32_t slot = forwardPass.registerShaderGraph(program, renderer.material.renderState); // TEMP-DEBUG
+                static_cast<void>(lightingForwardPass.registerShaderGraph(program, renderer.material.renderState)); // TEMP-DEBUG
+                return slot; // TEMP-DEBUG
+            } // TEMP-DEBUG
             if (renderer.material.shaderSource == MaterialShaderSource::BuiltIn) {
                 return static_cast<std::uint32_t>(materialShaderIndex(renderer.material.shader));
             }
@@ -1126,8 +1222,8 @@ void createMeshBuffers() {
         const auto pbrShaderSlot = [&](const PBRMaterial& material) -> std::uint32_t {
             if (shaderSlot != materialShaderIndex(MaterialShader::StandardPBR))
                 return shaderSlot;
-            if (usesGlassThin(material))
-                return static_cast<std::uint32_t>(GlassThinProgramSlot);
+            if (usesGlass(material))
+                return static_cast<std::uint32_t>(GlassProgramSlot);
             if (material.terrainLayered)
                 return static_cast<std::uint32_t>(PbrTerrainProgramSlot);
             if (material.shadingModel == MaterialShadingModel::Foliage)
@@ -1188,16 +1284,13 @@ void createMeshBuffers() {
                     .indexCount = indexCount,
                     .lod1IndexCount = 0,
                     .lod2IndexCount = 0,
-                    .firstMeshlet = (firstMeshlets.contains(renderer.mesh.resource().get())
-                                         ? firstMeshlets.at(renderer.mesh.resource().get())
-                                         : 0U) +
+                    .firstMeshlet = (firstMeshlets.contains(geometryKey) ? firstMeshlets.at(geometryKey) : 0U) +
                                     firstMeshlet,
                     .meshletCount = meshletCount,
-                    .firstMeshletCluster = firstMeshletClusters.contains(renderer.mesh.resource().get())
-                                               ? firstMeshletClusters.at(renderer.mesh.resource().get())
-                                               : 0U,
-                    .meshletClusterRoot = firstMeshletClusters.contains(renderer.mesh.resource().get())
-                                              ? firstMeshletClusters.at(renderer.mesh.resource().get()) +
+                    .firstMeshletCluster =
+                        firstMeshletClusters.contains(geometryKey) ? firstMeshletClusters.at(geometryKey) : 0U,
+                    .meshletClusterRoot = firstMeshletClusters.contains(geometryKey)
+                                              ? firstMeshletClusters.at(geometryKey) +
                                                     (sectionIndex < mesh->renderSections.size()
                                                          ? mesh->renderSections[sectionIndex].meshletClusterRoot
                                                          : mesh->meshletClusterRoot)
@@ -1205,7 +1298,8 @@ void createMeshBuffers() {
                     .firstInstance = static_cast<uint32_t>(renderables.size()),
                     .instanceCount = 0,
                     .shaderSlot = rangeShaderSlot,
-                    .castShadow = castShadow && rangeShaderSlot != GlassThinProgramSlot,
+                    // Glass transmits light; it is not an opaque shadow caster.
+                    .castShadow = castShadow && rangeShaderSlot != GlassProgramSlot,
                     .shadowCacheMode = renderer.shadowCacheMode,
                     // The foliage stream is drawn after opaque geometry. Route
                     // blend here until transparent draws have a sorted stream.
@@ -1512,6 +1606,7 @@ void createMeshBuffers() {
                                    vulkanDevice.allocator(), TexturePixelFormat::R8);
     });
     rayTracingBlasDirty = vulkanDevice.supportsRayQuery();
+    clusterGeometryDirty = true;
     const auto heapMetrics = [](const Buffer& buffer, const std::uint32_t highWater, const VkDeviceSize elementBytes,
                                 const std::vector<GeometryHeapRange>& freeRanges, const VkDeviceSize liveBytes) {
         const VkDeviceSize committed = buffer.size();
@@ -1719,6 +1814,7 @@ void createInstanceBuffer() {
                                      vulkanDevice.graphicsQueue());
         }
     }
+    displacedMaterialsDirty = true;
     if (ownsRenderableUploadBatch) {
         [[maybe_unused]] const UploadTicket ticket = uploadContext.submit();
     }
@@ -1888,6 +1984,7 @@ void createGPUSceneDatabaseBuffers() {
     gpuSceneMeshHighWater = std::max(gpuSceneMeshHighWater, meshes.size());
     gpuSceneMaterialHighWater = std::max(gpuSceneMaterialHighWater, databaseMaterials.size());
     for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        bool replaced = false;
         const auto ensureCapacity = [&](Buffer& buffer, const std::size_t count, const std::size_t highWater,
                                         const std::size_t minimum, const VkDeviceSize recordSize) {
             const std::size_t capacity = std::max({minimum, count + count / 2U, highWater + highWater / 2U});
@@ -1895,6 +1992,7 @@ void createGPUSceneDatabaseBuffers() {
             if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
                 buffer.createDeviceLocalEmpty(device, required, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                               vulkanDevice.allocator(), true);
+                replaced = true;
             }
         };
         ensureCapacity(gpuSceneInstanceBuffers[frame], instances.size(), gpuSceneInstanceHighWater, 4096U,
@@ -1910,6 +2008,13 @@ void createGPUSceneDatabaseBuffers() {
         uploadGPUSceneSnapshot<GPUSceneMeshRecord>(gpuSceneMeshBuffers[frame], meshes);
         uploadGPUSceneSnapshot<GPUSceneMaterialRecord>(gpuSceneMaterialBuffers[frame], databaseMaterials);
         refreshGPUSceneRoot(frame);
+        // A grown buffer is a new VkBuffer: the old one is already
+        // destroyed. A topology rebuild that keeps the culling resources
+        // (canReuseCullingResources) still binds the old handles in its
+        // meshlet, instance, shadow and grass sets; dispatching with them
+        // read freed memory and lost the device on large scenes.
+        if (replaced)
+            refreshGPUSceneDescriptors(frame);
         sceneGpu.pendingDatabaseUploads[frame].clear();
     }
     sceneGpu.database.clearDirty();
@@ -2044,6 +2149,71 @@ void refreshGPUSceneDescriptors(const std::uint32_t frame) const {
         }
         vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
     }
+    // Bindings match shadow_meshlet_refine.slang and, for the caster draw
+    // set, Shadow/shadow_meshlet_mesh.slang (the entries are the refine
+    // pass's command buffer). One pair per VSM stream.
+    const auto writeShadowMeshletSets = [&](const VkDescriptorSet refineSet, const VkDescriptorSet drawSet,
+                                            const Buffer& transforms, const Buffer& objects,
+                                            const Buffer& objectCounts, const Buffer& commands,
+                                            const Buffer& commandCounts, const Buffer& sectionCommands,
+                                            const Buffer& taskCommands) {
+        if (refineSet == VK_NULL_HANDLE || meshletBuffer.handle() == VK_NULL_HANDLE ||
+            objects.handle() == VK_NULL_HANDLE)
+            return;
+        const std::array<VkDescriptorBufferInfo, 10> refineInfos{{
+            {cullingObjectBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+            {transforms.handle(), 0, VK_WHOLE_SIZE},
+            {shadowPageWorkBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            {objects.handle(), 0, VK_WHOLE_SIZE},
+            {objectCounts.handle(), 0, VK_WHOLE_SIZE},
+            {commands.handle(), 0, VK_WHOLE_SIZE},
+            {commandCounts.handle(), 0, VK_WHOLE_SIZE},
+            {sectionCommands.handle(), 0, VK_WHOLE_SIZE},
+            {taskCommands.handle(), 0, VK_WHOLE_SIZE},
+        }};
+        std::array<VkWriteDescriptorSet, 10> refineWrites{};
+        for (std::uint32_t binding = 0; binding < refineWrites.size(); ++binding)
+            refineWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     .dstSet = refineSet,
+                                     .dstBinding = binding,
+                                     .descriptorCount = 1,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                     .pBufferInfo = &refineInfos[binding]};
+        vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(refineWrites.size()), refineWrites.data(), 0,
+                               nullptr);
+        if (drawSet == VK_NULL_HANDLE || meshletVertexBuffer.handle() == VK_NULL_HANDLE ||
+            meshletTriangleBuffer.handle() == VK_NULL_HANDLE || vertexBuffer.handle() == VK_NULL_HANDLE)
+            return;
+        const std::array<VkDescriptorBufferInfo, 6> casterInfos{{
+            {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+            {meshletVertexBuffer.handle(), 0, VK_WHOLE_SIZE},
+            {meshletTriangleBuffer.handle(), 0, VK_WHOLE_SIZE},
+            {vertexBuffer.handle(), 0, VK_WHOLE_SIZE},
+            {commands.handle(), 0, VK_WHOLE_SIZE},
+            {commandCounts.handle(), 0, VK_WHOLE_SIZE},
+        }};
+        std::array<VkWriteDescriptorSet, 6> casterWrites{};
+        for (std::uint32_t binding = 0; binding < casterWrites.size(); ++binding)
+            casterWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                     .dstSet = drawSet,
+                                     .dstBinding = binding,
+                                     .descriptorCount = 1,
+                                     .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                     .pBufferInfo = &casterInfos[binding]};
+        vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(casterWrites.size()), casterWrites.data(), 0,
+                               nullptr);
+    };
+    writeShadowMeshletSets(shadowMeshletRefineSets[frame], shadowMeshletDrawSets[frame],
+                           shadowInstanceTransformBuffers[frame], shadowMeshletObjectBuffers[frame],
+                           shadowMeshletObjectCountBuffers[frame], shadowMeshletCommandBuffers[frame],
+                           shadowMeshletCommandCountBuffers[frame], shadowIndirectBuffers[frame],
+                           shadowMeshletTaskCommandBuffers[frame]);
+    writeShadowMeshletSets(shadowTwoSidedMeshletRefineSets[frame], shadowTwoSidedMeshletDrawSets[frame],
+                           shadowTwoSidedInstanceTransformBuffers[frame], shadowTwoSidedMeshletObjectBuffers[frame],
+                           shadowTwoSidedMeshletObjectCountBuffers[frame], shadowTwoSidedMeshletCommandBuffers[frame],
+                           shadowTwoSidedMeshletCommandCountBuffers[frame], shadowTwoSidedIndirectBuffers[frame],
+                           shadowTwoSidedMeshletTaskCommandBuffers[frame]);
     if (meshletDispatchSets[frame] != VK_NULL_HANDLE) {
         const VkDescriptorBufferInfo meshletDispatchInfos[] = {
             {visibleInstanceCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
@@ -2082,6 +2252,41 @@ void refreshGPUSceneDescriptors(const std::uint32_t frame) const {
                                               .pBufferInfo = &meshletIndirectInfos[binding]};
         }
         vkUpdateDescriptorSets(device, std::size(meshletIndirectWrites), meshletIndirectWrites, 0, nullptr);
+        // Mesh-shader forward path: the bin pass mirrors the set above with
+        // the entry list at binding 5; the draw set is MeshletDraw.slang.
+        if (meshletDrawSets[frame] != VK_NULL_HANDLE && meshletDrawListBuffers[frame].handle() != VK_NULL_HANDLE &&
+            meshletVertexBuffer.handle() != VK_NULL_HANDLE && meshletTriangleBuffer.handle() != VK_NULL_HANDLE) {
+            const auto writeStorageSet = [&](const VkDescriptorSet set,
+                                             const std::span<const VkDescriptorBufferInfo> infos) {
+                std::array<VkWriteDescriptorSet, 8> writes{};
+                for (std::uint32_t binding = 0; binding < infos.size(); ++binding)
+                    writes[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                       .dstSet = set,
+                                       .dstBinding = binding,
+                                       .descriptorCount = 1,
+                                       .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                       .pBufferInfo = &infos[binding]};
+                vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(infos.size()), writes.data(), 0, nullptr);
+            };
+            std::array<VkDescriptorBufferInfo, 7> binInfos{};
+            std::ranges::copy(meshletIndirectInfos, binInfos.begin());
+            binInfos[5] = {meshletDrawListBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+            writeStorageSet(meshletDrawBinSets[frame], binInfos);
+            const std::array<VkDescriptorBufferInfo, 2> commandInfos{{
+                {meshletIndexedDrawCountBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                {meshletDrawCommandBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            }};
+            writeStorageSet(meshletDrawCommandSets[frame], commandInfos);
+            const std::array<VkDescriptorBufferInfo, 6> drawInfos{{
+                {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+                {meshletVertexBuffer.handle(), 0, VK_WHOLE_SIZE},
+                {meshletTriangleBuffer.handle(), 0, VK_WHOLE_SIZE},
+                {vertexBuffer.handle(), 0, VK_WHOLE_SIZE},
+                {meshletDrawListBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                {meshletIndexedDrawCountBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+            }};
+            writeStorageSet(meshletDrawSets[frame], drawInfos);
+        }
     }
 
     const auto updateGrassSet = [&](const VkDescriptorSet set, std::initializer_list<VkBuffer> storageBuffers,
@@ -2278,6 +2483,8 @@ void uploadPendingRenderableBuffers() {
     for (const std::size_t index : settledTransformIndices) {
         markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
     }
+    if (!dirtyMaterials[currentFrame].empty())
+        displacedMaterialsDirty = true;
     for (const std::size_t index : dirtyMaterials[currentFrame]) {
         const RenderableRecord& record = renderables[index];
         materialBuffers[currentFrame].uploadDeviceLocal(
@@ -2293,18 +2500,21 @@ void uploadPendingRenderableBuffers() {
 
 void updateRenderableBuffers() {
     GE_PROFILE_SCOPE("RenderableUpdateCPU");
-    synchronizeGlassAtlasSlots();
     dirtyShadowObjects.clear();
     const bool shadowCacheCanContainGeometry = lastTransformRevision != std::numeric_limits<std::uint64_t>::max() &&
                                                lastMeshRendererRevision != std::numeric_limits<std::uint64_t>::max() &&
                                                lastTerrainGrassRevision != std::numeric_limits<std::uint64_t>::max() &&
                                                lastParentRevision != std::numeric_limits<std::uint64_t>::max();
-    const auto appendDirtyShadowBounds = [&](const AABB& bounds) {
+    // `animated` marks bounds that change every frame without an ECS edit
+    // (wind). ShadowPass refreshes those on coarse clip levels at a reduced
+    // rate; see ShadowPass::AnimatedDirtyBoundsFlag.
+    const auto appendDirtyShadowBounds = [&](const AABB& bounds, const bool animated = false) {
         if (!shadowCacheCanContainGeometry) {
             return;
         }
         Culling::GPUObjectData object{};
-        object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F};
+        object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(),
+                               animated ? ShadowPass::AnimatedDirtyBoundsFlag : 0.0F};
         object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F};
         object.model.data[0] = 1.0F;
         object.model.data[5] = 1.0F;
@@ -2312,7 +2522,7 @@ void updateRenderableBuffers() {
         object.model.data[15] = 1.0F;
         dirtyShadowObjects.push_back(object);
     };
-    const auto appendGrassShadowBounds = [&] {
+    const auto appendGrassShadowBounds = [&](const bool animated) {
         for (const auto& cluster : sceneGpu.grassClusters) {
             const float centerY = glm::unpackHalf1x16(cluster.draw.w & 0xffffU);
             const float halfHeight = glm::unpackHalf1x16(cluster.draw.w >> 16U);
@@ -2320,17 +2530,17 @@ void updateRenderableBuffers() {
             appendDirtyShadowBounds(
                 {Vec3{cluster.originExtent.x - padding, centerY - padding, cluster.originExtent.y - padding},
                  Vec3{cluster.originExtent.x + cluster.originExtent.z + padding, centerY + padding,
-                      cluster.originExtent.y + cluster.originExtent.z + padding}});
+                      cluster.originExtent.y + cluster.originExtent.z + padding}},
+                animated);
         }
     };
     // Wind changes vertex positions without changing ECS transforms.
     const bool grassWindChanged = lastGrassShadowWindRevision != sceneFrameDataCache.windRevision;
     if (sceneFrameDataCache.hasWind || grassWindChanged)
-        appendGrassShadowBounds();
+        appendGrassShadowBounds(!grassWindChanged);
     lastGrassShadowWindRevision = sceneFrameDataCache.windRevision;
     const std::uint64_t transformRevision = registry.componentRevision<Transform>();
     const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
-    const std::uint64_t glassRevision = registry.componentRevision<GlassDestructionComponent>();
     const std::uint64_t terrainGrassRevision = registry.componentRevision<TerrainGrassComponent>();
     const std::uint64_t parentRevision = registry.componentRevision<ParentComponent>();
     if (terrainGrassRevision != lastTerrainGrassRevision) {
@@ -2374,12 +2584,11 @@ void updateRenderableBuffers() {
         if (deformationChanged) {
             ++grassDeformationVersion;
             if (!sceneFrameDataCache.hasWind)
-                appendGrassShadowBounds();
+                appendGrassShadowBounds(false);
         }
     }
     if (transformRevision == lastTransformRevision && meshRendererRevision == lastMeshRendererRevision &&
-        glassRevision == lastGlassDestructionRevision && terrainGrassRevision == lastTerrainGrassRevision &&
-        parentRevision == lastParentRevision) {
+        terrainGrassRevision == lastTerrainGrassRevision && parentRevision == lastParentRevision) {
         uploadPendingRenderableBuffers();
         return;
     }
@@ -2390,7 +2599,6 @@ void updateRenderableBuffers() {
     changedIndices.clear();
     constexpr std::uint8_t transformChange = 1U;
     constexpr std::uint8_t rendererChange = 2U;
-    constexpr std::uint8_t glassChange = 4U;
     if (renderableChangeMarks.size() != renderables.size()) {
         renderableChangeMarks.assign(renderables.size(), 0);
         renderableChangeKinds.assign(renderables.size(), 0);
@@ -2417,73 +2625,28 @@ void updateRenderableBuffers() {
             }
         };
         const auto addChangedEntity = [&](const Entity entity, const std::uint8_t kind) {
-            if (registry.has<GlassFragmentBindingComponent>(entity)) {
-                const auto& binding = registry.get<GlassFragmentBindingComponent>(entity);
-                const auto pane = sceneGpu.renderableIndices.find(binding.paneEntity);
-                if (pane != sceneGpu.renderableIndices.end())
-                    for (auto index : pane->second)
-                        if (renderables[index].sectionIndex == binding.fragmentIndex)
-                            addIndex(index, kind);
-            }
             const auto it = sceneGpu.renderableIndices.find(entity);
             if (it == sceneGpu.renderableIndices.end())
                 return;
-            if (registry.has<GlassDestructionComponent>(entity) && registry.has<Transform>(entity) &&
-                registry.has<MeshRenderer>(entity) && !it->second.empty()) {
-                const auto& glass = registry.get<GlassDestructionComponent>(entity);
-                const auto& panePose = registry.get<Transform>(entity).worldMatrix().native();
-                const auto intactIndex = std::ranges::find_if(
-                    it->second, [&](auto index) { return renderables[index].sectionIndex == glass.fragments.size(); });
-                const auto& intact = renderables[intactIndex != it->second.end() ? *intactIndex : it->second.back()];
-                const bool prepared = registry.get<MeshRenderer>(entity).mesh.resource()->metadata.sections.size() ==
-                                      glass.fragments.size() + 1;
-                const bool samePanePose =
-                    prepared && intact.renderProxy.instance != InvalidGPUSceneInstanceId &&
-                    std::equal(sceneGpu.database.instances()[intact.renderProxy.instance].worldMatrix.begin(),
-                               sceneGpu.database.instances()[intact.renderProxy.instance].worldMatrix.end(),
-                               &panePose[0][0]);
-                // An ECS structural revision is not a pose change. Dynamic
-                // shards are independently routed through their bindings above.
-                if (kind == transformChange && samePanePose)
-                    return;
-                if (kind == glassChange && prepared && samePanePose) {
-                    for (const auto index : it->second) {
-                        auto& record = renderables[index];
-                        const bool cell = record.sectionIndex < glass.fragments.size();
-                        const auto source = cell && glass.fractured && !glass.fragments[record.sectionIndex].attached &&
-                                                    registry.valid(glass.fragments[record.sectionIndex].debrisEntity)
-                                                ? glass.fragments[record.sectionIndex].debrisEntity
-                                                : entity;
-                        const bool visible = cell ? glass.fractured && (glass.fragments[record.sectionIndex].attached ||
-                                                                        source != entity)
-                                                  : !glass.fractured;
-                        if (record.visible != visible) {
-                            record.visible = visible;
-                            const auto& batch = instanceBatches[record.batchIndex];
-                            sceneGpu.database.updateInstanceFlags(
-                                record.renderProxy.instance,
-                                (visible ? 1U : 0U) | (batch.foliagePipeline ? 2U : 0U) | (batch.twoSided ? 8U : 0U));
-                            markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
-                            changedBatches.push_back(record.batchIndex);
-                            rtTlasInputDirty = true;
-                        }
-                        if (source != record.lastTransformEntity)
-                            addIndex(index, kind);
-                    }
-                    return;
-                }
-            }
             for (const std::size_t index : it->second)
                 addIndex(index, kind);
         };
-        for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
-            addChangedEntity(entity, transformChange);
+        // Every world change since the last sync, including those another
+        // caller (physics) resolved earlier this frame.
+        bool complete = true;
+        const auto changes =
+            TransformSystem::worldTransformChangesSince(registry, renderableWorldTransformSerial, complete);
+        if (!complete) {
+            for (std::size_t index = 0; index < renderables.size(); ++index)
+                addIndex(index, transformChange);
+        } else {
+            for (const auto& change : changes)
+                addChangedEntity(change.entity, transformChange);
         }
         registry.forEachComponentChangedSinceUnique<MeshRenderer>(
             lastMeshRendererRevision, [&](const Entity entity) { addChangedEntity(entity, rendererChange); });
-        registry.forEachComponentChangedSinceUnique<GlassDestructionComponent>(
-            lastGlassDestructionRevision, [&](const Entity entity) { addChangedEntity(entity, glassChange); });
     }
+    renderableWorldTransformSerial = TransformSystem::worldTransformSerial(registry);
 
     const Registry& readRegistry = registry;
     const auto worldModel = [&](const Entity entity) {
@@ -2501,7 +2664,7 @@ void updateRenderableBuffers() {
                 record.renderProxy.instance = InvalidGPUSceneInstanceId;
                 continue;
             }
-            const auto& transform = readRegistry.get<Transform>(glassSectionEntity(record));
+            const auto& transform = readRegistry.get<Transform>(entity);
             if (record.waterOnly) {
                 const bool transformChanged =
                     lastTransformRevision == std::numeric_limits<std::uint64_t>::max() ||
@@ -2511,9 +2674,7 @@ void updateRenderableBuffers() {
                     glm::vec3 scale{};
                     glm::quat rotation{};
                     glm::vec3 translation{};
-                    glm::vec3 skew{};
-                    glm::vec4 perspective{};
-                    if (!glm::decompose(model, scale, rotation, translation, skew, perspective)) {
+                    if (!decomposeAffineTrs(model, scale, rotation, translation)) {
                         scale = {1.0F, 1.0F, 1.0F};
                         rotation = {};
                         translation = glm::vec3{model[3]};
@@ -2543,19 +2704,17 @@ void updateRenderableBuffers() {
                                             renderableChangeKinds[index] & transformChange;
             const bool hasRendererChange = lastMeshRendererRevision == std::numeric_limits<std::uint64_t>::max() ||
                                            renderableChangeKinds[index] & rendererChange;
-            const bool hasGlassChange = renderableChangeKinds[index] & glassChange;
             const MeshRenderer* renderer = &readRegistry.get<MeshRenderer>(entity);
-            glm::mat4 model = glassSectionModel(record);
+            glm::mat4 model = worldModel(entity);
             const auto shadowBounds = [&](const glm::mat4& instanceModel) {
                 return record.localBounds.transformed(instanceModel);
             };
-            bool transformChanged = (hasTransformChange || ((hasRendererChange || hasGlassChange) &&
-                                                            readRegistry.has<GlassDestructionComponent>(entity))) &&
+            bool transformChanged = hasTransformChange &&
                                     (hasRendererChange || !optimizationFeatures.transformCaching ||
-                                     record.lastTransformEntity != glassSectionEntity(record) ||
+                                     record.lastTransformEntity != entity ||
                                      record.lastWorldRevision != transform.worldRevision());
             // Hierarchy updates can advance world revisions without changing
-            // a pane's actual pose. Do not reupload every reserved section.
+            // an object's actual pose. Do not reupload it.
             if (transformChanged && !hasRendererChange && optimizationFeatures.transformCaching &&
                 record.renderProxy.instance != InvalidGPUSceneInstanceId) {
                 const auto& previous = sceneGpu.database.instances()[record.renderProxy.instance].worldMatrix;
@@ -2564,22 +2723,7 @@ void updateRenderableBuffers() {
             }
             if (!transformChanged) {
                 record.lastWorldRevision = transform.worldRevision();
-                record.lastTransformEntity = glassSectionEntity(record);
-            }
-            if (hasGlassChange && !hasRendererChange && !transformChanged &&
-                record.renderProxy.instance != InvalidGPUSceneInstanceId) {
-                const bool visible = glassSectionVisible(record);
-                if (record.visible != visible) {
-                    record.visible = visible;
-                    const auto& batch = instanceBatches[record.batchIndex];
-                    sceneGpu.database.updateInstanceFlags(record.renderProxy.instance,
-                                                          (visible ? 1U : 0U) | (batch.foliagePipeline ? 2U : 0U) |
-                                                              (batch.twoSided ? 8U : 0U));
-                    markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
-                    changedBatches.push_back(record.batchIndex);
-                    rtTlasInputDirty = true;
-                }
-                continue;
+                record.lastTransformEntity = entity;
             }
             if (transformChanged) {
                 rtTlasInputDirty = true;
@@ -2599,10 +2743,7 @@ void updateRenderableBuffers() {
                 glm::vec3 decomposedScale{};
                 glm::quat decomposedRotation{};
                 glm::vec3 decomposedTranslation{};
-                glm::vec3 skew{};
-                glm::vec4 perspective{};
-                if (!glm::decompose(model, decomposedScale, decomposedRotation, decomposedTranslation, skew,
-                                    perspective)) {
+                if (!decomposeAffineTrs(model, decomposedScale, decomposedRotation, decomposedTranslation)) {
                     decomposedScale = {1.0F, 1.0F, 1.0F};
                     decomposedRotation = {};
                     decomposedTranslation = glm::vec3{model[3]};
@@ -2611,26 +2752,23 @@ void updateRenderableBuffers() {
                     glm::vec4{decomposedTranslation, std::bit_cast<float>(record.materialTableOffset)};
                 rendererInstance.rotation =
                     glm::vec4{decomposedRotation.x, decomposedRotation.y, decomposedRotation.z, decomposedRotation.w};
-                rendererInstance.scaleBase = glm::vec4{decomposedScale, glassCrackSlot(entity)};
+                rendererInstance.scaleBase = glm::vec4{decomposedScale, 0.0F};
                 record.lastWorldRevision = transform.worldRevision();
-                record.lastTransformEntity = glassSectionEntity(record);
+                record.lastTransformEntity = entity;
+                // One transformed AABB serves the record, its spatial cell and
+                // the shadow invalidation (shadowBounds(model) is the same box).
                 record.worldBounds = record.localBounds.transformed(model);
-                sceneGpu.moveRenderableToCell(index, SceneGpuResources::cellFor(record.localBounds.transformed(model)));
+                sceneGpu.moveRenderableToCell(index, SceneGpuResources::cellFor(record.worldBounds));
                 if (record.batchIndex < instanceBatches.size() && instanceBatches[record.batchIndex].castShadow) {
                     if (hadWorldTransform)
                         appendDirtyShadowBounds(previousShadowBounds);
-                    appendDirtyShadowBounds(shadowBounds(model));
+                    appendDirtyShadowBounds(record.worldBounds);
                 }
                 markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
                 markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                 changedBatches.push_back(record.batchIndex);
             }
             bool materialChanged = false;
-            if ((hasRendererChange || hasGlassChange) && readRegistry.has<GlassDestructionComponent>(entity)) {
-                markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
-                changedBatches.push_back(record.batchIndex);
-                rtTlasInputDirty = true;
-            }
             if (hasRendererChange) {
                 const auto sourceMesh = renderer->mesh.source();
                 if (sourceMesh) {
@@ -2658,23 +2796,24 @@ void updateRenderableBuffers() {
                         }
                     }
                 } else if (record.materialFromRenderer || (renderer->materialOverride && record.materialIndex == 0)) {
-                    // Imported geometry can be released; texture identity and material
-                    // authoring data remain available for live glass edits.
+                    // Imported geometry can be released; texture identity and
+                    // the authored material survive, so live glass edits
+                    // repack the whole record from the retained resource.
                     const auto resource = renderer->mesh.resource();
-                    if (resource && usesGlassThin(renderer->material.pbr)) {
+                    if (resource && usesGlass(renderer->material.pbr)) {
                         Mesh retainedMesh;
                         retainedMesh.sourcePath = resource->sourcePath;
-                        const auto updated =
+                        const GPUMaterialData updated =
                             packMaterial(renderer->material.pbr, retainedMesh, nullptr, resource.get());
-                        const std::uint32_t glassSlot = record.materialFromRenderer ? record.materialIndex : 0;
-                        auto& destination = materials[record.materialTableOffset + glassSlot];
-                        if (!sameMaterial(destination, updated)) {
-                            displacementChanged |= destination.displacementParams != updated.displacementParams;
-                            destination = updated;
+                        GPUMaterialData& glassDestination =
+                            materials[record.materialTableOffset + (record.materialFromRenderer ? record.materialIndex : 0)];
+                        if (!sameMaterial(glassDestination, updated)) {
+                            displacementChanged |= glassDestination.displacementParams != updated.displacementParams;
+                            glassDestination = updated;
                             materialChanged = true;
                         }
                     }
-                    // Displacement remains editable on non-transmissive materials too.
+                    // Displacement stays editable on its retained material record.
                     const std::uint32_t slot = record.materialFromRenderer ? record.materialIndex : 0;
                     GPUMaterialData& destination = materials[record.materialTableOffset + slot];
                     const float scale = renderer->material.pbr.displacementScale;
@@ -2704,11 +2843,10 @@ void updateRenderableBuffers() {
                     record.localBounds.min -= padding;
                     record.localBounds.max += padding;
                     record.worldBounds = record.localBounds.transformed(model);
-                    sceneGpu.moveRenderableToCell(index,
-                                                  SceneGpuResources::cellFor(record.localBounds.transformed(model)));
+                    sceneGpu.moveRenderableToCell(index, SceneGpuResources::cellFor(record.worldBounds));
                     if (record.batchIndex < instanceBatches.size() && instanceBatches[record.batchIndex].castShadow) {
                         appendDirtyShadowBounds(previousBounds);
-                        appendDirtyShadowBounds(shadowBounds(model));
+                        appendDirtyShadowBounds(record.worldBounds);
                     }
                     markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                     changedBatches.push_back(record.batchIndex);
@@ -2752,7 +2890,7 @@ void updateRenderableBuffers() {
                     }
                     return matrix;
                 }();
-                record.visible = glassSectionVisible(record);
+                record.visible = true;
                 const std::uint32_t instanceFlags =
                     (record.visible ? 1U : 0U) | (batch.foliagePipeline ? 2U : 0U) | (batch.twoSided ? 8U : 0U);
                 const bool proxyUninitialized = record.renderProxy.instance == InvalidGPUSceneInstanceId;
@@ -2785,8 +2923,6 @@ void updateRenderableBuffers() {
                         sceneGpu.database.updateInstanceTransform(record.renderProxy.instance, worldMatrix,
                                                                   record.localBounds, record.displacementBoundsPadding);
                     }
-                    if (hasGlassChange)
-                        sceneGpu.database.updateInstanceFlags(record.renderProxy.instance, instanceFlags);
                     if (hasRendererChange) {
                         sceneGpu.database.updateMesh(record.renderProxy.mesh, mesh);
                         sceneGpu.database.updateMaterial(record.renderProxy.material, material);
@@ -2806,9 +2942,6 @@ void updateRenderableBuffers() {
             AABB bounds{};
             bool initialized = false;
             bool displacedGeometry = false;
-            instanceBatches[batchIndex].indexCount = liveBatchIndexCount(batchIndex);
-            // Recompute a shared batch once, rather than once per section instance.
-            gpuObjects[batchIndex].indexCount = instanceBatches[batchIndex].indexCount;
             for (std::size_t index : sceneGpu.batchRenderableIndices[batchIndex]) {
                 const RenderableRecord& record = renderables[index];
                 if (!record.visible || !readRegistry.has<Transform>(record.entity))
@@ -2830,6 +2963,7 @@ void updateRenderableBuffers() {
             if (instanceBatches[batchIndex].displacedGeometry != displacedGeometry) {
                 instanceBatches[batchIndex].displacedGeometry = displacedGeometry;
                 rayTracingBlasDirty = vulkanDevice.supportsRayQuery();
+                clusterGeometryDirty = true;
                 rtTlasInputDirty = true;
             }
             if (!initialized)
@@ -2871,7 +3005,6 @@ void updateRenderableBuffers() {
     });
     lastTransformRevision = transformRevision;
     lastMeshRendererRevision = meshRendererRevision;
-    lastGlassDestructionRevision = glassRevision;
     lastTerrainGrassRevision = terrainGrassRevision;
     lastParentRevision = parentRevision;
 }
@@ -2918,8 +3051,10 @@ void updateCullingUniformBuffer(const uint32_t frame) const {
     data.shadowPass = 0;
     data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
     data.drawCategory = 0;
+    std::ranges::copy(drawBinOffsets[0], data.binOffsets);
     cullingUniformBuffers[frame].update(&data, sizeof(data));
     data.drawCategory = 1;
+    std::ranges::copy(drawBinOffsets[1], data.binOffsets);
     foliageCullingUniformBuffers[frame].update(&data, sizeof(data));
 }
 
@@ -2978,8 +3113,10 @@ void updateSceneCullingUniformBuffer(const uint32_t frame) const {
     data.cameraCut = 1;
     data.shadowPass = 0;
     data.drawCategory = 0;
+    std::ranges::copy(drawBinOffsets[0], data.binOffsets);
     sceneCullingUniformBuffers[frame].update(&data, sizeof(data));
     data.drawCategory = 1;
+    std::ranges::copy(drawBinOffsets[1], data.binOffsets);
     sceneFoliageCullingUniformBuffers[frame].update(&data, sizeof(data));
 }
 
@@ -3006,11 +3143,13 @@ void updateShadowCullingUniformBuffer(const uint32_t frame) const {
     data.cameraCut = 1;
     data.shadowPass = 1;
     data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
+    // Each category has its own page stride (renderer_backend_gpu_resources).
     data.drawCategory = 0;
-    data.maxShadowInstances = static_cast<uint32_t>(
-        std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()), ShadowMap::MaxCasterInstancesPerPage));
+    data.maxShadowInstances = shadowPageInstanceCapacity[0];
     shadowCullingUniformBuffers[frame].update(&data, sizeof(data));
     data.drawCategory = 1;
+    data.maxDrawCount = shadowTwoSidedCullingPasses[frame].maxDrawCount();
+    data.maxShadowInstances = shadowPageInstanceCapacity[1];
     shadowTwoSidedCullingUniformBuffers[frame].update(&data, sizeof(data));
 }
 

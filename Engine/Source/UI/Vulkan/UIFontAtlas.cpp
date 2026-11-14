@@ -7,6 +7,9 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 
 // NOLINTBEGIN(readability-magic-numbers)
 
@@ -327,10 +330,10 @@ std::vector<Point> flatten(const std::vector<Point>& in) {
     return result;
 }
 
+// `contours` must already be flattened: flattening per sample dominated startup.
 float coverage(const std::vector<std::vector<Point>>& contours, double x, double y) {
     bool inside = false;
-    for (const auto& contour : contours) {
-        auto poly = flatten(contour);
+    for (const auto& poly : contours) {
         for (std::size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
             const auto& a = poly[i];
             const auto& b = poly[j];
@@ -346,6 +349,26 @@ std::string UIFontAtlas::build(const std::string& fontPath, std::uint32_t pixelS
                                std::uint32_t lastCodepoint) {
     if (fontPath.empty() || pixelSize == 0 || firstCodepoint > lastCodepoint) {
         return "Invalid font atlas parameters";
+    }
+    // Every Scene builds the same atlas; rasterising it costs far more than copying it.
+    static std::mutex cacheMutex;
+    static std::unordered_map<std::string, UIFontAtlas> cache;
+    const std::string cacheKey =
+        fontPath + '|' + std::to_string(pixelSize) + '|' + std::to_string(firstCodepoint) + '|' +
+        std::to_string(lastCodepoint);
+    {
+        std::lock_guard lock(cacheMutex);
+        if (const auto found = cache.find(cacheKey); found != cache.end()) {
+            const UIFontAtlas& cached = found->second;
+            m_width = cached.m_width;
+            m_height = cached.m_height;
+            m_pixelSize = cached.m_pixelSize;
+            m_ascent = cached.m_ascent;
+            m_lineHeight = cached.m_lineHeight;
+            m_pixels = cached.m_pixels;
+            m_glyphs = cached.m_glyphs;
+            return {};
+        }
     }
     TrueType font;
     std::string error;
@@ -430,6 +453,8 @@ std::string UIFontAtlas::build(const std::string& fontPath, std::uint32_t pixelS
             y += row + padding;
             row = 0;
         }
+        for (auto& contour : q.outline.contours)
+            contour = flatten(contour);
         for (std::uint32_t py = 0; py < h; ++py)
             for (std::uint32_t px = 0; px < w; ++px) {
                 float sum = 0;
@@ -448,6 +473,17 @@ std::string UIFontAtlas::build(const std::string& fontPath, std::uint32_t pixelS
         m_glyphs.emplace(q.cp, q.glyph);
         x += w + padding;
         row = std::max(row, h);
+    }
+    {
+        std::lock_guard lock(cacheMutex);
+        UIFontAtlas& entry = cache[cacheKey];
+        entry.m_width = m_width;
+        entry.m_height = m_height;
+        entry.m_pixelSize = m_pixelSize;
+        entry.m_ascent = m_ascent;
+        entry.m_lineHeight = m_lineHeight;
+        entry.m_pixels = m_pixels;
+        entry.m_glyphs = m_glyphs;
     }
     return {};
 }

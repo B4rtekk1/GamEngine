@@ -4,7 +4,6 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
-#include "Engine/ECS/Components/GlassDestructionComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/ECS/Components/ReflectionProbeComponent.h"
@@ -17,7 +16,6 @@
 #include "Engine/ECS/Components/WaterShapeComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
 #include "Engine/ECS/Registry.h"
-#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
@@ -32,6 +30,7 @@
 #include <charconv>
 #include <fstream>
 #include <limits>
+#include <type_traits>
 #include <locale>
 #include <memory>
 #include <optional>
@@ -92,6 +91,17 @@ constexpr std::uint32_t WaterExecutionTierFormatVersion = 25;
 constexpr std::uint32_t DisplacementFormatVersion = 27;
 constexpr std::uint32_t MaterialDisplacementFormatVersion = 28;
 constexpr std::uint32_t GlassMaterialFormatVersion = 29;
+// Glass destruction was removed in this version, together with the glass
+// material fields; files 29-33 still carry glass components, which are read
+// and discarded.
+constexpr std::uint32_t GlassRemovedFormatVersion = 34;
+// Glass material fields are written again (GlassPass); same layout as 29-33.
+constexpr std::uint32_t GlassRestoredFormatVersion = 35;
+// Materials end with their specular factor (KHR_materials_specular), which
+// glass uses as its reflectivity.
+constexpr std::uint32_t MaterialSpecularFormatVersion = 36;
+// Point and spot lights end with their photometric profile and IES path.
+constexpr std::uint32_t LightProfileFormatVersion = 37;
 constexpr std::uint32_t TerrainDataVersion = 1;
 constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -363,8 +373,7 @@ void writeMaterial(std::ostream& output, const PBRMaterial& material) {
     writeFloat(output, material.dirtIntensity);
     output << ' ' << material.transmissionTexture << ' ' << material.thicknessTexture << ' ' << material.dirtTexture;
     for (const auto& uv : material.glassTextureTransforms) {
-        output << ' ' << static_cast<unsigned>(uv.texCoord);
-        output << ' ';
+        output << ' ' << static_cast<unsigned>(uv.texCoord) << ' ';
         writeFloat(output, uv.offsetX);
         output << ' ';
         writeFloat(output, uv.offsetY);
@@ -374,6 +383,74 @@ void writeMaterial(std::ostream& output, const PBRMaterial& material) {
         writeFloat(output, uv.scaleY);
         output << ' ';
         writeFloat(output, uv.rotation);
+    }
+    output << ' ';
+    writeFloat(output, material.specular);
+}
+
+// Consumes a glass component written before glass was removed, field for
+// field in its original order, so the rest of the entity still parses.
+void skipLegacyGlassComponent(std::istream& input, const std::string_view component, const std::uint32_t version) {
+    if (component == "GLASS_FRAGMENT_BINDING") {
+        static_cast<void>(read<std::uint64_t>(input, "legacy glass pane uuid"));
+        static_cast<void>(read<unsigned>(input, "legacy glass fragment index"));
+        return;
+    }
+    if (component == "GLASS_DEBRIS") {
+        static_cast<void>(readFloat(input, "legacy glass debris lifetime"));
+        return;
+    }
+    for (int value = 0; value < 5; ++value) // size x/y, thickness, threshold, density
+        static_cast<void>(readFloat(input, "legacy glass setting"));
+    for (int value = 0; value < 3; ++value) // fragment budget, physics budget, seed
+        static_cast<void>(read<unsigned>(input, "legacy glass setting"));
+    static_cast<void>(readFloat(input, "legacy glass lifetime"));
+    static_cast<void>(read<bool>(input, "legacy glass fractured"));
+    static_cast<void>(read<bool>(input, "legacy glass destroyed"));
+    const auto fragmentCount = readCount(input, "legacy glass fragments", 128);
+    const auto bondCount = readCount(input, "legacy glass bonds", 8192);
+    if (version >= 31)
+        static_cast<void>(read<bool>(input, "legacy glass physical support"));
+    std::size_t crackCount = 0;
+    if (version >= 33) {
+        for (int value = 0; value < 4; ++value) // type, support, support edges, layers
+            static_cast<void>(read<unsigned>(input, "legacy glass setting"));
+        for (int value = 0; value < 3; ++value) // bond strength, crack width, accumulated energy
+            static_cast<void>(readFloat(input, "legacy glass setting"));
+        static_cast<void>(read<unsigned>(input, "legacy glass render state"));
+        static_cast<void>(read<unsigned>(input, "legacy glass impact count"));
+        crackCount = readCount(input, "legacy glass cracks", 128);
+    }
+    for (std::size_t fragment = 0; fragment < fragmentCount; ++fragment) {
+        for (int value = 0; value < 4; ++value) // center x/y, area, damage
+            static_cast<void>(readFloat(input, "legacy glass fragment"));
+        static_cast<void>(read<bool>(input, "legacy glass fragment attached"));
+        static_cast<void>(read<bool>(input, "legacy glass fragment support"));
+        if (version >= 33) {
+            static_cast<void>(readFloat(input, "legacy glass fragment anchor damage"));
+            const auto layers = readCount(input, "legacy glass fragment layers", 16);
+            for (std::size_t layer = 0; layer < layers; ++layer)
+                static_cast<void>(readFloat(input, "legacy glass fragment layer damage"));
+        }
+        const auto points = readCount(input, "legacy glass fragment vertices", 256);
+        for (std::size_t point = 0; point < points * 2; ++point)
+            static_cast<void>(readFloat(input, "legacy glass fragment vertex"));
+    }
+    for (std::size_t bond = 0; bond < bondCount; ++bond) {
+        static_cast<void>(read<unsigned>(input, "legacy glass bond first"));
+        static_cast<void>(read<unsigned>(input, "legacy glass bond second"));
+        for (int value = 0; value < 3; ++value) // center x/y, damage
+            static_cast<void>(readFloat(input, "legacy glass bond"));
+        if (version >= 33) {
+            for (int value = 0; value < 7; ++value) // edge, length, strength, accumulated damage
+                static_cast<void>(readFloat(input, "legacy glass bond"));
+            static_cast<void>(read<bool>(input, "legacy glass bond broken"));
+        }
+    }
+    for (std::size_t crack = 0; crack < crackCount; ++crack) {
+        for (int value = 0; value < 4; ++value) // position x/y, radius, intensity
+            static_cast<void>(readFloat(input, "legacy glass crack"));
+        static_cast<void>(read<unsigned>(input, "legacy glass crack seed"));
     }
 }
 
@@ -406,7 +483,8 @@ PBRMaterial readMaterial(std::istream& input, const std::uint32_t version) {
         material.displacementScale = readFloat(input, "material displacement scale");
         material.displacementOffset = readFloat(input, "material displacement offset");
     }
-    if (version >= GlassMaterialFormatVersion) {
+    if ((version >= GlassMaterialFormatVersion && version < GlassRemovedFormatVersion) ||
+        version >= GlassRestoredFormatVersion) {
         material.transmission = readFloat(input, "glass transmission");
         material.ior = readFloat(input, "glass IOR");
         material.thickness = readFloat(input, "glass thickness");
@@ -417,7 +495,7 @@ PBRMaterial readMaterial(std::istream& input, const std::uint32_t version) {
         material.thicknessTexture = read<std::int32_t>(input, "glass thickness texture");
         material.dirtTexture = read<std::int32_t>(input, "glass dirt texture");
         for (auto& uv : material.glassTextureTransforms) {
-            const unsigned set = read<unsigned>(input, "glass UV set");
+            const auto set = read<unsigned>(input, "glass UV set");
             if (set > 1)
                 invalidScene("invalid glass UV set");
             uv.texCoord = static_cast<std::uint8_t>(set);
@@ -427,13 +505,17 @@ PBRMaterial readMaterial(std::istream& input, const std::uint32_t version) {
             uv.scaleY = readFloat(input, "glass UV scale Y");
             uv.rotation = readFloat(input, "glass UV rotation");
         }
-        if (material.transmission < 0.0F || material.transmission > 1.0F || material.ior < 1.0F ||
-            material.thickness < 0.0F || material.attenuationDistance < 0.0F || material.dirtIntensity < 0.0F ||
-            material.dirtIntensity > 1.0F || material.attenuationColor.r() < 0.0F ||
-            material.attenuationColor.r() > 1.0F || material.attenuationColor.g() < 0.0F ||
-            material.attenuationColor.g() > 1.0F || material.attenuationColor.b() < 0.0F ||
-            material.attenuationColor.b() > 1.0F)
+        const auto unit = [](const float value) { return value >= 0.0F && value <= 1.0F; };
+        if (!unit(material.transmission) || material.ior < 1.0F || material.thickness < 0.0F ||
+            material.attenuationDistance < 0.0F || !unit(material.dirtIntensity) ||
+            !unit(material.attenuationColor.r()) || !unit(material.attenuationColor.g()) ||
+            !unit(material.attenuationColor.b()))
             invalidScene("invalid glass material");
+    }
+    if (version >= MaterialSpecularFormatVersion) {
+        material.specular = readFloat(input, "material specular factor");
+        if (!(material.specular >= 0.0F) || material.specular > 100.0F)
+            invalidScene("invalid material specular factor");
     }
     return material;
 }
@@ -925,17 +1007,138 @@ void loadEnvironment(Scene& scene, const std::filesystem::path& scenePath) {
         scene.setEnvironmentEquirectangular(std::filesystem::path{path});
     }
 }
+
+// GI choice sidecar: one line, so the scene format itself is unchanged.
+// GI <mode> SSGI <quality> <radius> <thickness> <intensity> DDGI <quality> <spacing> <intensity>
+std::filesystem::path globalIlluminationDataPath(const std::filesystem::path& scenePath) {
+    return std::filesystem::path{scenePath.string() + ".gi"};
+}
+
+void saveGlobalIllumination(const Scene& scene, const std::filesystem::path& scenePath) {
+    const auto path = globalIlluminationDataPath(scenePath);
+    if (!scene.globalIllumination()) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        return;
+    }
+    const GlobalIlluminationSettings& gi = *scene.globalIllumination();
+    std::ofstream output{path, std::ios::trunc};
+    if (!output)
+        throw std::runtime_error("Could not write scene global illumination settings");
+    output << "GI " << static_cast<int>(gi.mode) << " SSGI " << static_cast<int>(gi.ssgi.quality) << ' '
+           << gi.ssgi.radius << ' ' << gi.ssgi.thickness << ' ' << gi.ssgi.intensity << " DDGI "
+           << static_cast<int>(gi.ddgi.quality) << ' ' << gi.ddgi.probeSpacing << ' ' << gi.ddgi.intensity << '\n';
+}
+
+void loadGlobalIllumination(Scene& scene, const std::filesystem::path& scenePath) {
+    scene.setGlobalIllumination(std::nullopt);
+    std::ifstream input{globalIlluminationDataPath(scenePath)};
+    std::string giTag, ssgiTag, ddgiTag;
+    int mode = 0, ssgiQuality = 0, ddgiQuality = 0;
+    GlobalIlluminationSettings gi{};
+    if (!(input >> giTag >> mode >> ssgiTag >> ssgiQuality >> gi.ssgi.radius >> gi.ssgi.thickness >>
+          gi.ssgi.intensity >> ddgiTag >> ddgiQuality >> gi.ddgi.probeSpacing >> gi.ddgi.intensity) ||
+        giTag != "GI" || ssgiTag != "SSGI" || ddgiTag != "DDGI" || mode < 0 ||
+        mode > static_cast<int>(GlobalIlluminationMode::RayTracedProbes) || ssgiQuality < 0 ||
+        ssgiQuality > static_cast<int>(SsgiQuality::High) || ddgiQuality < 0 ||
+        ddgiQuality > static_cast<int>(DdgiQuality::High))
+        return;
+    gi.mode = static_cast<GlobalIlluminationMode>(mode);
+    gi.ssgi.quality = static_cast<SsgiQuality>(ssgiQuality);
+    gi.ddgi.quality = static_cast<DdgiQuality>(ddgiQuality);
+    scene.setGlobalIllumination(gi);
+}
+
+// Post-process sidecar: one "key value" pair per line, so fields can be added
+// later without invalidating files written by an older editor.
+std::filesystem::path postProcessDataPath(const std::filesystem::path& scenePath) {
+    return std::filesystem::path{scenePath.string() + ".post"};
+}
+
+template <typename Visitor> void visitPostProcessFields(PostProcessSettings& settings, Visitor&& visit) {
+    visit("autoExposure", settings.autoExposure);
+    visit("exposureCompensation", settings.exposureCompensation);
+    visit("minLuminanceEv", settings.minLuminanceEv);
+    visit("maxLuminanceEv", settings.maxLuminanceEv);
+    visit("adaptationSpeedUp", settings.adaptationSpeedUp);
+    visit("adaptationSpeedDown", settings.adaptationSpeedDown);
+    visit("tonemapper", settings.tonemapper);
+    visit("contrast", settings.contrast);
+    visit("saturation", settings.saturation);
+    visit("temperature", settings.temperature);
+    visit("tint", settings.tint);
+    visit("bloom", settings.bloom);
+    visit("vignette", settings.vignette);
+    visit("chromaticAberration", settings.chromaticAberration);
+    visit("motionBlur", settings.motionBlur);
+    visit("depthOfField", settings.depthOfField);
+    visit("focusDistance", settings.focusDistance);
+    visit("aperture", settings.aperture);
+    visit("maxBlurPixels", settings.maxBlurPixels);
+}
+
+void savePostProcess(const Scene& scene, const std::filesystem::path& scenePath) {
+    const auto path = postProcessDataPath(scenePath);
+    if (!scene.postProcess()) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        return;
+    }
+    std::ofstream output{path, std::ios::trunc};
+    if (!output)
+        throw std::runtime_error("Could not write scene post-process settings");
+    PostProcessSettings settings = *scene.postProcess();
+    visitPostProcessFields(settings, [&]<typename T>(const char* key, T& value) {
+        if constexpr (std::is_enum_v<T>)
+            output << key << ' ' << static_cast<int>(value) << '\n';
+        else
+            output << key << ' ' << value << '\n';
+    });
+}
+
+void loadPostProcess(Scene& scene, const std::filesystem::path& scenePath) {
+    scene.setPostProcess(std::nullopt);
+    std::ifstream input{postProcessDataPath(scenePath)};
+    if (!input)
+        return;
+    PostProcessSettings settings{};
+    std::string key;
+    while (input >> key) {
+        bool known = false;
+        visitPostProcessFields(settings, [&]<typename T>(const char* name, T& value) {
+            if (known || key != name)
+                return;
+            known = true;
+            if constexpr (std::is_enum_v<T>) {
+                int raw = 0;
+                if (input >> raw && raw >= 0 && raw <= static_cast<int>(TonemapOperator::AcesLuminance))
+                    value = static_cast<T>(raw);
+            } else {
+                input >> value;
+            }
+        });
+        if (!input)
+            return;
+        if (!known)
+            input.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    }
+    scene.setPostProcess(settings);
+}
 } // namespace
 
 void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path) {
     save(scene.registry(), path);
     saveEnvironment(scene, path);
+    saveGlobalIllumination(scene, path);
+    savePostProcess(scene, path);
 }
 
 void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path,
                            const AntialiasingLevel antialiasing) {
     save(scene.registry(), path, antialiasing);
     saveEnvironment(scene, path);
+    saveGlobalIllumination(scene, path);
+    savePostProcess(scene, path);
 }
 
 void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path, const std::uint32_t msaaSamples) {
@@ -967,6 +1170,8 @@ void SceneSerializer::load(Scene& scene, const std::filesystem::path& path) {
     }
     scene.rebuildObjectHandles();
     loadEnvironment(scene, path);
+    loadGlobalIllumination(scene, path);
+    loadPostProcess(scene, path);
 }
 
 void SceneSerializer::load(Scene& scene, const std::filesystem::path& path,
@@ -980,6 +1185,8 @@ void SceneSerializer::load(Scene& scene, const std::filesystem::path& path,
     }
     scene.rebuildObjectHandles();
     loadEnvironment(scene, path);
+    loadGlobalIllumination(scene, path);
+    loadPostProcess(scene, path);
 }
 
 void SceneSerializer::load(Scene& scene, const std::filesystem::path& path, std::optional<std::uint32_t>& msaaSamples) {
@@ -1285,46 +1492,6 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output, const
             writeVec3(serialized, transform.scale);
             serialized << '\n';
         }
-        if (registry.has<GlassDestructionComponent>(entity)) {
-            const auto& glass = registry.get<GlassDestructionComponent>(entity);
-            // Exact graph coordinates are needed to replay crack intersections
-            // and match immutable fracture templates after a save/load cycle.
-            const auto previousPrecision = serialized.precision(std::numeric_limits<float>::max_digits10);
-            serialized << "GLASS_DESTRUCTION " << glass.size.x << ' ' << glass.size.y << ' ' << glass.thickness << ' '
-                       << glass.fractureThreshold << ' ' << glass.density << ' ' << glass.maxFragments << ' '
-                       << glass.maxDynamicFragments << ' ' << glass.seed << ' ' << glass.fragmentLifetime << ' '
-                       << glass.fractured << ' ' << glass.fullyDestroyed << ' ' << glass.fragments.size() << ' '
-                       << glass.bonds.size() << ' ' << glass.hadPhysicalSupport << ' ' << unsigned(glass.type) << ' '
-                       << unsigned(glass.supportMode) << ' ' << unsigned(glass.supportEdges) << ' ' << glass.layers
-                       << ' ' << glass.bondStrength << ' ' << glass.crackWidth << ' ' << glass.accumulatedEnergy << ' '
-                       << unsigned(glass.renderState) << ' ' << glass.impactCount << ' ' << glass.cracks.size() << '\n';
-            for (const auto& fragment : glass.fragments) {
-                serialized << fragment.center.x << ' ' << fragment.center.y << ' ' << fragment.area << ' '
-                           << fragment.damage << ' ' << fragment.attached << ' ' << fragment.frameSupported << ' '
-                           << fragment.anchorDamage << ' ' << fragment.layerDamage.size();
-                for (float damage : fragment.layerDamage)
-                    serialized << ' ' << damage;
-                serialized << ' ' << fragment.polygon.size();
-                for (auto point : fragment.polygon)
-                    serialized << ' ' << point.x << ' ' << point.y;
-                serialized << '\n';
-            }
-            for (const auto& bond : glass.bonds)
-                serialized << bond.first << ' ' << bond.second << ' ' << bond.center.x << ' ' << bond.center.y << ' '
-                           << bond.damage << ' ' << bond.edgeStart.x << ' ' << bond.edgeStart.y << ' ' << bond.edgeEnd.x
-                           << ' ' << bond.edgeEnd.y << ' ' << bond.length << ' ' << bond.strength << ' '
-                           << bond.accumulatedDamage << ' ' << bond.broken << '\n';
-            for (const auto& crack : glass.cracks)
-                serialized << crack.position.x << ' ' << crack.position.y << ' ' << crack.radius << ' '
-                           << crack.intensity << ' ' << crack.seed << '\n';
-            serialized.precision(previousPrecision);
-        }
-        if (registry.has<GlassFragmentBindingComponent>(entity)) {
-            const auto& binding = registry.get<GlassFragmentBindingComponent>(entity);
-            serialized << "GLASS_FRAGMENT_BINDING " << binding.paneUuid << ' ' << binding.fragmentIndex << '\n';
-        }
-        if (registry.has<GlassDebrisComponent>(entity))
-            serialized << "GLASS_DEBRIS " << registry.get<GlassDebrisComponent>(entity).remainingLifetime << '\n';
         if (registry.has<ColliderComponent>(entity)) {
             serialized << "COLLIDER ";
             writeCollider(serialized, registry.get<ColliderComponent>(entity));
@@ -1449,7 +1616,8 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output, const
             serialized << ' ';
             writeFloat(serialized, light.outerConeAngle);
             serialized << ' ' << static_cast<int>(light.enabled) << ' ' << static_cast<int>(light.castShadows) << ' '
-                       << static_cast<int>(light.mainLight) << '\n';
+                       << static_cast<int>(light.mainLight) << ' ' << static_cast<int>(light.profile) << ' '
+                       << std::quoted(light.iesProfile.lexically_normal().generic_string()) << '\n';
         }
         if (registry.has<ReflectionProbeComponent>(entity)) {
             const auto& probe = registry.get<ReflectionProbeComponent>(entity);
@@ -1591,8 +1759,9 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
         version != MaterialShaderSourceFormatVersion && version != ReflectionProbeFormatVersion &&
         version != TerrainMaterialLayersFormatVersion && version != WaterBodyFormatVersion &&
         version != WaterExecutionPolicyFormatVersion && version != WaterExecutionTierFormatVersion && version != 26 &&
-        version != 27 && version != 28 && version != 29 && version != 30 && version != FormatVersion - 2 &&
-        version != FormatVersion - 1 && version != FormatVersion) {
+        version != 27 && version != 28 && version != 29 && version != 30 && version != 31 && version != 32 &&
+        version != 33 && version != GlassRemovedFormatVersion && version != GlassRestoredFormatVersion &&
+        version != MaterialSpecularFormatVersion && version != FormatVersion) {
         invalidScene("unsupported format version " + std::to_string(version));
     }
     auto* terrainData = static_cast<std::istream*>(input.pword(terrainDataStreamSlot()));
@@ -1822,133 +1991,11 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
                                                   .rotation = readVec3(input, "transform rotation"),
                                                   .scale = readVec3(input, "transform scale"),
                                               });
-            } else if (component == "GLASS_DESTRUCTION") {
-                if (version < 30 || loaded.has<GlassDestructionComponent>(entity))
-                    invalidScene("invalid glass component");
-                GlassDestructionComponent glass;
-                glass.size.x = readFloat(input, "glass width");
-                glass.size.y = readFloat(input, "glass height");
-                glass.thickness = readFloat(input, "glass thickness");
-                glass.fractureThreshold = readFloat(input, "glass threshold");
-                glass.density = readFloat(input, "glass density");
-                glass.maxFragments = read<unsigned>(input, "glass fragment budget");
-                glass.maxDynamicFragments = read<unsigned>(input, "glass physics budget");
-                glass.seed = read<unsigned>(input, "glass seed");
-                glass.fragmentLifetime = readFloat(input, "glass lifetime");
-                glass.fractured = read<bool>(input, "glass fractured");
-                glass.fullyDestroyed = read<bool>(input, "glass destroyed");
-                const auto fragmentCount = readCount(input, "glass fragments", 128);
-                const auto bondCount = readCount(input, "glass bonds", 8192);
-                if (version >= 31)
-                    glass.hadPhysicalSupport = read<bool>(input, "glass physical support");
-                std::size_t crackCount = 0;
-                if (version >= 33) {
-                    const auto type = read<unsigned>(input, "glass type"),
-                               support = read<unsigned>(input, "glass support");
-                    const auto edges = read<unsigned>(input, "glass support edges");
-                    glass.layers = read<unsigned>(input, "glass layers");
-                    glass.bondStrength = readFloat(input, "glass bond strength");
-                    glass.crackWidth = readFloat(input, "glass crack width");
-                    glass.accumulatedEnergy = readFloat(input, "glass accumulated energy");
-                    const auto state = read<unsigned>(input, "glass render state");
-                    glass.impactCount = read<unsigned>(input, "glass impact count");
-                    crackCount = readCount(input, "glass cracks", 128);
-                    if (glass.impactCount < crackCount)
-                        invalidScene("invalid glass impact history");
-                    if (type > 3 || support > 2 || edges > 15 || state > 2 || glass.layers < 1 || glass.layers > 16 ||
-                        glass.bondStrength <= 0 || glass.crackWidth <= 0 || glass.accumulatedEnergy < 0)
-                        invalidScene("invalid glass material settings");
-                    glass.type = static_cast<GlassType>(type);
-                    glass.supportMode = static_cast<GlassSupportMode>(support);
-                    glass.supportEdges = static_cast<std::uint8_t>(edges);
-                    glass.renderState = static_cast<GlassRenderState>(state);
-                } else {
-                    glass.supportMode = GlassSupportMode::Bottom;
-                    glass.renderState = glass.fractured ? GlassRenderState::Fractured : GlassRenderState::Intact;
-                }
-                if (glass.size.x < 0.01F || glass.size.y < 0.01F || glass.thickness < 0.001F ||
-                    glass.fractureThreshold <= 0.0F || glass.density <= 0.0F || glass.fragmentLifetime <= 0.0F ||
-                    glass.maxFragments < 4 || glass.maxFragments > 128 || glass.maxDynamicFragments > 128 ||
-                    (version < 32 && !glass.fractured && fragmentCount != 0))
-                    invalidScene("invalid glass settings");
-                for (std::size_t i = 0; i < fragmentCount; ++i) {
-                    GlassFragment fragment;
-                    fragment.center.x = readFloat(input, "fragment center x");
-                    fragment.center.y = readFloat(input, "fragment center y");
-                    fragment.area = readFloat(input, "fragment area");
-                    fragment.damage = readFloat(input, "fragment damage");
-                    fragment.attached = read<bool>(input, "fragment attached");
-                    fragment.frameSupported = read<bool>(input, "fragment support");
-                    if (version >= 33) {
-                        fragment.anchorDamage = readFloat(input, "fragment anchor damage");
-                        const auto layers = readCount(input, "fragment layers", 16);
-                        if (layers != 0 && (glass.type != GlassType::Armored || layers != glass.layers))
-                            invalidScene("invalid fragment layers");
-                        for (std::size_t layer = 0; layer < layers; ++layer) {
-                            const float damage = readFloat(input, "fragment layer damage");
-                            if (damage < 0 || damage > glass.fractureThreshold)
-                                invalidScene("invalid layer damage");
-                            fragment.layerDamage.push_back(damage);
-                        }
-                    }
-                    const auto points = readCount(input, "fragment vertices", 256);
-                    if (points < 3 || fragment.area < 0.0F || fragment.damage < 0.0F)
-                        invalidScene("invalid glass fragment");
-                    for (std::size_t j = 0; j < points; ++j) {
-                        const float x = readFloat(input, "fragment x"), y = readFloat(input, "fragment y");
-                        fragment.polygon.push_back({x, y});
-                    }
-                    glass.fragments.push_back(std::move(fragment));
-                }
-                for (std::size_t i = 0; i < bondCount; ++i) {
-                    GlassBond bond;
-                    bond.first = read<unsigned>(input, "bond first");
-                    bond.second = read<unsigned>(input, "bond second");
-                    bond.center.x = readFloat(input, "bond x");
-                    bond.center.y = readFloat(input, "bond y");
-                    bond.damage = readFloat(input, "bond damage");
-                    if (version >= 33) {
-                        bond.edgeStart.x = readFloat(input, "bond start x");
-                        bond.edgeStart.y = readFloat(input, "bond start y");
-                        bond.edgeEnd.x = readFloat(input, "bond end x");
-                        bond.edgeEnd.y = readFloat(input, "bond end y");
-                        bond.length = readFloat(input, "bond length");
-                        bond.strength = readFloat(input, "bond strength");
-                        bond.accumulatedDamage = readFloat(input, "bond accumulated damage");
-                        bond.broken = read<bool>(input, "bond broken");
-                        if (bond.length <= 0 || bond.strength <= 0 || bond.accumulatedDamage < 0)
-                            invalidScene("invalid glass bond strength");
-                    } else {
-                        bond.accumulatedDamage = bond.damage;
-                        bond.broken = bond.damage >= 1;
-                    }
-                    if (bond.first >= fragmentCount || bond.second >= fragmentCount || bond.damage < 0.0F)
-                        invalidScene("invalid glass bond");
-                    glass.bonds.push_back(bond);
-                }
-                for (std::size_t i = 0; i < crackCount; ++i) {
-                    GlassCrack crack;
-                    crack.position.x = readFloat(input, "crack x");
-                    crack.position.y = readFloat(input, "crack y");
-                    crack.radius = readFloat(input, "crack radius");
-                    crack.intensity = readFloat(input, "crack intensity");
-                    crack.seed = read<unsigned>(input, "crack seed");
-                    if (crack.radius <= 0 || crack.intensity < 0 || crack.intensity > 1)
-                        invalidScene("invalid glass crack");
-                    glass.cracks.push_back(crack);
-                }
-                loaded.add<GlassDestructionComponent>(entity, std::move(glass));
-            } else if (component == "GLASS_FRAGMENT_BINDING") {
-                if (version < 32 || loaded.has<GlassFragmentBindingComponent>(entity))
-                    invalidScene("invalid glass binding");
-                GlassFragmentBindingComponent binding;
-                binding.paneUuid = read<std::uint64_t>(input, "glass pane uuid");
-                binding.fragmentIndex = read<unsigned>(input, "glass fragment index");
-                loaded.add<GlassFragmentBindingComponent>(entity, binding);
-            } else if (component == "GLASS_DEBRIS") {
-                if (version < 30 || loaded.has<GlassDebrisComponent>(entity))
-                    invalidScene("invalid glass debris");
-                loaded.add<GlassDebrisComponent>(entity, GlassDebrisComponent{readFloat(input, "debris lifetime")});
+            } else if (component == "GLASS_DESTRUCTION" || component == "GLASS_FRAGMENT_BINDING" ||
+                       component == "GLASS_DEBRIS") {
+                // Glass destruction was removed; the pane keeps its saved
+                // mesh and collider as an ordinary static object.
+                skipLegacyGlassComponent(input, component, version);
             } else if (component == "COLLIDER") {
                 if (hasCollider) {
                     invalidScene("entity contains an invalid ColliderComponent");
@@ -2206,6 +2253,16 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
                     light.mainLight = true;
                     legacyMainLightAssigned = true;
                 }
+                if (version >= LightProfileFormatVersion) {
+                    const int profile = read<int>(input, "light profile");
+                    if (profile < 0 || profile >= LightProfileCount)
+                        invalidScene("invalid light profile");
+                    light.profile = static_cast<LightProfile>(profile);
+                    std::string iesPath;
+                    if (!(input >> std::quoted(iesPath)))
+                        invalidScene("could not read light IES profile path");
+                    light.iesProfile = iesPath;
+                }
                 if (light.range <= 0.0F || light.innerConeAngle < 0.0F || light.outerConeAngle <= 0.0F ||
                     light.innerConeAngle > light.outerConeAngle || light.outerConeAngle >= 90.0F) {
                     invalidScene("local light settings are invalid");
@@ -2409,83 +2466,10 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
 
     TransformSystem::invalidate(loaded);
     TransformSystem::updateDirty(loaded);
-    std::vector<Entity> legacyGlassCandidates;
-    loaded.view<Transform, MeshRenderer, ColliderComponent>(
-        [&](Entity entity, const auto&, const auto& renderer, const auto&) {
-            if (renderer.material.pbr.transmission > 0.0F && !loaded.has<GlassDestructionComponent>(entity))
-                legacyGlassCandidates.push_back(entity);
-        });
-    for (auto entity : legacyGlassCandidates)
-        GlassDestructionSystem::prepareLegacyPane(loaded, entity);
-
-    loaded.view<ColliderComponent, MeshRenderer>([&](const Entity entity, ColliderComponent& collider,
-                                                     const MeshRenderer& renderer) {
-        if (auto* meshCollider = std::get_if<MeshCollider>(&collider.shape)) {
-            meshCollider->mesh =
-                loaded.has<GlassDestructionComponent>(entity) && loaded.get<GlassDestructionComponent>(entity).fractured
-                    ? GlassDestructionSystem::collisionMesh(loaded.get<GlassDestructionComponent>(entity))
-                    : renderer.mesh.source();
-        }
-    });
-    std::unordered_map<const Mesh*, MeshHandle> sharedGlassHandles;
-    loaded.view<GlassDestructionComponent, MeshRenderer>(
-        [version, &sharedGlassHandles](const Entity, GlassDestructionComponent& glass, MeshRenderer& renderer) {
-            if (glass.fragments.empty())
-                return;
-            if (version < 33) {
-                const float bottom = -glass.size.y * 0.5F;
-                for (auto& fragment : glass.fragments) {
-                    fragment.frameSupported = false;
-                    for (std::size_t i = 0; i < fragment.polygon.size(); ++i) {
-                        const auto a = fragment.polygon[i], b = fragment.polygon[(i + 1) % fragment.polygon.size()];
-                        fragment.frameSupported |= std::abs(a.y - bottom) < 1.0e-5F &&
-                                                   std::abs(b.y - bottom) < 1.0e-5F && glm::distance(a, b) > 1.0e-5F;
-                    }
-                }
-                for (auto& bond : glass.bonds) {
-                    std::vector<glm::vec2> common;
-                    for (auto a : glass.fragments[bond.first].polygon)
-                        for (auto b : glass.fragments[bond.second].polygon)
-                            if (glm::distance(a, b) < 1.0e-5F &&
-                                std::ranges::none_of(common, [&](auto p) { return glm::distance(p, a) < 1.0e-5F; }))
-                                common.push_back(a);
-                    if (common.size() >= 2) {
-                        bond.edgeStart = common[0];
-                        bond.edgeEnd = common[1];
-                        bond.length = glm::distance(common[0], common[1]);
-                    }
-                }
-            }
-            GlassDestructionSystem::restoreGeometryCache(glass);
-            auto packed = GlassDestructionSystem::renderMesh(glass); // Also restores immutable shard colliders.
-            renderer.mesh = MeshHandle{std::move(packed)};
-            const auto [cached, inserted] = sharedGlassHandles.try_emplace(renderer.mesh.source().get(), renderer.mesh);
-            if (!inserted)
-                renderer.mesh = cached->second;
-        });
-    loaded.view<GlassDebrisComponent, ColliderComponent>([&](Entity entity, const auto&, auto& collider) {
-        if (loaded.has<GlassFragmentBindingComponent>(entity))
-            return;
-        if (auto* mesh = std::get_if<MeshCollider>(&collider.shape))
-            mesh->mesh = GlassDestructionSystem::restoreDebrisCollision(mesh->mesh);
-    });
-    loaded.view<GlassFragmentBindingComponent, ColliderComponent>(
-        [&](const Entity entity, GlassFragmentBindingComponent& binding, ColliderComponent& collider) {
-            const auto found = entitiesByUuid.find(binding.paneUuid);
-            if (found == entitiesByUuid.end() || !loaded.has<GlassDestructionComponent>(found->second))
-                invalidScene("missing glass pane for fragment");
-            binding.paneEntity = found->second;
-            auto& glass = loaded.get<GlassDestructionComponent>(binding.paneEntity);
-            if (binding.fragmentIndex >= glass.fragments.size())
-                invalidScene("invalid glass fragment binding");
-            auto& fragment = glass.fragments[binding.fragmentIndex];
-            if (fragment.attached || loaded.valid(fragment.debrisEntity))
-                invalidScene("duplicate or attached glass debris binding");
-            fragment.debrisEntity = entity;
-            if (auto* mesh = std::get_if<MeshCollider>(&collider.shape))
-                mesh->mesh = fragment.collisionGeometry;
-            else
-                invalidScene("glass debris requires mesh collision");
+    loaded.view<ColliderComponent, MeshRenderer>(
+        [&](const Entity, ColliderComponent& collider, const MeshRenderer& renderer) {
+            if (auto* meshCollider = std::get_if<MeshCollider>(&collider.shape))
+                meshCollider->mesh = renderer.mesh.source();
         });
     registry = std::move(loaded);
     // Registry replacement preserves its address, but invalidates all

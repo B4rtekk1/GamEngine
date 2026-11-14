@@ -56,8 +56,10 @@ struct MeshletBuildOptions final {
 class Mesh;
 
 /**
- * Partitions triangle geometry into meshlets. The implementation keeps
- * primitive order stable and material boundaries intact; it is deliberately
+ * Partitions triangle geometry into meshlets. Triangles are first reordered
+ * inside each render section (or the whole index buffer without sections)
+ * for vertex locality; every meshlet is then a contiguous run of that index
+ * range, and material boundaries stay intact. The implementation is deliberately
  * dependency-free so cooked assets work on every developer machine.
  * meshoptimizer can later replace only this implementation without changing
  * the cooked or GPU-facing data contract.

@@ -5,10 +5,12 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <span>
 #include <string>
 
 namespace Engine::Assets {
+struct TextureCookProgress;
 /** Generates an RGBA mip chain and encodes every level as BC7. */
 [[nodiscard]] CookedTexture cook_bc7(std::span<const std::uint8_t> rgbaPixels, std::uint32_t width,
                                      std::uint32_t height, bool srgb);
@@ -34,6 +36,8 @@ struct GltfPhaseTimings {
 };
 
 struct TextureCookSummary {
+    /// Optional live progress, advanced per texture (also inside models).
+    TextureCookProgress* progress{};
     std::uint32_t discovered{};
     std::uint32_t cooked{};
     std::uint32_t skipped{};
@@ -75,10 +79,38 @@ struct CutoutMipSettings {
                                                           CutoutMipSettings cutout = {});
 
 /** Thread-safe progress counters for a background texture-cook job. */
+/**
+ * Live progress of a project cook. `discovered`/`completed` count textures:
+ * standalone images first, then each model's images as the model is read
+ * (DDS and embedded textures are only known once their model is parsed).
+ * Models are counted separately.
+ */
 struct TextureCookProgress final {
     std::atomic<std::uint32_t> discovered;
     std::atomic<std::uint32_t> completed;
+    std::atomic<std::uint32_t> modelsDiscovered;
+    std::atomic<std::uint32_t> modelsCompleted;
     std::atomic<bool> paused{};
+
+    void setCurrent(std::string item) {
+        std::scoped_lock lock(currentMutex_);
+        current_ = std::move(item);
+    }
+    [[nodiscard]] std::string current() const {
+        std::scoped_lock lock(currentMutex_);
+        return current_;
+    }
+    void reset() {
+        discovered.store(0, std::memory_order_release);
+        completed.store(0, std::memory_order_release);
+        modelsDiscovered.store(0, std::memory_order_release);
+        modelsCompleted.store(0, std::memory_order_release);
+        setCurrent({});
+    }
+
+  private:
+    mutable std::mutex currentMutex_;
+    std::string current_;
 };
 
 /** Cooks every supported source image below @p assetRoot to a sibling .gtex file. */

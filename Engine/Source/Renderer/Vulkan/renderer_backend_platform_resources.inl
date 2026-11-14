@@ -16,6 +16,7 @@ void initVulkanCore() {
     device = vulkanDevice.logical();
     pipelineCache.create(vulkanDevice.physical(), device,
                          (projectRoot.empty() ? assetManager.asset_root() : projectRoot) / "Library" / "Vulkan");
+    loadShadowTraceDecision((projectRoot.empty() ? assetManager.asset_root() : projectRoot) / "Library" / "Vulkan");
     if (vulkanDevice.supportsRayQuery())
         accelerationStructures.create(vulkanDevice.physical(), device, vulkanDevice.allocator());
     gpuTimestampProfiler.create(vulkanDevice.physical(), device);
@@ -64,9 +65,22 @@ void createImageBasedLighting() {
                                                                                   : std::filesystem::path{})
                                  : sceneEnvironmentPath.is_absolute() ? sceneEnvironmentPath
                                                                       : assetDirectory / sceneEnvironmentPath;
+    const IblBuildKey key = iblBuildKey(environmentPath, runtimeRoot / "Library");
+    if (builtIblKey == key && imageBasedLighting.descriptors()[0].imageView != VK_NULL_HANDLE)
+        return;
     imageBasedLighting.create(vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
                               vulkanDevice.allocator(), environmentPath, runtimeRoot / "Library",
                               iblQualitySettings(iblQuality));
+    builtIblKey = key;
+}
+
+[[nodiscard]] IblBuildKey iblBuildKey(const std::filesystem::path& environment,
+                                      const std::filesystem::path& library) const {
+    std::error_code error;
+    const auto modified = environment.empty() ? std::filesystem::file_time_type{}
+                                              : std::filesystem::last_write_time(environment, error);
+    return {environment.lexically_normal(), error ? std::filesystem::file_time_type{} : modified,
+            library.lexically_normal(), iblQuality};
 }
 
 void initSceneResources() {
@@ -89,7 +103,8 @@ void initSceneResources() {
             : antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT
                                                              : VK_SAMPLE_COUNT_1_BIT;
         msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
-        hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+        hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator(),
+                     VK_FILTER_LINEAR, HdrBuffer::Format, true); // storage: deferred local lights
         hdrBufferInitialized = false;
         opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
         opaqueSceneColorInitialized = false;
@@ -99,6 +114,7 @@ void initSceneResources() {
     timeInitialization("GTAO", [&] {
         GE_PROFILE_SCOPE("Renderer.GTAO");
         createGtaoPass();
+        createSsgiPass();
     });
     timeInitialization("Material textures", [&] {
         GE_PROFILE_SCOPE("Renderer.MaterialTextures");
@@ -239,6 +255,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
                                                     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
                                                     void* pUserData) {
     if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        std::fprintf(stderr, "TEMP-DEBUG VK: %s\n", pCallbackData && pCallbackData->pMessage ? pCallbackData->pMessage : ""); // TEMP-DEBUG
         const auto severity = messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
                                   ? DiagnosticSeverity::Error
                                   : DiagnosticSeverity::Warning;
@@ -406,6 +423,19 @@ void createGtaoPass() {
                     vulkanDevice.allocator(), assetManager, gtaoQualitySettings(gtaoQuality), sharingFamilies);
 }
 
+// SSGI exists at the swapchain size whatever its quality, so Forward's
+// descriptor always names a live, black-initialized image even while the
+// trace is switched off or unsupported (MSAA has no view normals).
+void createSsgiPass() {
+    const std::array ssgiFamilies{vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+    const std::span<const std::uint32_t> sharingFamilies =
+        vulkanDevice.hasAsyncComputeQueue() && ssgiFamilies[0] != ssgiFamilies[1]
+            ? std::span<const std::uint32_t>(ssgiFamilies)
+            : std::span<const std::uint32_t>{};
+    ssgiPass.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator(), assetManager,
+                    sharingFamilies);
+}
+
 void createRtContactShadowPass() {
     if (!vulkanDevice.supportsRayQuery() || msaa.enabled())
         return;
@@ -427,6 +457,55 @@ void createRtContactShadowPass() {
         buffers[frame] = uniformBuffers[frame].handle();
     rtContactShadowPass.create(vulkanDevice.physical(), device, targetExtent, vulkanDevice.allocator(), assetManager,
                                buffers);
+}
+
+void bindLocalShadowMask(const ShadowPass& descriptors) {
+    if (descriptors.descriptorSetLayout() == VK_NULL_HANDLE)
+        return;
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+    {
+        descriptors.setLocalShadowMask(frame, {localLightShadowPass.resultSampler(frame),
+                                               localLightShadowPass.resultView(frame),
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        descriptors.setTileLights(frame, tileLightCulling.lists(frame));
+    }
+}
+
+// Stochastic local lighting (MegaLights-style) is opt-in with
+// GAMENGINE_MEGALIGHTS=1; without it its targets are never allocated.
+static bool megaLightsRequested() noexcept {
+    static const bool requested = [] {
+        const char* value = std::getenv("GAMENGINE_MEGALIGHTS");
+        return value != nullptr && std::string_view{value} == "1";
+    }();
+    return requested;
+}
+
+void createLocalLightShadowPass() {
+    const VkExtent2D extent = swapchain.extent();
+    if (localLightShadowPass.resultView(0) != VK_NULL_HANDLE && localLightShadowPass.extent().width == extent.width &&
+        localLightShadowPass.extent().height == extent.height)
+        return;
+    // Both frame slots' masks are replaced; retire their users first.
+    if (localLightShadowPass.resultView(0) != VK_NULL_HANDLE && vkDeviceWaitIdle(device) != VK_SUCCESS)
+        throw std::runtime_error("Could not idle device to resize local light shadows");
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> buffers{};
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+        buffers[frame] = uniformBuffers[frame].handle();
+    localLightShadowPass.create(vulkanDevice.physical(), device, extent, vulkanDevice.allocator(), assetManager,
+                                buffers, vulkanDevice.supportsRayQuery() && !msaa.enabled(),
+                                vulkanDevice.supportsClusterRayTracing() && !msaa.enabled());
+    // Same extent and lifetime: built from the same single-sample depth.
+    tileLightCulling.create(device, extent, vulkanDevice.allocator(), assetManager, buffers, !msaa.enabled());
+    // The single-sample lighting pass hands its local lights to this pass.
+    if (msaa.enabled())
+        deferredLocalLighting.destroy();
+    else
+        deferredLocalLighting.create(vulkanDevice.physical(), device, extent, vulkanDevice.allocator(), assetManager,
+                                     buffers, megaLightsRequested());
+    localShadowMaskInitialized.fill(false);
+    bindLocalShadowMask(shadowPass);
+    bindLocalShadowMask(sceneDescriptorPass);
 }
 
 void createDirectionalVisibilityPass() {
@@ -454,6 +533,63 @@ void bindGtaoTexture(ShadowPass& descriptors) {
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
         descriptors.setGtaoTexture(frame, gtao);
+}
+
+// The DDGI pass exists on every device: without cluster ray tracing it only
+// owns zeroed volume uniforms, which tell Forward that no probes are valid.
+void createDdgiPass() {
+    if (ddgiPass.volumeBuffer(0) != VK_NULL_HANDLE)
+        return;
+    const std::array families{vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+    const std::span<const std::uint32_t> sharingFamilies =
+        vulkanDevice.hasAsyncComputeQueue() && families[0] != families[1] ? std::span<const std::uint32_t>(families)
+                                                                          : std::span<const std::uint32_t>{};
+    clusterGeometryDirty = true;
+    if (vulkanDevice.supportsClusterRayTracing()) {
+        try {
+            ddgiPass.create(vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager, true,
+                            shadowPass.descriptorSetLayout(), sharingFamilies);
+            clusterScene.create(vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager,
+                                shadowPass.descriptorSetLayout());
+            return;
+        } catch (const std::exception& error) {
+            Diagnostics::instance().report(DiagnosticSeverity::Warning,
+                                           std::string{"DDGI is unavailable: "} + error.what(),
+                                           {.subsystem = "Renderer"});
+            clusterScene.destroy();
+        }
+    }
+    ddgiPass.create(vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager, false, VK_NULL_HANDLE,
+                    sharingFamilies);
+}
+
+void bindDdgiResources(ShadowPass& descriptors) {
+    const bool live = ddgiPass.available();
+    const VkDescriptorImageInfo fallback{fallbackMaterialTexture.sampler(), fallbackMaterialTexture.imageView(),
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo irradiance =
+        live ? VkDescriptorImageInfo{ddgiPass.irradianceAtlas().sampler(), ddgiPass.irradianceAtlas().imageView(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+             : fallback;
+    const VkDescriptorImageInfo distance =
+        live ? VkDescriptorImageInfo{ddgiPass.distanceAtlas().sampler(), ddgiPass.distanceAtlas().imageView(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+             : fallback;
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+        descriptors.setDdgiResources(frame, irradiance, distance, ddgiPass.volumeBuffer(frame),
+                                     sizeof(DdgiPass::VolumeData));
+}
+
+void bindSsgiTexture(ShadowPass& descriptors) {
+    const VkDescriptorImageInfo ssgi{ssgiPass.resultSampler(), ssgiPass.resultView(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+        descriptors.setSsgiTexture(frame, ssgi);
+}
+
+void bindLocalLights(const ShadowPass& descriptors) {
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+        descriptors.setLocalLights(frame, localLightBuffers[frame].handle());
 }
 
 void bindContactShadowFallback(ShadowPass& descriptors) {
@@ -519,6 +655,10 @@ void createShadowPass() {
     for (const Buffer& buffer : reflectionProbeBuffers)
         reflectionBuffers.push_back(buffer.handle());
     if (shadowPass.descriptorSetLayout() == VK_NULL_HANDLE) {
+        shadowPass.setRayTracingStages(vulkanDevice.supportsClusterRayTracing());
+        shadowPass.setMeshShaderStages(vulkanDevice.supportsMeshShaders());
+        ensureMeshletDrawLayout();
+        shadowPass.setMeshletDrawLayout(meshletDrawDescriptorSetLayout);
         shadowPass.create(vulkanDevice.physical(), device, physicalShadowPagePool, buffers, gpuMaterialBuffers,
                           gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                           gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
@@ -533,9 +673,15 @@ void createShadowPass() {
                                      sizeof(UniformBufferObject));
     }
     bindGtaoTexture(shadowPass);
+    bindSsgiTexture(shadowPass);
+    bindLocalLights(shadowPass);
+    createDdgiPass();
+    bindDdgiResources(shadowPass);
     bindContactShadowFallback(shadowPass);
     createDirectionalVisibilityPass();
     createRtContactShadowPass();
+    createLocalLightShadowPass();
+    bindLocalShadowMask(shadowPass);
 }
 
 void createSceneDescriptorPass() {
@@ -592,6 +738,9 @@ void createSceneDescriptorPass() {
     for (const Buffer& buffer : reflectionProbeBuffers)
         reflectionBuffers.push_back(buffer.handle());
     if (sceneDescriptorPass.descriptorSetLayout() == VK_NULL_HANDLE) {
+        sceneDescriptorPass.setMeshShaderStages(vulkanDevice.supportsMeshShaders());
+        ensureMeshletDrawLayout();
+        sceneDescriptorPass.setMeshletDrawLayout(meshletDrawDescriptorSetLayout);
         sceneDescriptorPass.create(vulkanDevice.physical(), device, physicalShadowPagePool, buffers, gpuMaterialBuffers,
                                    gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                                    gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
@@ -606,16 +755,29 @@ void createSceneDescriptorPass() {
             sizeof(UniformBufferObject));
     }
     bindGtaoTexture(sceneDescriptorPass);
+    bindSsgiTexture(sceneDescriptorPass);
+    bindLocalLights(sceneDescriptorPass);
+    bindDdgiResources(sceneDescriptorPass);
     bindContactShadowFallback(sceneDescriptorPass);
+    bindLocalShadowMask(sceneDescriptorPass);
 }
 
 void createForwardPass() {
-    forwardPass.create(device, HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
+    ensureMeshletDrawLayout();
+    // The visibility-buffer prepass replaces its masked HDR target with the
+    // triangle ids (single-sample mesh-shader path only).
+    const bool visibilityIds = visibilityBufferRequested() && !msaa.enabled() &&
+                               meshletDrawDescriptorSetLayout != VK_NULL_HANDLE;
+    forwardPass.create(device, visibilityIds ? VisibilityBufferPass::IdFormat : HdrBuffer::Format,
+                       depthBuffer.format(), msaa.sampleCount(),
                        msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                        msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
                        shadowPass.descriptorSetLayout(), assetManager, VK_IMAGE_LAYOUT_UNDEFINED, false,
                        !msaa.enabled() ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED,
-                       !msaa.enabled() ? VK_FORMAT_R16G16_SNORM : VK_FORMAT_UNDEFINED, false, true, true);
+                       !msaa.enabled() ? VK_FORMAT_R16G16_SNORM : VK_FORMAT_UNDEFINED, false, true, true,
+                       VK_FORMAT_UNDEFINED, meshletDrawDescriptorSetLayout);
+    // A recreated pass starts out assuming displacement; re-check the table.
+    displacedMaterialsDirty = true;
     // TAA velocity is written exactly once, by the depth prepass. The
     // lighting pass used to clear a full-resolution RG16F target and
     // recompute the same motion vectors for every opaque fragment, which
@@ -624,7 +786,9 @@ void createForwardPass() {
                                msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                                msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
                                shadowPass.descriptorSetLayout(), assetManager, VK_IMAGE_LAYOUT_UNDEFINED, false,
-                               VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, true, false, true);
+                               VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, true, false, true,
+                               msaa.enabled() ? VK_FORMAT_UNDEFINED : DeferredLocalLightingPass::SurfaceFormat,
+                               meshletDrawDescriptorSetLayout);
     waterPass.create(
         device, HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
         msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
@@ -633,37 +797,68 @@ void createForwardPass() {
         {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
         {(msaa.enabled() ? hiZDepthBuffer : depthBuffer).sampler(),
          (msaa.enabled() ? hiZDepthBuffer : depthBuffer).imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
-    glassPass.create(
-        device, vulkanDevice.allocator(), HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
-        msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
-        msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE, shadowPass.descriptorSetLayout(),
-        assetManager, antialiasingLevel == AntialiasingLevel::TAA,
-        {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {(msaa.enabled() ? hiZDepthBuffer : depthBuffer).sampler(),
-         (msaa.enabled() ? hiZDepthBuffer : depthBuffer).imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-        glassAtlasPaneCount);
+    // Glass composites single-sampled: under MSAA it draws into the resolved
+    // HDR target and reads the resolved depth.
+    const DepthBuffer& glassDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+    glassPass.destroy();
+    glassPassInfo = GlassPass::CreateInfo{.physicalDevice = vulkanDevice.physical(),
+                      .device = device,
+                      .allocator = vulkanDevice.allocator(),
+                      .assets = &assetManager,
+                      .sceneLayout = shadowPass.descriptorSetLayout(),
+                      .extent = swapchain.extent(),
+                      .depthFormat = glassDepth.format(),
+                      .sceneDepthView = glassDepth.imageView(),
+                      .sceneDepthSampler = glassDepth.sampler()};
 }
 
 void createSceneViewportForwardPass() {
     // Scene View renders into its own single-sample color/depth targets even
-    // when the game view uses MSAA. Give it a matching one-color pipeline.
+    // when the game view uses MSAA. Its prepass writes depth and the view
+    // normals directional visibility reads; lighting then tests against that
+    // depth with the resolved-shadow programs.
+    sceneViewportDepthPrepass.create(device, HdrBuffer::Format, sceneViewportDepthBuffer.format(),
+                                     VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE,
+                                     sceneDescriptorPass.descriptorSetLayout(), assetManager,
+                                     VK_IMAGE_LAYOUT_UNDEFINED, false, VK_FORMAT_R16G16_SFLOAT,
+                                     VK_FORMAT_R16G16_SNORM, false, true, false);
     sceneViewportForwardPass.create(
         device, HdrBuffer::Format, sceneViewportDepthBuffer.format(), VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED,
         VK_RESOLVE_MODE_NONE, sceneDescriptorPass.descriptorSetLayout(), assetManager,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, true, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, false);
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, true, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, true);
+    displacedMaterialsDirty = true;
+    createSceneDirectionalVisibilityPass();
+}
+
+// Extent-dependent: rebuilt with the Scene View target, and with the scene
+// descriptor pass whose page tables it reads.
+void createSceneDirectionalVisibilityPass() {
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> frames{};
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> pages{};
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        frames[frame] = sceneUniformBuffers[frame].handle();
+        pages[frame] = sceneDescriptorPass.pageTableBuffer(frame);
+    }
+    sceneDirectionalVisibilityPass.create(vulkanDevice.physical(), device, sceneViewportTarget.extent(),
+                                          vulkanDevice.allocator(), assetManager, physicalShadowPagePool, frames,
+                                          pages);
+}
+
+void destroySceneViewportForwardPass() noexcept {
+    sceneDirectionalVisibilityPass.destroy();
+    sceneViewportDepthPrepass.destroy();
+    sceneViewportForwardPass.destroy();
 }
 
 void createParticleResources() {
-    bool hasGlass = false;
-    registry.view<GlassDestructionComponent>([&](Entity, const auto&) { hasGlass = true; });
-    if (!hasGlass && (!scene.isParticleScene() || scene.particleEntity() == NullEntity ||
-                      (!registry.has<ParticleEmitterComponent>(scene.particleEntity()) &&
-                       !registry.has<SmokeEmitterComponent>(scene.particleEntity()))))
+    if (!scene.isParticleScene() || scene.particleEntity() == NullEntity ||
+        (!registry.has<ParticleEmitterComponent>(scene.particleEntity()) &&
+         !registry.has<SmokeEmitterComponent>(scene.particleEntity())))
         return;
 
     if (!particleSystem) {
         particleSystem = std::make_unique<Particles::ParticleSystem>(device, vulkanDevice.allocator(),
-                                                                     vulkanDevice.graphicsQueue(), commandPool, 8192);
+                                                                     vulkanDevice.graphicsQueue(), commandPool, 32768);
         if (registry.has<SmokeEmitterComponent>(scene.particleEntity())) {
             auto emitter = registry.get<SmokeEmitterComponent>(scene.particleEntity()).emitter;
             if (registry.has<Transform>(scene.particleEntity())) {
@@ -761,6 +956,9 @@ void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
     waterPass.destroy();
     glassPass.destroy();
     directionalVisibilityPass.destroy();
+    // The DDGI trace pipeline layout embeds the forward set layout.
+    clusterScene.destroy();
+    ddgiPass.destroy();
     shadowPass.destroy();
     sceneDescriptorPass.destroy();
     destroyCullingResources();
@@ -770,6 +968,7 @@ void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
     temporalAaPass.destroy();
     bloomPass.destroy();
     gtaoPass.destroy();
+    ssgiPass.destroy();
     destroyVelocityResources();
 
     skyPass.destroy();
@@ -791,13 +990,15 @@ void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
         : antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT
                                                          : VK_SAMPLE_COUNT_1_BIT;
     msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
-    hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+    hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator(),
+                     VK_FILTER_LINEAR, HdrBuffer::Format, true); // storage: deferred local lights
     hdrBufferInitialized = false;
     opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
     opaqueSceneColorInitialized = false;
     msaa.create(swapchain.extent(), HdrBuffer::Format);
     createDepthResources();
     createGtaoPass();
+    createSsgiPass();
     configuredGtaoQuality = gtaoQuality;
 
     // Instance buffers outlive swapchain attachments, so changing
@@ -869,8 +1070,11 @@ void createSceneSkyPass() {
 }
 
 void createTonemapPass() const {
-    tonemapPass.create(device, swapchain.format(), swapchain.extent(), swapchain.imageViews(), hdrBuffer.imageView(),
-                       hdrBuffer.sampler(), bloomPass.resultView(), assetManager, temporalAaPass.historyViews(),
+    const bool temporal = antialiasingLevel == AntialiasingLevel::TAA;
+    tonemapPass.create(vulkanDevice.physical(), device, vulkanDevice.allocator(), swapchain.format(),
+                       swapchain.extent(), swapchain.imageViews(), hdrBuffer.imageView(), hdrBuffer.sampler(),
+                       bloomPass.resultView(), assetManager, temporalAaPass.historyViews(),
+                       temporal ? temporalAaPass.historyDepthViews() : std::array<VkImageView, 2>{},
                        msaa.enabled() ? VK_NULL_HANDLE : velocityBuffer.imageView());
 }
 
@@ -936,6 +1140,11 @@ void createEditorUiResources(const bool addViewportTextures = true) {
                 reinterpret_cast<std::uint64_t>(historyViews[index]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
         }
     }
+    // The tonemapped Game View: exposure, grading and the display curve, as
+    // the Player presents it. The raw HDR descriptors above stay as fallback
+    // until the first display image has been drawn.
+    gameViewportDisplayDescriptor = reinterpret_cast<VkDescriptorSet>(editorUiBackend->addTexture(
+        reinterpret_cast<std::uint64_t>(tonemapPass.displayView()), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
     // The image starts in UNDEFINED layout. Publish it only after a
     // render has transitioned it to SHADER_READ_ONLY_OPTIMAL.
     sceneViewportDescriptor = VK_NULL_HANDLE;
@@ -954,10 +1163,12 @@ void destroyEditorUiResources() noexcept {
         if (sceneViewportDescriptor != VK_NULL_HANDLE) {
             editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(sceneViewportDescriptor));
         }
+        if (gameViewportDisplayDescriptor != VK_NULL_HANDLE)
+            editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(gameViewportDisplayDescriptor));
     }
     if (editorUiBackend)
         editorUiBackend->shutdown();
-    gameViewportDescriptor = sceneViewportDescriptor = VK_NULL_HANDLE;
+    gameViewportDescriptor = sceneViewportDescriptor = gameViewportDisplayDescriptor = VK_NULL_HANDLE;
     gameViewportTemporalDescriptors.fill(VK_NULL_HANDLE);
     editorUiActive = false;
 }
@@ -979,6 +1190,13 @@ void refreshEditorViewportTextures() {
     if (sceneViewportDescriptor != VK_NULL_HANDLE) {
         editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(sceneViewportDescriptor));
     }
+    if (gameViewportDisplayDescriptor != VK_NULL_HANDLE)
+        editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(gameViewportDisplayDescriptor));
+    // The tonemapped Game View: exposure, grading and the display curve, as
+    // the Player presents it. The raw HDR descriptors above stay as fallback
+    // until the first display image has been drawn.
+    gameViewportDisplayDescriptor = reinterpret_cast<VkDescriptorSet>(editorUiBackend->addTexture(
+        reinterpret_cast<std::uint64_t>(tonemapPass.displayView()), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
     gameViewportDescriptor = reinterpret_cast<VkDescriptorSet>(editorUiBackend->addTexture(
         reinterpret_cast<std::uint64_t>(hdrBuffer.imageView()), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
     if (antialiasingLevel == AntialiasingLevel::TAA) {

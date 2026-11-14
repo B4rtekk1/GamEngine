@@ -9,7 +9,7 @@ add_executable(GamEngineTests
     MathTests.cpp EcsTests.cpp GeneralTests.cpp ComponentTests.cpp UiAndLayoutTests.cpp TimeTests.cpp SceneBuilderTests.cpp ScriptRegistryTests.cpp ProjectTests.cpp GPUSceneDatabaseTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Camera.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/TaskScheduler.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Time.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Project.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/ECS/ComponentId.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Terrain.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/ProceduralCloud.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Meshlet.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Culling/MeshletCulling.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/GPUSceneDatabase.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Lighting/EnvironmentBaker.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Terrain.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/ProceduralCloud.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Meshlet.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Culling/MeshletCulling.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/GPUSceneDatabase.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Lighting/EnvironmentBaker.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Lighting/LightProfiles.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Canvas.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/RectTransform.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/UIBatch.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Vulkan/UIFontAtlas.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Vulkan/UIFontAtlasRuntime.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Scripting/ScriptRegistry.cpp)
 target_sources(GamEngineTests PRIVATE ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Lighting/ReflectionProbeCapture.cpp)
 target_sources(GamEngineTests PRIVATE VsmPagePolicyTests.cpp VsmFeedbackCacheTests.cpp)
@@ -41,7 +41,7 @@ target_include_directories(RenderGraphTests PRIVATE "${PROJECT_SOURCE_DIR}/Engin
 gameengine_enable_warnings(RenderGraphTests)
 gameengine_enable_sanitizers(RenderGraphTests)
 
-add_executable(PhysicsMeshTests PhysicsMeshTests.cpp PhysXPhysicsTests.cpp ScriptSystemTests.cpp GlassMaterialTests.cpp GlassDestructionTests.cpp GlassRenderingTests.cpp CameraControllerTests.cpp)
+add_executable(PhysicsMeshTests PhysicsMeshTests.cpp PhysXPhysicsTests.cpp TextureCookerTests.cpp ScriptSystemTests.cpp ConsoleTests.cpp GlobalIlluminationBenchmark.cpp BistroBenchmark.cpp CameraControllerTests.cpp)
 target_link_libraries(PhysicsMeshTests PRIVATE Engine GTest::gtest_main)
 gameengine_enable_warnings(PhysicsMeshTests)
 gameengine_enable_sanitizers(PhysicsMeshTests)
@@ -126,9 +126,3 @@ gtest_discover_tests(RenderGraphTests)
 gtest_discover_tests(PhysicsMeshTests)
 gtest_discover_tests(ShaderGraphCompilerTests)
 
-# Explicitly invoked CPU benchmark; kept out of the ordinary test suite.
-add_executable(GlassDestructionBenchmark GlassDestructionBenchmark.cpp)
-target_link_libraries(GlassDestructionBenchmark PRIVATE Engine)
-gameengine_enable_warnings(GlassDestructionBenchmark)
-gameengine_enable_sanitizers(GlassDestructionBenchmark)
-gameengine_copy_runtime_dependencies(GlassDestructionBenchmark)

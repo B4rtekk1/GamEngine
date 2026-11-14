@@ -29,6 +29,14 @@ namespace {
         return VK_FORMAT_BC7_UNORM_BLOCK;
     case Assets::TextureFormat::BC7_SRGB:
         return VK_FORMAT_BC7_SRGB_BLOCK;
+    case Assets::TextureFormat::BC1_UNORM:
+        return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case Assets::TextureFormat::BC1_SRGB:
+        return VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+    case Assets::TextureFormat::BC3_UNORM:
+        return VK_FORMAT_BC3_UNORM_BLOCK;
+    case Assets::TextureFormat::BC3_SRGB:
+        return VK_FORMAT_BC3_SRGB_BLOCK;
     }
     throw std::invalid_argument("Unknown cooked texture format");
 }
@@ -68,7 +76,7 @@ void copy_pixels_in_chunks(UploadContext& upload, VkImage image, const std::uint
     if (format == Assets::TextureFormat::RGBA8_SRGB || format == Assets::TextureFormat::RGBA8_UNORM) {
         return 4;
     }
-    return format == Assets::TextureFormat::BC4_UNORM ? 8 : 16;
+    return Assets::textureFormatBlockBytes(format);
 }
 
 [[nodiscard]] std::uint32_t block_extent(const Assets::TextureFormat format) {

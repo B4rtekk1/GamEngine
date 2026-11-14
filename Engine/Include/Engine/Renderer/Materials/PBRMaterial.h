@@ -79,8 +79,15 @@ struct PBRMaterial {
     // Terrain uses four albedo layers blended by the vertex splat weights.
     std::array<std::int32_t, 4> terrainLayerTextures{-1, -1, -1, -1};
     bool terrainLayered{false};
-    // GlassThin: thickness is the normal distance between parallel faces,
-    // in world metres. Zero attenuation distance means no volume absorption.
+    // Glass (KHR_materials_transmission / KHR_materials_volume). A material
+    // with transmission above zero renders in GlassPass: screen-space
+    // refraction and Hi-Z traced reflections over the lit opaque scene.
+    // `thickness` is the world-space distance light travels inside the
+    // glass at normal incidence (0: thin-walled film, e.g. a bubble). The
+    // base colour tints transmitted light; attenuationColor is the colour
+    // white light reaches after attenuationDistance metres inside the
+    // volume (0: no absorption). Dirt is a diffuse grime layer on the glass.
+    // These fields keep the gmesh v7 / scene v29 record layout.
     float transmission{0.0F};
     float thickness{0.0F};
     Math::Color attenuationColor = Math::Color::white();

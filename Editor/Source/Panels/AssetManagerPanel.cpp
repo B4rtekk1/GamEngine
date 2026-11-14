@@ -40,6 +40,9 @@ struct AssetEntry final {
     std::filesystem::path relative;
     std::uintmax_t size{};
     AssetKind kind{AssetKind::Other};
+    // Lower-case generic path, computed once per scan for sorting and the
+    // per-frame search filter.
+    std::string searchKey;
 };
 
 struct AssetCatalog final {
@@ -238,15 +241,18 @@ AssetCatalog scan_assets(const std::filesystem::path& root) {
         if (it->is_directory(error))
             result.folders.push_back(relative);
         else if (it->is_regular_file(error))
-            result.files.push_back({relative, it->file_size(error), asset_kind(relative)});
+            result.files.push_back(
+                {relative, it->file_size(error), asset_kind(relative), lower(relative.generic_string())});
         error.clear();
     }
-    std::ranges::sort(result.files, [](const AssetEntry& a, const AssetEntry& b) {
-        return lower(a.relative.generic_string()) < lower(b.relative.generic_string());
-    });
-    std::ranges::sort(result.folders, [](const auto& a, const auto& b) {
-        return lower(a.generic_string()) < lower(b.generic_string());
-    });
+    std::ranges::sort(result.files, {}, &AssetEntry::searchKey);
+    std::vector<std::pair<std::string, std::filesystem::path>> folders;
+    folders.reserve(result.folders.size());
+    for (auto& folder : result.folders)
+        folders.emplace_back(lower(folder.generic_string()), std::move(folder));
+    std::ranges::sort(folders, {}, &std::pair<std::string, std::filesystem::path>::first);
+    for (std::size_t index = 0; index < folders.size(); ++index)
+        result.folders[index] = std::move(folders[index].second);
     return result;
 }
 
@@ -364,7 +370,7 @@ void draw_file_icon(const ImVec2 min, const float size, const AssetKind kind, co
 }
 
 bool matches_filter(const AssetEntry& asset, const std::string& filter) {
-    return filter.empty() || lower(asset.relative.generic_string()).find(filter) != std::string::npos ||
+    return filter.empty() || asset.searchKey.find(filter) != std::string::npos ||
            lower(kind_name(asset.kind)).find(filter) != std::string::npos;
 }
 
@@ -435,6 +441,14 @@ void draw_breadcrumbs(std::filesystem::path& folder, std::filesystem::path& sele
     }
 }
 } // namespace
+
+namespace {
+AssetManagerPanel::Request pendingRequest = AssetManagerPanel::Request::None;
+}
+
+void AssetManagerPanel::request(const Request request) {
+    pendingRequest = request;
+}
 
 Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
                                        const bool disabled, bool& isOpen, const bool projectIsOpen,
@@ -530,7 +544,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         if (selected.empty() || !is_model(selected))
             return;
         try {
-            created = Editor::AssetDragDrop::instantiateModel(scene, content, selected);
+            Editor::AssetDragDrop::requestModel(content, selected);
             error.clear();
         } catch (const std::exception& exception) {
             error = exception.what();
@@ -598,6 +612,17 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         }
     }
 
+    if (const Request queued = std::exchange(pendingRequest, Request::None); queued != Request::None && projectIsOpen) {
+        if (queued == Request::CreateShaderGraph) {
+            createShaderGraph();
+        } else if (!importDialog && !importJob) {
+            importDialog = std::make_shared<ImportDialogState>();
+            importDialog->destination = root / selectedFolder;
+            importDialog->assetRoot = root;
+            showImportDialog(importDialog, queued == Request::ImportFolder, queued == Request::ImportArchive);
+        }
+    }
+
     ImGui::Begin("Asset Manager", &isOpen);
     // Toolbar: navigation | create & import | search | view options.
     ImGui::BeginDisabled(selectedFolder.empty());
@@ -645,13 +670,17 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (EditorUI::iconButton("##asset-compress", EditorUI::Icon::Archive,
                              "Compress all textures and cook models (.gtex / .gmesh)"))
         ImGui::OpenPopup("##asset-compress-confirm");
-    if (ImGui::BeginPopupModal("##asset-compress-confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("Generate .gtex files for source images and .gmesh files for every GLB/glTF in Assets? "
-                           "Embedded model images also get .gtex files.");
+    if (EditorUI::beginDialog("##asset-compress-confirm", 440.0F)) {
+        EditorUI::dialogHeader(EditorUI::Icon::Archive, EditorUI::colors().accent, "Compress project assets",
+                               "Generates .gtex files for source images and .gmesh files for every FBX/GLB/glTF "
+                               "in Assets, with their textures. Compressed DDS with mipmaps are copied as is.");
         ImGui::TextDisabled("Unchanged cooked assets are skipped. This can take a while.");
-        if (ImGui::Button("Compress all")) {
-            cookJob.progress.discovered.store(0, std::memory_order_release);
-            cookJob.progress.completed.store(0, std::memory_order_release);
+        EditorUI::dialogFooter(2, 120.0F);
+        if (ImGui::Button("Cancel", {120.0F, 0.0F}) || EditorUI::dialogEscapePressed())
+            ImGui::CloseCurrentPopup();
+        ImGui::SameLine();
+        if (EditorUI::primaryButton("Compress all", {120.0F, 0.0F})) {
+            cookJob.progress.reset();
             {
                 std::scoped_lock lock(cookJob.resultMutex);
                 cookJob.result.reset();
@@ -663,7 +692,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     Engine::Assets::TextureCookSummary summary;
                     try {
                         summary = Engine::Assets::cook_all_textures(root, &job->progress);
-                        const auto meshes = Engine::Assets::cook_all_gltf_meshes(root);
+                        const auto meshes = Engine::Assets::cook_all_gltf_meshes(root, &job->progress);
                         summary.discovered += meshes.discovered;
                         summary.cooked += meshes.cooked;
                         summary.skipped += meshes.skipped;
@@ -686,9 +715,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                 Engine::TaskPriority::Low);
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel"))
-            ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
@@ -729,9 +755,19 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
             cookJob.progress.paused.store(!cookJob.progress.paused.load(std::memory_order_relaxed),
                                           std::memory_order_release);
         ImGui::SameLine();
-        char overlay[64]{};
-        std::snprintf(overlay, sizeof(overlay), "%s textures  %u / %u", cookPaused ? "Paused" : "Compressing",
-                      completed, discovered);
+        // Textures inside models (DDS, embedded images) are counted as each
+        // model is read, so the total grows during the model phase.
+        const auto models = cookJob.progress.modelsDiscovered.load(std::memory_order_acquire);
+        const auto modelsDone = cookJob.progress.modelsCompleted.load(std::memory_order_acquire);
+        const std::string current = cookJob.progress.current();
+        char overlay[384]{};
+        if (models == 0)
+            std::snprintf(overlay, sizeof(overlay), "%s textures  %u / %u%s%s", cookPaused ? "Paused" : "Compressing",
+                          completed, discovered, current.empty() ? "" : "  -  ", current.c_str());
+        else
+            std::snprintf(overlay, sizeof(overlay), "%s  model %u / %u  -  textures %u / %u%s%s",
+                          cookPaused ? "Paused" : "Compressing", std::min(modelsDone + 1, models), models, completed,
+                          discovered, current.empty() ? "" : "  -  ", current.c_str());
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
                               cookPaused ? EditorUI::colors().warning : EditorUI::colors().accent);
         ImGui::ProgressBar(discovered == 0 ? 0.0F : static_cast<float>(completed) / static_cast<float>(discovered),
@@ -982,13 +1018,17 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
 
     if (openDeletePopup)
         ImGui::OpenPopup("##confirm-delete-asset");
-    if (ImGui::BeginPopupModal("##confirm-delete-asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        EditorUI::iconLabel(EditorUI::Icon::Warning, EditorUI::colors().warning);
-        ImGui::SameLine(0.0F, 6.0F);
-        ImGui::TextWrapped("Delete asset '%s'?", deleteCandidate.filename().string().c_str());
-        ImGui::TextDisabled("This removes the file from the project.");
-        ImGui::Separator();
-        if (EditorUI::dangerButton("Delete", {120.0F, 0.0F})) {
+    if (EditorUI::beginDialog("##confirm-delete-asset", 400.0F)) {
+        const std::string deleteTitle = "Delete '" + deleteCandidate.filename().string() + "'?";
+        EditorUI::dialogHeader(EditorUI::Icon::Warning, EditorUI::colors().warning, deleteTitle.c_str(),
+                               "This removes the file from the project.");
+        EditorUI::dialogFooter(2);
+        if (ImGui::Button("Cancel", {104.0F, 0.0F}) || EditorUI::dialogEscapePressed()) {
+            deleteCandidate.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (EditorUI::dangerButton("Delete", {104.0F, 0.0F})) {
             if (delete_asset_file(scene, root, deleteCandidate, error)) {
                 Editor::ConsolePanel::info("Deleted asset: " + deleteCandidate.generic_string());
                 if (deleteCandidate.extension() == ".scene")
@@ -997,11 +1037,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
             } else {
                 Editor::ConsolePanel::error(error);
             }
-            deleteCandidate.clear();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", {120.0F, 0.0F})) {
             deleteCandidate.clear();
             ImGui::CloseCurrentPopup();
         }

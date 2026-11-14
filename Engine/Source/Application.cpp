@@ -1,5 +1,8 @@
 #include "Engine/Application.h"
 
+#include "Engine/Core/Diagnostics.h"
+#include "Engine/Core/PngWriter.h"
+
 #include "Engine/Core/Profiler.h"
 #include "Engine/Core/Time.h"
 #include "Engine/Physics/PhysicsSystem.h"
@@ -14,6 +17,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <cstdlib>
 #include <vector>
 #include <stdexcept>
 
@@ -177,6 +181,7 @@ Application::Application(ApplicationConfig config)
         throw std::invalid_argument("Application must allow at least one fixed step per frame");
     }
     scene_.setContent(content_);
+    scene_.physics().setPipelinedSimulation(config_.pipelinedPhysics);
     initializeRuntime();
 }
 
@@ -201,7 +206,10 @@ void Application::run() {
     }
     impl_->running = true;
     const bool benchmarking = config_.benchmarkFrames > 0;
+    const bool screenshotting = !config_.screenshotPath.empty();
+    bool screenshotPending = screenshotting;
     std::uint32_t frameIndex = 0;
+    std::uint32_t loopFrame = 0;
     std::vector<double> wallFrameMs;
     auto previousFrame = std::chrono::steady_clock::now();
     while (impl_->running) {
@@ -210,6 +218,61 @@ void Application::run() {
         if (impl_->running) {
             updateFrame(static_cast<float>(Time::deltaTime()));
         }
+        // GAMENGINE_SCREENSHOT_COUNT=<n> saves n consecutive frames from
+        // --screenshot-frame on as <stem>_<k><ext> (temporal artefacts).
+        static const std::uint32_t sequenceLength = [] {
+            const char* value = std::getenv("GAMENGINE_SCREENSHOT_COUNT");
+            return value != nullptr ? static_cast<std::uint32_t>(std::max(1, std::atoi(value))) : 1U;
+        }();
+        if (screenshotPending && sequenceLength > 1) {
+            static std::uint32_t saved = 0;
+            if (loopFrame >= config_.screenshotFrame && loopFrame < config_.screenshotFrame + sequenceLength)
+                impl_->renderer.requestFrameCapture();
+            std::uint32_t width = 0, height = 0;
+            std::vector<std::uint8_t> rgba;
+            if (loopFrame > config_.screenshotFrame && impl_->renderer.takeFrameCapture(width, height, rgba)) {
+                std::vector<std::uint8_t> rgb;
+                rgb.reserve(rgba.size() / 4 * 3);
+                for (std::size_t pixel = 0; pixel + 3 < rgba.size(); pixel += 4)
+                    rgb.insert(rgb.end(), {rgba[pixel], rgba[pixel + 1], rgba[pixel + 2]});
+                const auto& path = config_.screenshotPath;
+                char index[16];
+                std::snprintf(index, sizeof(index), "_%03u", saved++);
+                Diagnostics::instance().report(DiagnosticSeverity::Info,
+                                               "Sequence capture " + std::to_string(saved - 1) + " at loop frame " +
+                                                   std::to_string(loopFrame));
+                writePngRgb8(path.parent_path() / (path.stem().string() + index + path.extension().string()), width,
+                             height, rgb);
+            }
+            if (saved >= sequenceLength || loopFrame > config_.screenshotFrame + sequenceLength + 16) {
+                screenshotPending = false;
+                if (!benchmarking)
+                    impl_->running = false;
+            }
+        } else if (screenshotPending) {
+            if (loopFrame == config_.screenshotFrame)
+                impl_->renderer.requestFrameCapture();
+            std::uint32_t width = 0, height = 0;
+            std::vector<std::uint8_t> rgba;
+            // The readback completes once its frame slot is reused.
+            const bool captured = loopFrame > config_.screenshotFrame && impl_->renderer.takeFrameCapture(width, height, rgba);
+            if (captured || loopFrame > config_.screenshotFrame + 16) {
+                screenshotPending = false;
+                std::vector<std::uint8_t> rgb;
+                rgb.reserve(rgba.size() / 4 * 3);
+                for (std::size_t pixel = 0; pixel + 3 < rgba.size(); pixel += 4)
+                    rgb.insert(rgb.end(), {rgba[pixel], rgba[pixel + 1], rgba[pixel + 2]});
+                if (captured && writePngRgb8(config_.screenshotPath, width, height, rgb))
+                    Diagnostics::instance().report(DiagnosticSeverity::Info,
+                                                   "Saved screenshot: " + config_.screenshotPath.string());
+                else
+                    Diagnostics::instance().report(DiagnosticSeverity::Error,
+                                                   "Could not capture screenshot: " + config_.screenshotPath.string());
+                if (!benchmarking)
+                    impl_->running = false;
+            }
+        }
+        ++loopFrame;
         if (benchmarking) {
             const auto now = std::chrono::steady_clock::now();
             if (frameIndex == config_.benchmarkWarmupFrames) {
@@ -256,6 +319,12 @@ void Application::processEvents() const {
 
 void Application::updateFrame(const float deltaTime) {
     Profiler::beginFrame();
+    // A pipelined physics step overlapped the previous frame's rendering.
+    // Apply it before UI, game code or scripts read or write rigid bodies.
+    if (config_.pipelinedPhysics) {
+        GE_PROFILE_SCOPE("Physics Sync");
+        scene_.physics().synchronize();
+    }
     {
         GE_PROFILE_SCOPE("UI");
         scene_.ui().update();
@@ -272,6 +341,19 @@ void Application::updateFrame(const float deltaTime) {
     {
         GE_PROFILE_SCOPE("Scripts");
         impl_->scripts.update(scene_, deltaTime);
+    }
+    // GAMENGINE_CAMERA_PAN=<degrees per frame> turns the "Preview Camera"
+    // (SceneLightBaker --camera) by a fixed step each frame: a reproducible
+    // moving view for checking temporal artefacts with screenshot sequences.
+    static const float cameraPan = [] {
+        const char* value = std::getenv("GAMENGINE_CAMERA_PAN");
+        return value != nullptr ? static_cast<float>(std::atof(value)) : 0.0F;
+    }();
+    if (cameraPan != 0.0F) {
+        if (Actor camera = scene_.findActor("Preview Camera"); camera.valid()) {
+            const Vec3 rotation = camera.rotation();
+            camera.setRotation(Vec3{rotation.x(), rotation.y() + cameraPan, rotation.z()});
+        }
     }
     // Apply input-driven changes before stepping PhysX so movement and
     // jumping affect this frame rather than the next one.
@@ -311,5 +393,10 @@ void Application::updatePhysics(const float deltaTime) {
         // frame; retaining only interpolation remainder prevents a spiral.
         impl_->fixedAccumulator = std::fmod(impl_->fixedAccumulator, config_.fixedDeltaTime);
     }
+    // The renderer runs faster than the fixed step. Without this, bodies and
+    // the camera attached to a walking player moved only on frames with a
+    // step and stood still in between, which judders and breaks the motion
+    // vectors temporal AA relies on.
+    scene_.physics().interpolate(impl_->fixedAccumulator / config_.fixedDeltaTime);
 }
 } // namespace Engine

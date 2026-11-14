@@ -14,7 +14,7 @@ class Scene;
 
 struct PhysicsDiagnostics final {
     double collisionCookingCpuMs{};
-    std::uint64_t convexCookCount{}, triangleCookCount{}, actorCreations{}, glassShapeUpdates{};
+    std::uint64_t convexCookCount{}, triangleCookCount{}, actorCreations{};
 };
 struct RaycastHit final {
     Actor actor;
@@ -44,8 +44,30 @@ class PhysicsSystem final {
     /** Advances dynamic rigid bodies in a scene by one simulation step. */
     void update(Scene& scene, float deltaTime) const;
 
+    /**
+     * Presents dynamic bodies at `alpha` (0..1) between their poses before
+     * and after the latest fixed step. Call after stepping, once per frame.
+     */
+    void interpolate(Scene& scene, float alpha) const;
+
     /** Discards the PhysX world so the next update builds a fresh simulation. */
     void reset() const noexcept;
+
+    /**
+     * When enabled, update() starts the PhysX step and returns without
+     * waiting for it, so the simulation overlaps scripts and rendering. Its
+     * results reach the ECS at the next update(), raycast() or synchronize();
+     * until then interpolate() keeps presenting the last completed step.
+     * Disabled by default: update() then returns with results applied.
+     */
+    void setPipelinedSimulation(bool enabled) noexcept {
+        pipelined_ = enabled;
+    }
+    [[nodiscard]] bool pipelinedSimulation() const noexcept {
+        return pipelined_;
+    }
+    /** Applies an in-flight pipelined step to the scene, if there is one. */
+    void synchronize(Scene& scene) const;
 
     [[nodiscard]] Vec3 gravity() const noexcept {
         return gravity_;
@@ -59,13 +81,14 @@ class PhysicsSystem final {
                                                     ObjectId ignoredActor = NullObjectId) const; // NOLINT
 
   private:
-    friend class GlassDestructionSystem;
     /** Read-only query after update has synchronized the PhysX world. */
     [[nodiscard]] std::optional<RaycastHit> raycastPrepared(Scene& scene, Vec3 origin, Vec3 direction,
                                                             float maxDistance, ObjectId ignoredActor) const;
     struct BroadPhaseCache;
+    void finishPendingStep(Scene& scene) const;
 
     Vec3 gravity_;
+    bool pipelined_{};
     mutable std::shared_ptr<BroadPhaseCache> broadPhaseCache_;
 };
 
@@ -89,13 +112,9 @@ class Physics final {
     [[nodiscard]] std::optional<RaycastHit> raycast(Vec3 origin, Vec3 direction,
                                                     float maxDistance = 1000.0F) const; // NOLINT
 
-    /** Fires a hitscan shot, damages opt-in glass and retains the most recent 128 surface impacts. */
+    /** Fires a hitscan shot and retains the most recent 128 surface impacts. */
     [[nodiscard]] std::optional<RaycastHit> shootRay(Vec3 origin, Vec3 direction, float maxDistance = 1000.0F,
                                                      ObjectId ignoredActor = NullObjectId); // NOLINT
-
-    /** Hitscan with explicit glass impact energy and world-space radius. */
-    [[nodiscard]] std::optional<RaycastHit> shootRay(Vec3 origin, Vec3 direction, float maxDistance,
-                                                     ObjectId ignoredActor, float energy, float radius = 0.18F);
 
     [[nodiscard]] std::span<const BulletImpact> bulletImpacts() const noexcept {
         return bulletImpacts_;
@@ -109,6 +128,11 @@ class Physics final {
     friend class Scene;
 
     void update(float deltaTime) const;
+    void interpolate(float alpha) const;
+    void setPipelinedSimulation(bool enabled) noexcept {
+        system_.setPipelinedSimulation(enabled);
+    }
+    void synchronize() const;
     void reset() noexcept {
         system_.reset();
         clearBulletImpacts();

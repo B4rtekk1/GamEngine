@@ -1,11 +1,14 @@
 #include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
 
+#include "Engine/Core/Diagnostics.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace Engine {
 namespace {
@@ -52,6 +55,11 @@ void AccelerationStructureManager::create(VkPhysicalDevice physical, VkDevice de
         vkGetDeviceProcAddr(device, "vkCmdBuildAccelerationStructuresKHR"));
     getAddress_ = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(
         vkGetDeviceProcAddr(device, "vkGetAccelerationStructureDeviceAddressKHR"));
+    // Optional: without them BLASes simply stay uncompacted.
+    writeProperties_ = reinterpret_cast<PFN_vkCmdWriteAccelerationStructuresPropertiesKHR>(
+        vkGetDeviceProcAddr(device, "vkCmdWriteAccelerationStructuresPropertiesKHR"));
+    copyStructure_ = reinterpret_cast<PFN_vkCmdCopyAccelerationStructureKHR>(
+        vkGetDeviceProcAddr(device, "vkCmdCopyAccelerationStructureKHR"));
     if (!createAccelerationStructure_ || !destroyAccelerationStructure_ || !getBuildSizes_ || !cmdBuild_ ||
         !getAddress_) {
         destroy();
@@ -64,6 +72,26 @@ void AccelerationStructureManager::destroyStructure(Structure& s) noexcept {
     s.storage.destroy();
     s = {};
 }
+void AccelerationStructureManager::releaseStructures() {
+    if (!device_ || (blases_.empty() && std::ranges::none_of(frames_, [](const auto& f) { return f.tlas.handle; })))
+        return;
+    if (vkDeviceWaitIdle(device_) != VK_SUCCESS)
+        throw std::runtime_error("Could not idle device before releasing acceleration structures");
+    for (auto& [key, s] : blases_) {
+        static_cast<void>(key);
+        destroyStructure(s);
+    }
+    blases_.clear();
+    for (auto& f : frames_) {
+        destroyStructure(f.tlas);
+        f.instances.destroy();
+        f.scratch.destroy();
+        f = {};
+    }
+    blasScratch_.destroy();
+    resetCompaction();
+}
+
 void AccelerationStructureManager::destroy() noexcept {
     for (auto& [key, s] : blases_) {
         static_cast<void>(key);
@@ -77,6 +105,10 @@ void AccelerationStructureManager::destroy() noexcept {
         f = {};
     }
     blasScratch_.destroy();
+    resetCompaction();
+    if (compactionQueries_ != VK_NULL_HANDLE && device_)
+        vkDestroyQueryPool(device_, compactionQueries_, nullptr);
+    compactionQueries_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
     allocator_ = VK_NULL_HANDLE;
     scratchAlignment_ = 1;
@@ -85,6 +117,79 @@ void AccelerationStructureManager::destroy() noexcept {
     getBuildSizes_ = nullptr;
     cmdBuild_ = nullptr;
     getAddress_ = nullptr;
+    writeProperties_ = nullptr;
+    copyStructure_ = nullptr;
+}
+
+// Callers have idled the device (rebuild, release, destroy).
+void AccelerationStructureManager::resetCompaction() noexcept {
+    for (RetiredStructure& old : retired_)
+        destroyStructure(old.structure);
+    retired_.clear();
+    compactionKeys_.clear();
+    compactionAge_ = 0;
+}
+
+void AccelerationStructureManager::advanceCompaction(const VkCommandBuffer cmd) {
+    ++compactionClock_;
+    // Originals stay alive until every frame recorded with them has retired.
+    std::erase_if(retired_, [&](RetiredStructure& old) {
+        if (old.releaseAt > compactionClock_)
+            return false;
+        destroyStructure(old.structure);
+        return true;
+    });
+    if (compactionKeys_.empty())
+        return;
+    // The build's frame must have completed; the results are then read
+    // without waiting, and a later frame retries if they are not yet there.
+    if (++compactionAge_ <= FramesInFlight + 1)
+        return;
+    std::vector<VkDeviceSize> sizes(compactionKeys_.size());
+    const VkResult result = vkGetQueryPoolResults(
+        device_, compactionQueries_, 0, static_cast<std::uint32_t>(sizes.size()), sizeof(VkDeviceSize) * sizes.size(),
+        sizes.data(), sizeof(VkDeviceSize), VK_QUERY_RESULT_64_BIT);
+    if (result == VK_NOT_READY)
+        return;
+    const std::vector<BlasKey> keys = std::move(compactionKeys_);
+    compactionKeys_.clear();
+    if (result != VK_SUCCESS)
+        return;
+    VkDeviceSize before = 0;
+    VkDeviceSize after = 0;
+    for (std::size_t index = 0; index < keys.size(); ++index) {
+        const auto found = blases_.find(keys[index]);
+        if (found == blases_.end() || sizes[index] == 0)
+            continue;
+        Structure& original = found->second;
+        before += original.storage.size();
+        if (sizes[index] >= original.storage.size()) {
+            after += original.storage.size();
+            continue;
+        }
+        Structure compacted;
+        createStructure(compacted, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, sizes[index]);
+        VkCopyAccelerationStructureInfoKHR copy{VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
+        copy.src = original.handle;
+        copy.dst = compacted.handle;
+        copy.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+        copyStructure_(cmd, &copy);
+        after += compacted.storage.size();
+        retired_.push_back({std::move(original), compactionClock_ + FramesInFlight + 1});
+        original = std::move(compacted);
+    }
+    // Copies -> the TLAS builds that now reference the compacted BLASes.
+    buildBarrier(cmd, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+    // An update may not change instance references: rebuild every TLAS.
+    for (auto& f : frames_)
+        f.tlasBuilt = false;
+    builtBlasBytes_ = before;
+    compactedBlasBytes_ = after;
+    Diagnostics::instance().report(DiagnosticSeverity::Info,
+                                   "[RayTracing] Compacted " + std::to_string(keys.size()) + " BLASes: " +
+                                       std::to_string(before >> 20U) + " MiB -> " + std::to_string(after >> 20U) +
+                                       " MiB",
+                                   {.subsystem = "Renderer"});
 }
 void AccelerationStructureManager::createStructure(Structure& s, VkAccelerationStructureTypeKHR type,
                                                    VkDeviceSize bytes) {
@@ -130,61 +235,105 @@ void AccelerationStructureManager::rebuildBlases(VkCommandBuffer cmd, std::span<
         destroyStructure(s);
     }
     blases_.clear();
+    resetCompaction();
+    const bool compaction = writeProperties_ != nullptr && copyStructure_ != nullptr;
+    const VkBuildAccelerationStructureFlagsKHR compactionFlag =
+        compaction ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0;
     for (auto& f : frames_)
         f.tlasBuilt = false;
-    struct Pending {
-        const MeshBuildInput* mesh;
-        VkAccelerationStructureGeometryKHR geometry;
-        VkAccelerationStructureBuildSizesInfoKHR sizes;
-        uint32_t primitives;
-    };
-    std::vector<Pending> pending;
-    VkDeviceSize maxScratch{};
+    // Inputs sharing a key become geometries of one BLAS. A mesh split into
+    // thousands of sections then forms one structure: one TLAS instance per
+    // object instead of thousands of overlapping per-section boxes that every
+    // ray had to enter.
+    std::vector<BlasKey> order;
+    std::unordered_map<BlasKey, std::vector<const MeshBuildInput*>, BlasKeyHash> groups;
     for (const auto& m : meshes) {
         if (!m.key.mesh || !m.vertexAddress || !m.indexAddress || !m.vertexCount || m.indexCount < 3)
             continue;
-        VkAccelerationStructureGeometryTrianglesDataKHR t{
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
-        t.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-        t.vertexData.deviceAddress = m.vertexAddress;
-        t.vertexStride = sizeof(GpuVertex);
-        t.maxVertex = m.firstVertex + m.vertexCount - 1;
-        t.indexType = VK_INDEX_TYPE_UINT32;
-        t.indexData.deviceAddress = m.indexAddress;
-        VkAccelerationStructureGeometryKHR g{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-        g.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        g.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-        g.geometry.triangles = t;
-        uint32_t pc = m.indexCount / 3;
+        auto [it, inserted] = groups.try_emplace(m.key);
+        if (inserted)
+            order.push_back(m.key);
+        it->second.push_back(&m);
+    }
+    struct Pending {
+        BlasKey key;
+        std::vector<VkAccelerationStructureGeometryKHR> geometries;
+        std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
+        VkAccelerationStructureBuildSizesInfoKHR sizes;
+    };
+    std::vector<Pending> pending;
+    pending.reserve(order.size());
+    VkDeviceSize maxScratch{};
+    for (const BlasKey& key : order) {
+        Pending entry{key, {}, {}, {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR}};
+        std::vector<uint32_t> primitiveCounts;
+        for (const MeshBuildInput* m : groups.at(key)) {
+            VkAccelerationStructureGeometryTrianglesDataKHR t{
+                VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+            t.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            t.vertexData.deviceAddress = m->vertexAddress;
+            t.vertexStride = sizeof(GpuVertex);
+            t.maxVertex = m->firstVertex + m->vertexCount - 1;
+            t.indexType = VK_INDEX_TYPE_UINT32;
+            t.indexData.deviceAddress = m->indexAddress;
+            VkAccelerationStructureGeometryKHR g{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+            g.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            g.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+            g.geometry.triangles = t;
+            entry.geometries.push_back(g);
+            entry.ranges.push_back({.primitiveCount = m->indexCount / 3});
+            primitiveCounts.push_back(m->indexCount / 3);
+        }
         VkAccelerationStructureBuildGeometryInfoKHR b{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
         b.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | compactionFlag;
         b.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-        b.geometryCount = 1;
-        b.pGeometries = &g;
-        VkAccelerationStructureBuildSizesInfoKHR z{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-        getBuildSizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &b, &pc, &z);
-        maxScratch = std::max(maxScratch, z.buildScratchSize);
-        pending.push_back({&m, g, z, pc});
+        b.geometryCount = static_cast<uint32_t>(entry.geometries.size());
+        b.pGeometries = entry.geometries.data();
+        getBuildSizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &b, primitiveCounts.data(),
+                       &entry.sizes);
+        maxScratch = std::max(maxScratch, entry.sizes.buildScratchSize);
+        pending.push_back(std::move(entry));
     }
     const VkDeviceAddress scratchAddress = ensureScratch(blasScratch_, maxScratch);
     for (const auto& p : pending) {
-        auto& s = blases_[p.mesh->key];
+        auto& s = blases_[p.key];
         createStructure(s, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, p.sizes.accelerationStructureSize);
         VkAccelerationStructureBuildGeometryInfoKHR b{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
         b.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | compactionFlag;
         b.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-        b.geometryCount = 1;
-        b.pGeometries = &p.geometry;
+        b.geometryCount = static_cast<uint32_t>(p.geometries.size());
+        b.pGeometries = p.geometries.data();
         b.dstAccelerationStructure = s.handle;
         b.scratchData.deviceAddress = scratchAddress;
-        VkAccelerationStructureBuildRangeInfoKHR r{.primitiveCount = p.primitives};
-        const VkAccelerationStructureBuildRangeInfoKHR* rs[] = {&r};
+        const VkAccelerationStructureBuildRangeInfoKHR* rs[] = {p.ranges.data()};
         cmdBuild_(cmd, 1, &b, rs);
         buildBarrier(cmd, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
                               VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
     }
+    if (!compaction || pending.empty())
+        return;
+    // Ask for every compacted size in one query batch after the builds.
+    if (compactionQueries_ != VK_NULL_HANDLE)
+        vkDestroyQueryPool(device_, compactionQueries_, nullptr);
+    compactionQueries_ = VK_NULL_HANDLE;
+    VkQueryPoolCreateInfo queryInfo{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    queryInfo.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+    queryInfo.queryCount = static_cast<std::uint32_t>(pending.size());
+    if (vkCreateQueryPool(device_, &queryInfo, nullptr, &compactionQueries_) != VK_SUCCESS) {
+        compactionQueries_ = VK_NULL_HANDLE;
+        return;
+    }
+    std::vector<VkAccelerationStructureKHR> handles;
+    handles.reserve(pending.size());
+    for (const auto& p : pending) {
+        handles.push_back(blases_.at(p.key).handle);
+        compactionKeys_.push_back(p.key);
+    }
+    vkCmdResetQueryPool(cmd, compactionQueries_, 0, queryInfo.queryCount);
+    writeProperties_(cmd, queryInfo.queryCount, handles.data(),
+                     VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, compactionQueries_, 0);
 }
 void AccelerationStructureManager::updateTlas(VkCommandBuffer cmd, uint32_t index,
                                               std::span<const InstanceBuildInput> instances) {

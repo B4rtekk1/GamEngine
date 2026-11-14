@@ -71,6 +71,34 @@ TEST(PlayModePhysics, DynamicCommandsStillApplyWithoutWorldTrsDecomposition) {
     EXPECT_NEAR(actor.position().y(), 3.0F, 1.0e-4F);
 }
 
+TEST(PlayModePhysics, InterpolatingRestingBodyDoesNotMarkTransformChanged) {
+    Engine::Scene scene;
+    const auto actor = scene.createActor("Resting");
+    actor.setPosition({1.0F, 2.0F, 3.0F});
+    actor.setRotation({10.0F, 20.0F, 30.0F});
+    actor.addSphereCollider(0.5F);
+    actor.addRigidbody();
+    Engine::PhysicsSystem physics{{0.0F, 0.0F, 0.0F}};
+    for (int step = 0; step < 3; ++step)
+        physics.update(scene, 1.0F / 60.0F);
+    physics.interpolate(scene, 0.5F);
+    const auto revision = scene.mutationRevision();
+    // Each alpha used to blend identical poses into a quaternion differing in
+    // its last bits, so every frame published a "moved" resting body.
+    for (const float alpha : {0.1F, 0.37F, 0.73F, 0.99F})
+        physics.interpolate(scene, alpha);
+    EXPECT_EQ(scene.mutationRevision(), revision);
+    EXPECT_NEAR(actor.position().y(), 2.0F, 1.0e-5F);
+
+    // A new step that moves the body is presented again.
+    actor.setVelocity({6.0F, 0.0F, 0.0F});
+    physics.update(scene, 1.0F / 60.0F);
+    physics.update(scene, 1.0F / 60.0F);
+    const float stepped = actor.position().x();
+    physics.interpolate(scene, 0.0F);
+    EXPECT_LT(actor.position().x(), stepped);
+}
+
 TEST(PlayModePhysics, KinematicPoseAndScaleChangesReachSceneQueries) {
     Engine::Scene scene;
     const auto actor = scene.createActor("Kinematic");

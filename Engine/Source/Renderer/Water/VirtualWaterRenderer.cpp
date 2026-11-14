@@ -75,8 +75,9 @@ VkPipeline VirtualWaterRenderer::makeCompute(const char* shader, VkPipelineLayou
 }
 
 void VirtualWaterRenderer::create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator,
-                                  Assets::AssetManager& assets, VkExtent2D extent, VkFormat depthFormat,
-                                  VkImageView depthView, VkDescriptorSetLayout sceneLayout, VkImageView hdrTargetView,
+                                  Assets::AssetManager& assets, VkExtent2D extent,
+                                  [[maybe_unused]] VkFormat depthFormat, VkImageView depthView,
+                                  VkDescriptorSetLayout sceneLayout, VkImageView hdrTargetView,
                                   VkDescriptorImageInfo opaqueColor, VkDescriptorImageInfo opaqueDepth,
                                   std::span<const VkDescriptorImageInfo> previousHiZ,
                                   std::span<const VkBuffer> instanceBuffers,
@@ -102,6 +103,8 @@ void VirtualWaterRenderer::create(VkPhysicalDevice physicalDevice, VkDevice devi
         createOceanGeometry();
         surface_.create(physicalDevice_, device_, extent_, allocator_, VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT,
                         false);
+        waterDepth_.initialize(physicalDevice_, device_, allocator_);
+        waterDepth_.create(extent_, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_D32_SFLOAT);
         meta_.create(physicalDevice_, device_, extent_, allocator_, VK_FILTER_NEAREST, VK_FORMAT_R32G32_SFLOAT, false);
         velocity_.create(physicalDevice_, device_, extent_, allocator_, VK_FILTER_NEAREST, VK_FORMAT_R16G16_SFLOAT,
                          false);
@@ -110,9 +113,10 @@ void VirtualWaterRenderer::create(VkPhysicalDevice physicalDevice, VkDevice devi
                             VK_FORMAT_R16G16B16A16_SFLOAT, true);
         sssrDepth_.create(physicalDevice_, device_, extent_.width, extent_.height, allocator_);
         createDescriptors(sceneLayout);
-        createPipelines(sceneLayout, depthFormat);
+        createPipelines(sceneLayout);
         hdrTargetView_ = hdrTargetView;
         writeDescriptors();
+        writeDepthInitDescriptor();
     } catch (...) {
         destroy();
         throw;
@@ -123,8 +127,14 @@ void VirtualWaterRenderer::createBuffers() {
     const auto host = [&](Buffer& b, VkDeviceSize size, VkBufferUsageFlags usage) {
         b.createHostVisible(physicalDevice_, device_, std::max<VkDeviceSize>(size, 16), usage, allocator_);
     };
-    host(pages_, sizeof(GPUVirtualWaterPage) * MaxPages,
-         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    // Everything the GPU writes (often with atomics) or reads per vertex/pixel
+    // is device-local. Host-visible memory here meant PCIe round trips for
+    // every cull/classify atomic and every state-cell access.
+    const auto device = [&](Buffer& b, VkDeviceSize size, VkBufferUsageFlags usage) {
+        b.createDeviceLocalEmpty(device_, std::max<VkDeviceSize>(size, 16), usage, allocator_);
+    };
+    device(pages_, sizeof(GPUVirtualWaterPage) * MaxPages, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    host(pagesUpload_, sizeof(GPUVirtualWaterPage) * MaxPages, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     host(drawTemplates_, sizeof(GPUWaterDrawTemplate) * MaxDrawBins,
          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     host(farOceanConfig_, sizeof(GPUFarOceanConfig), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
@@ -138,79 +148,109 @@ void VirtualWaterRenderer::createBuffers() {
     tileSettings_.height = extent_.height;
     tileSettings_.tilesX = (extent_.width + 7U) / 8U;
     tileSettings_.maxTiles = tileSettings_.tilesX * ((extent_.height + 7U) / 8U);
+    // Ray budgets scale with the viewport. A fixed 2M-step cap exhausted after
+    // a few hundred tiles at 1080p, and because tiles reserve it in atomic
+    // order, random 8x8 tiles lost SSR and fell back to sky (blocky mosaic).
+    // GPU time is throttled smoothly by the quality-scale/threshold controller.
+    const std::uint32_t tilePixels = tileSettings_.maxTiles * 64U;
+    frameBudget_.maxReflectionWork = std::max(WaterFrameBudget{}.maxReflectionWork, tilePixels * 28U);
+    frameBudget_.maxRefractionWork = std::max(WaterFrameBudget{}.maxRefractionWork, tilePixels * 20U);
 
-    host(statePageTable_, sizeof(GPUWaterStatePhysicalRef) * MaxPages, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    host(statePhysical_, sizeof(GPUWaterPhysicalState) * MaxPhysicalStatePages, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    host(stateCells_, sizeof(GPUWaterStateCell) * MaxStateCells, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    host(stateCellsScratch_, sizeof(GPUWaterStateCell) * MaxStateCells, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    host(stateAllocator_, sizeof(std::uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    device(statePageTable_, sizeof(GPUWaterStatePhysicalRef) * MaxPages, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    device(statePhysical_, sizeof(GPUWaterPhysicalState) * MaxPhysicalStatePages, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    device(stateCells_, sizeof(GPUWaterStateCell) * MaxStateCells, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    device(stateCellsScratch_, sizeof(GPUWaterStateCell) * MaxStateCells, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    device(stateAllocator_, sizeof(std::uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-    std::vector<GPUWaterStatePhysicalRef> invalidRefs(MaxPages);
-    for (auto& ref : invalidRefs)
-        ref.slot = InvalidPhysicalPage;
-    std::vector<GPUWaterPhysicalState> zeroPhysical(MaxPhysicalStatePages);
-    for (auto& physical : zeroPhysical) {
-        physical.ownerBodyIndex = InvalidPhysicalPage;
-        physical.generation = 0U;
-        physical.updateRatePacked = 1U;
-    }
-    std::vector<GPUWaterStateCell> zeroCells(MaxStateCells);
-    const std::uint32_t zeroAllocator = 0;
-    statePageTable_.update(invalidRefs.data(), sizeof(GPUWaterStatePhysicalRef) * invalidRefs.size());
-    statePhysical_.update(zeroPhysical.data(), sizeof(GPUWaterPhysicalState) * zeroPhysical.size());
-    stateCells_.update(zeroCells.data(), sizeof(GPUWaterStateCell) * zeroCells.size());
-    stateCellsScratch_.update(zeroCells.data(), sizeof(GPUWaterStateCell) * zeroCells.size());
-    stateAllocator_.update(&zeroAllocator, sizeof(zeroAllocator));
-
-    const std::vector<GPUWaterPageHistory> histories(MaxPages);
-    const std::vector<std::uint32_t> zeroHistogram(256U, 0U);
-    const std::vector<std::uint32_t> zeroCandidates(tileSettings_.maxTiles, 0U);
-    GPUWaterFrameBudget gpuBudget{};
-    gpuBudget.targetGpuMs = frameBudget_.targetGpuMs;
-    gpuBudget.qualityScale = frameBudget_.qualityScale;
-    gpuBudget.feedbackGain = 0.08F;
-    gpuBudget.maxFullRateSamples = tileSettings_.maxTiles * 64U;
-    gpuBudget.maxReflectionWork = frameBudget_.maxReflectionWork;
-    gpuBudget.maxRefractionWork = frameBudget_.maxRefractionWork;
-    gpuBudget.maxStateSimulationCells = frameBudget_.maxStateSimulationCells;
     for (std::uint32_t f = 0; f < FramesInFlight; ++f) {
         host(cullConfig_[f], sizeof(GPUWaterCullConfig), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         const GPUWaterCullConfig emptyCull{};
         cullConfig_[f].update(&emptyCull, sizeof(emptyCull));
-        host(visiblePages_[f], sizeof(GPUVisibleWaterPage) * MaxVisiblePageSlots, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        host(drawBinCounts_[f], sizeof(std::uint32_t) * MaxDrawBins,
-             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-        host(indirectCommands_[f], sizeof(VkDrawIndexedIndirectCommand) * MaxDrawBins,
-             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                 VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-        host(history_[f], sizeof(GPUWaterPageHistory) * MaxPages, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        history_[f].update(histories.data(), sizeof(GPUWaterPageHistory) * MaxPages);
-        host(stats_[f], sizeof(GPUWaterPageStats),
-             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        device(visiblePages_[f], sizeof(GPUVisibleWaterPage) * MaxVisiblePageSlots, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        device(drawBinCounts_[f], sizeof(std::uint32_t) * MaxDrawBins, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        device(indirectCommands_[f], sizeof(VkDrawIndexedIndirectCommand) * MaxDrawBins,
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+        device(history_[f], sizeof(GPUWaterPageHistory) * MaxPages, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        device(stats_[f], sizeof(GPUWaterPageStats), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         host(tileSettingsBuffer_[f], sizeof(GPUWaterTileSettings), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         tileSettingsBuffer_[f].update(&tileSettings_, sizeof(tileSettings_));
-        host(frameBudgetBuffer_[f], sizeof(GPUWaterFrameBudget),
-             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-                 VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-        frameBudgetBuffer_[f].update(&gpuBudget, sizeof(gpuBudget));
-        host(importanceHistogram_[f], sizeof(std::uint32_t) * 256U,
-             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-        importanceHistogram_[f].update(zeroHistogram.data(), sizeof(std::uint32_t) * zeroHistogram.size());
-        host(candidateTiles_[f], sizeof(std::uint32_t) * tileSettings_.maxTiles,
-             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-        candidateTiles_[f].update(zeroCandidates.data(), sizeof(std::uint32_t) * zeroCandidates.size());
-        host(tileLists_[f], sizeof(std::uint32_t) * 4ull * tileSettings_.maxTiles, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        host(tileCounts_[f], sizeof(std::uint32_t) * 4,
-             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-        host(tileDispatch_[f], sizeof(VkDispatchIndirectCommand) * 4,
-             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                 VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        device(frameBudgetBuffer_[f], sizeof(GPUWaterFrameBudget), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        device(importanceHistogram_[f], sizeof(std::uint32_t) * 256U,
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        host(importanceReadback_[f], sizeof(std::uint32_t) * 256U, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        const std::array<std::uint32_t, 256> zeroHistogram{};
+        importanceReadback_[f].update(zeroHistogram.data(), sizeof(zeroHistogram));
+        device(candidateTiles_[f], sizeof(std::uint32_t) * tileSettings_.maxTiles, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        device(tileLists_[f], sizeof(std::uint32_t) * 4ull * tileSettings_.maxTiles,
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        device(tileCounts_[f], sizeof(std::uint32_t) * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        device(tileDispatch_[f], sizeof(VkDispatchIndirectCommand) * 4,
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
         host(interactionEvents_[f], sizeof(GPUWaterInteractionEvent) * MaxInteractionEvents,
              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         host(underwaterConfig_[f], sizeof(GPUWaterUnderwaterConfig), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         const GPUWaterUnderwaterConfig emptyUnderwater{};
         underwaterConfig_[f].update(&emptyUnderwater, sizeof(emptyUnderwater));
     }
+    pendingFullReset_ = true;
+    pendingMappingReset_ = true;
+}
+
+void VirtualWaterRenderer::flushPendingGpuWork(VkCommandBuffer cmd) {
+    if (!pendingFullReset_ && !pendingMappingReset_ && pendingPageUploadCount_ == 0U)
+        return;
+    // Previous frames may still read or write these buffers.
+    VkMemoryBarrier2 before{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    before.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                          VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    before.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    before.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    before.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    VkDependencyInfo beforeDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    beforeDependency.memoryBarrierCount = 1;
+    beforeDependency.pMemoryBarriers = &before;
+    vkCmdPipelineBarrier2(cmd, &beforeDependency);
+
+    if (pendingFullReset_) {
+        // Zero is the "free" encoding for physical slots (generation 0) and the
+        // neutral value for cells, counters, commands and histograms.
+        for (const Buffer* buffer : {&statePhysical_, &stateCells_, &stateCellsScratch_, &stateAllocator_})
+            vkCmdFillBuffer(cmd, buffer->handle(), 0, VK_WHOLE_SIZE, 0U);
+        for (std::uint32_t f = 0; f < FramesInFlight; ++f) {
+            for (const Buffer* buffer :
+                 {&visiblePages_[f], &drawBinCounts_[f], &stats_[f], &frameBudgetBuffer_[f], &importanceHistogram_[f],
+                  &candidateTiles_[f], &tileLists_[f], &tileCounts_[f], &tileDispatch_[f]})
+                vkCmdFillBuffer(cmd, buffer->handle(), 0, VK_WHOLE_SIZE, 0U);
+        }
+    }
+    if (pendingFullReset_ || pendingMappingReset_) {
+        // All-ones is an invalid reference (slot == InvalidPhysicalPage).
+        vkCmdFillBuffer(cmd, statePageTable_.handle(), 0, VK_WHOLE_SIZE, 0xffffffffU);
+        for (std::uint32_t f = 0; f < FramesInFlight; ++f) {
+            vkCmdFillBuffer(cmd, history_[f].handle(), 0, VK_WHOLE_SIZE, 0U);
+            vkCmdFillBuffer(cmd, indirectCommands_[f].handle(), 0, VK_WHOLE_SIZE, 0U);
+        }
+    }
+    if (pendingPageUploadCount_ != 0U) {
+        const VkBufferCopy region{0, 0, sizeof(GPUVirtualWaterPage) * pendingPageUploadCount_};
+        vkCmdCopyBuffer(cmd, pagesUpload_.handle(), pages_.handle(), 1, &region);
+    }
+    pendingFullReset_ = false;
+    pendingMappingReset_ = false;
+    pendingPageUploadCount_ = 0U;
+
+    VkMemoryBarrier2 after{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    after.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    after.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    after.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    after.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                          VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    VkDependencyInfo afterDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    afterDependency.memoryBarrierCount = 1;
+    afterDependency.pMemoryBarriers = &after;
+    vkCmdPipelineBarrier2(cmd, &afterDependency);
 }
 
 void VirtualWaterRenderer::createOceanGeometry() {
@@ -324,6 +364,9 @@ void VirtualWaterRenderer::createDescriptors(VkDescriptorSetLayout sceneLayout) 
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, C, nullptr}};
     sssrInitLayout_ = makeLayout(device_, sssrBindings);
     sssrReduceLayout_ = makeLayout(device_, sssrBindings);
+    const std::array depthInitBindings{
+        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, F, nullptr}};
+    depthInitLayout_ = makeLayout(device_, depthInitBindings);
 
     const std::array sizes{VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FramesInFlight * 96U},
                            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FramesInFlight * 24U},
@@ -351,6 +394,12 @@ void VirtualWaterRenderer::createDescriptors(VkDescriptorSetLayout sceneLayout) 
     alloc(buildDispatchLayout_, buildDispatchSets_);
     alloc(compositeLayout_, compositeSets_);
     alloc(farLayout_, farSets_);
+    VkDescriptorSetAllocateInfo depthInitAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    depthInitAlloc.descriptorPool = descriptorPool_;
+    depthInitAlloc.descriptorSetCount = 1;
+    depthInitAlloc.pSetLayouts = &depthInitLayout_;
+    if (vkAllocateDescriptorSets(device_, &depthInitAlloc, &depthInitSet_) != VK_SUCCESS)
+        throw std::runtime_error("Could not allocate virtual-water depth-init descriptor set");
     for (auto& sets : drawSets_)
         alloc(drawLayout_, sets);
     for (auto& sets : shadeSets_)
@@ -405,7 +454,7 @@ void VirtualWaterRenderer::createDescriptors(VkDescriptorSetLayout sceneLayout) 
         throw std::runtime_error("water SSSR reduce layout");
 }
 
-void VirtualWaterRenderer::createPipelines(VkDescriptorSetLayout sceneLayout, VkFormat depthFormat) {
+void VirtualWaterRenderer::createPipelines(VkDescriptorSetLayout sceneLayout) {
     cullPipeline_ = makeCompute("shaders/water_page_cull.spv", cullPipelineLayout_);
     buildPipeline_ = makeCompute("shaders/water_page_build_indirect.spv", buildPipelineLayout_);
     classifyPipeline_ = makeCompute("shaders/water_tile_classify.spv", classifyPipelineLayout_);
@@ -423,7 +472,7 @@ void VirtualWaterRenderer::createPipelines(VkDescriptorSetLayout sceneLayout, Vk
     p.colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     p.additionalColorFormat = VK_FORMAT_R32G32_SFLOAT;
     p.thirdColorFormat = VK_FORMAT_R16G16_SFLOAT;
-    p.depthFormat = depthFormat;
+    p.depthFormat = waterDepth_.format();
     p.samples = VK_SAMPLE_COUNT_1_BIT;
     p.colorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     p.additionalColorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -431,9 +480,11 @@ void VirtualWaterRenderer::createPipelines(VkDescriptorSetLayout sceneLayout, Vk
     p.depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     p.colorInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     p.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    p.depthInitialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    p.depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    p.depthWriteEnable = VK_FALSE;
+    p.depthInitialLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    p.depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    // Pages and authored water write the water-only depth target, so the
+    // nearest surface wins where crests overlap on screen.
+    p.depthWriteEnable = VK_TRUE;
     p.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     p.cullMode = VK_CULL_MODE_NONE;
     p.shader = "shaders/water_virtual_prepass.spv";
@@ -453,7 +504,20 @@ void VirtualWaterRenderer::createPipelines(VkDescriptorSetLayout sceneLayout, Vk
     far.descriptorSetLayouts = {sceneLayout, farLayout_};
     far.vertexBindings.clear();
     far.vertexAttributes.clear();
+    // The analytic plane only tests against opaque depth; geometry pages drawn
+    // afterwards must still overdraw it where both overlap.
+    far.depthWriteEnable = VK_FALSE;
     farPrepassPipeline_.create(device_, far);
+
+    GraphicsPipelineOptions depthInit = far;
+    depthInit.shader = "shaders/water_depth_init.spv";
+    depthInit.descriptorSetLayouts = {depthInitLayout_};
+    depthInit.depthWriteEnable = VK_TRUE;
+    depthInit.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    depthInit.colorWriteMask = 0;
+    depthInit.additionalColorWriteMask = 0;
+    depthInit.thirdColorWriteMask = 0;
+    depthInitPipeline_.create(device_, depthInit);
 
     GraphicsPipelineOptions authored = p;
     authored.shader = "shaders/water_authored_prepass.spv";
@@ -542,9 +606,13 @@ void VirtualWaterRenderer::writeDescriptors() {
         for (std::uint32_t stateVariant = 0; stateVariant < 2; ++stateVariant) {
             const VkBuffer stateRead = stateVariant ? stateCellsScratch_.handle() : stateCells_.handle();
             const VkBuffer stateWrite = stateVariant ? stateCells_.handle() : stateCellsScratch_.handle();
+            // Rendering runs after recordState() flipped stateCurrentScratch_,
+            // so variant v must expose the buffer the simulation wrote when it
+            // ran as variant !v, i.e. this variant's stateRead buffer.
+            const VkBuffer stateLatest = stateRead;
             const VkDescriptorBufferInfo drawBuffers[]{
                 bufferInfo(pages_.handle()), bufferInfo(visiblePages_[frame].handle()),
-                bufferInfo(statePageTable_.handle()), bufferInfo(statePhysical_.handle()), bufferInfo(stateWrite)};
+                bufferInfo(statePageTable_.handle()), bufferInfo(statePhysical_.handle()), bufferInfo(stateLatest)};
             std::array<VkWriteDescriptorSet, 5> drawWrites{};
             for (std::uint32_t i = 0; i < 5; ++i)
                 writeBuffer(drawWrites[i], drawSets_[stateVariant][frame], i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -628,7 +696,7 @@ void VirtualWaterRenderer::writeDescriptors() {
                 bufferInfo(statePageTable_.handle()),
                 bufferInfo(statePhysical_.handle()),
                 bufferInfo(pages_.handle()),
-                bufferInfo(stateWrite)};
+                bufferInfo(stateLatest)};
             std::array<VkWriteDescriptorSet, 15> shadeWrites{};
             for (std::uint32_t i = 0; i < 4; ++i)
                 writeImage(shadeWrites[i], shadeSets_[stateVariant][frame], i,
@@ -669,7 +737,7 @@ void VirtualWaterRenderer::writeDescriptors() {
 
             const VkDescriptorBufferInfo authoredBuffers[]{
                 bufferInfo(authoredWaterConfig_.handle(), sizeof(GPUAuthoredWaterConfig)), bufferInfo(pages_.handle()),
-                bufferInfo(statePageTable_.handle()), bufferInfo(statePhysical_.handle()), bufferInfo(stateWrite)};
+                bufferInfo(statePageTable_.handle()), bufferInfo(statePhysical_.handle()), bufferInfo(stateLatest)};
             std::array<VkWriteDescriptorSet, 5> authoredWrites{};
             writeBuffer(authoredWrites[0], authoredSets_[stateVariant][frame], 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                         &authoredBuffers[0]);
@@ -696,6 +764,16 @@ void VirtualWaterRenderer::writeDescriptors() {
                    &compositeImages[4]);
         vkUpdateDescriptorSets(device_, 6, compositeWrites.data(), 0, nullptr);
     }
+}
+
+void VirtualWaterRenderer::writeDepthInitDescriptor() {
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = depthInitSet_;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &opaqueDepth_;
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }
 
 void VirtualWaterRenderer::updateFrameBindings(std::span<const VkBuffer> instances, std::span<const VkBuffer> culling,
@@ -846,7 +924,10 @@ void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
                 if (farConfig.bodyCount < MaxVirtualWaterBodies) {
                     GPUFarOceanBody& far = farConfig.bodies[farConfig.bodyCount++];
                     far.instanceIndex = domain.instanceIndex;
-                    far.startDistance = OceanExtents[GeometryClipLevels - 1U] * 0.88F;
+                    // The outermost level snaps to twice its page size, so its
+                    // covered radius can shrink to half its extent. Start the
+                    // analytic plane inside that radius; geometry overdraws it.
+                    far.startDistance = OceanExtents[GeometryClipLevels - 1U] * 0.48F;
                     far.normalCellSize =
                         (2.0F * OceanExtents[GeometryClipLevels - 1U]) / static_cast<float>(ClipmapResolution);
                     far.waveMask =
@@ -990,7 +1071,8 @@ void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
     active_ = bodyCount_ != 0U || authoredWaterActive_;
     denseTileClassification_ = authoredWaterActive_ || farConfig.bodyCount != 0U;
     if (!pages.empty())
-        pages_.update(pages.data(), sizeof(GPUVirtualWaterPage) * pages.size());
+        pagesUpload_.update(pages.data(), sizeof(GPUVirtualWaterPage) * pages.size());
+    pendingPageUploadCount_ = pageCount_;
     if (!templates.empty())
         drawTemplates_.update(templates.data(), sizeof(GPUWaterDrawTemplate) * templates.size());
     farOceanConfig_.update(&farConfig, sizeof(farConfig));
@@ -1006,43 +1088,12 @@ void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
     for (auto& buffer : cullConfig_)
         buffer.update(&config, sizeof(config));
 
-    // Geometry slots may reorder on scene edits; invalidate only their mapping.
-    // Physical state/cells remain resident and are reconnected by WaterStatePageKey
+    // Geometry slots may reorder on scene edits; invalidate only their mapping
+    // (page table, page history and stale indirect commands). Physical
+    // state/cells remain resident and are reconnected by WaterStatePageKey
     // (body generation + world state coordinate) on the next allocation pass.
-    std::vector<GPUWaterStatePhysicalRef> invalidRefs(MaxPages);
-    for (auto& ref : invalidRefs)
-        ref.slot = InvalidPhysicalPage;
-    statePageTable_.update(invalidRefs.data(), sizeof(GPUWaterStatePhysicalRef) * invalidRefs.size());
-    const std::vector<GPUWaterPageHistory> zeroHistory(MaxPages);
-    for (auto& history : history_)
-        history.update(zeroHistory.data(), sizeof(GPUWaterPageHistory) * zeroHistory.size());
+    pendingMappingReset_ = true;
     pendingInteractions_.clear();
-
-    if (!active_) {
-        const std::vector<GPUVirtualWaterPage> emptyPages(MaxPages);
-        const std::vector<GPUWaterDrawTemplate> emptyTemplates(MaxDrawBins);
-        const std::vector<GPUVisibleWaterPage> emptyVisible(MaxVisiblePageSlots);
-        const std::vector<std::uint32_t> emptyCounts(MaxDrawBins);
-        const std::vector<VkDrawIndexedIndirectCommand> emptyCommands(MaxDrawBins);
-        const std::vector<std::uint32_t> emptyTileLists(4ULL * tileSettings_.maxTiles);
-        const std::vector<std::uint32_t> emptyCandidates(tileSettings_.maxTiles);
-        const std::array<std::uint32_t, 4> emptyTileCounts{};
-        const std::array<VkDispatchIndirectCommand, 4> emptyDispatch{};
-        const GPUWaterPageStats emptyStats{};
-        pages_.update(emptyPages.data(), sizeof(GPUVirtualWaterPage) * emptyPages.size());
-        drawTemplates_.update(emptyTemplates.data(), sizeof(GPUWaterDrawTemplate) * emptyTemplates.size());
-        for (std::uint32_t f = 0; f < FramesInFlight; ++f) {
-            visiblePages_[f].update(emptyVisible.data(), sizeof(GPUVisibleWaterPage) * emptyVisible.size());
-            drawBinCounts_[f].update(emptyCounts.data(), sizeof(std::uint32_t) * emptyCounts.size());
-            indirectCommands_[f].update(emptyCommands.data(),
-                                        sizeof(VkDrawIndexedIndirectCommand) * emptyCommands.size());
-            stats_[f].update(&emptyStats, sizeof(emptyStats));
-            tileLists_[f].update(emptyTileLists.data(), sizeof(std::uint32_t) * emptyTileLists.size());
-            tileCounts_[f].update(emptyTileCounts.data(), sizeof(emptyTileCounts));
-            tileDispatch_[f].update(emptyDispatch.data(), sizeof(emptyDispatch));
-            candidateTiles_[f].update(emptyCandidates.data(), sizeof(std::uint32_t) * emptyCandidates.size());
-        }
-    }
 }
 
 void VirtualWaterRenderer::recordCull(VkCommandBuffer cmd, std::uint32_t frame, VkDescriptorSet sceneSet,
@@ -1058,6 +1109,7 @@ void VirtualWaterRenderer::recordCull(VkCommandBuffer cmd, std::uint32_t frame, 
     config.qualityScale = frameBudget_.qualityScale;
     config.currentFrame = waterFrameCounter_;
     config.maxHighGeometryPages = frameBudget_.maxHighGeometryPages;
+    config.markCandidateTiles = denseTileClassification_ ? 0U : 1U;
     cullConfig_[frame].update(&config, sizeof(config));
     tileSettings_.frameIndex = waterFrameCounter_;
     tileSettings_.denseMode = denseTileClassification_ ? 1U : 0U;
@@ -1076,12 +1128,29 @@ void VirtualWaterRenderer::recordCull(VkCommandBuffer cmd, std::uint32_t frame, 
     gpuBudget.maxReflectionWork = frameBudget_.maxReflectionWork;
     gpuBudget.maxRefractionWork = frameBudget_.maxRefractionWork;
     gpuBudget.maxStateSimulationCells = frameBudget_.maxStateSimulationCells;
-    frameBudgetBuffer_[frame].update(&gpuBudget, sizeof(gpuBudget));
 
+    // Page table, physical states and both state-cell buffers are shared by
+    // every frame slot. The previous frame's prepass/shading may still read
+    // them when this frame's allocation/simulation starts writing.
+    VkMemoryBarrier2 previousFrameBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    previousFrameBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    previousFrameBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    previousFrameBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    previousFrameBarrier.dstAccessMask =
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    VkDependencyInfo previousDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    previousDependency.memoryBarrierCount = 1;
+    previousDependency.pMemoryBarriers = &previousFrameBarrier;
+    vkCmdPipelineBarrier2(cmd, &previousDependency);
+    flushPendingGpuWork(cmd);
+
+    vkCmdUpdateBuffer(cmd, frameBudgetBuffer_[frame].handle(), 0, sizeof(gpuBudget), &gpuBudget);
     if (drawBinCount_ != 0U)
         vkCmdFillBuffer(cmd, drawBinCounts_[frame].handle(), 0, sizeof(std::uint32_t) * drawBinCount_, 0);
     vkCmdFillBuffer(cmd, stats_[frame].handle(), 0, sizeof(GPUWaterPageStats), 0);
-    vkCmdFillBuffer(cmd, candidateTiles_[frame].handle(), 0, sizeof(std::uint32_t) * tileSettings_.maxTiles, 0);
+    if (!denseTileClassification_)
+        vkCmdFillBuffer(cmd, candidateTiles_[frame].handle(), 0, sizeof(std::uint32_t) * tileSettings_.maxTiles, 0);
     VkMemoryBarrier2 clear{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     clear.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     clear.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -1135,10 +1204,11 @@ void VirtualWaterRenderer::recordState(const VkCommandBuffer commandBuffer, std:
 
     const std::uint32_t stateVariant = stateCurrentScratch_ ? 1U : 0U;
 
+    flushPendingGpuWork(commandBuffer);
     const StatePush push{
         .eventCount = eventCount,
         .pageCount = pageCount_,
-        .frameIndex = frameIndex,
+        .frameCounter = waterFrameCounter_,
         .pad = 0U,
         .deltaTime = std::clamp(deltaTime, 0.0F, 0.1F),
     };
@@ -1199,10 +1269,11 @@ void VirtualWaterRenderer::updateUnderwaterState(std::uint32_t frameIndex, Regis
 void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t frame, VkDescriptorSet sceneSet,
                                          VkBuffer vb, VkBuffer ib,
                                          const Culling::IndexedIndirectDrawCount& authoredWaterDraw,
-                                         VkDeviceSize authoredCommandOffset, VkDeviceSize authoredCountOffset) const {
+                                         VkDeviceSize authoredCommandOffset, VkDeviceSize authoredCountOffset) {
     if (!active())
         return;
     frame %= FramesInFlight;
+    flushPendingGpuWork(cmd);
     VkRenderingAttachmentInfo surface{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     surface.imageView = surface_.imageView();
     surface.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -1213,11 +1284,46 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
     VkRenderingAttachmentInfo velocity = surface;
     velocity.imageView = velocity_.imageView();
     std::array colors{surface, meta, velocity};
+    // The water depth is fully rewritten by the seed pass below and is not
+    // read after the prepass, so neither its old contents nor the result are kept.
+    VkImageMemoryBarrier2 depthBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    depthBarrier.srcStageMask =
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    depthBarrier.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    depthBarrier.dstStageMask =
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    depthBarrier.dstAccessMask =
+        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    depthBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthBarrier.image = waterDepth_.image();
+    depthBarrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    // Surface/meta/velocity are cleared by the prepass, so their previous
+    // contents (sampled as SHADER_READ_ONLY last frame) can be discarded.
+    std::array<VkImageMemoryBarrier2, 4> toAttachment{};
+    for (std::uint32_t i = 0; i < 3U; ++i) {
+        VkImageMemoryBarrier2& barrier = toAttachment[i];
+        barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        barrier.srcAccessMask = 0;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.image = i == 0U ? surface_.image() : (i == 1U ? meta_.image() : velocity_.image());
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    toAttachment[3] = depthBarrier;
+    VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    depthDependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(toAttachment.size());
+    depthDependency.pImageMemoryBarriers = toAttachment.data();
+    vkCmdPipelineBarrier2(cmd, &depthDependency);
+
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    depth.imageView = depthView_;
-    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.imageView = waterDepth_.imageView();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
     rendering.renderArea.extent = extent_;
     rendering.layerCount = 1;
@@ -1230,6 +1336,11 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
     const VkRect2D scissor{{0, 0}, extent_};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depthInitPipeline_.handle());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depthInitPipeline_.layout(), 0, 1, &depthInitSet_, 0,
+                            nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
 
     if (bodyCount_ != 0U && farPrepassPipeline_.handle() != VK_NULL_HANDLE) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, farPrepassPipeline_.handle());
@@ -1267,14 +1378,22 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
     }
     vkCmdEndRendering(cmd);
 
-    VkMemoryBarrier2 ready{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    ready.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    ready.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    ready.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    ready.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    // Classification, shading, composite and TAA (via the frame graph import)
+    // all sample these targets as SHADER_READ_ONLY_OPTIMAL.
+    std::array<VkImageMemoryBarrier2, 3> toSampled{};
+    for (std::uint32_t i = 0; i < toSampled.size(); ++i) {
+        VkImageMemoryBarrier2& barrier = toSampled[i];
+        barrier = toAttachment[i];
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.memoryBarrierCount = 1;
-    dependency.pMemoryBarriers = &ready;
+    dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(toSampled.size());
+    dependency.pImageMemoryBarriers = toSampled.data();
     vkCmdPipelineBarrier2(cmd, &dependency);
 }
 
@@ -1320,7 +1439,12 @@ void VirtualWaterRenderer::recordAdaptiveShading(VkCommandBuffer cmd, std::uint3
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, classifyPipelineLayout_, 0, 1, &classifySets_[frame],
                             0, nullptr);
     vkCmdDispatch(cmd, (extent_.width + 7) / 8, (extent_.height + 7) / 8, 1);
-    storageWriteBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    storageWriteBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
+    // The histogram is accumulated in device memory; only the final 1 KiB is
+    // copied to host memory for the fence-synchronized threshold controller.
+    const VkBufferCopy histogramCopy{0, 0, sizeof(std::uint32_t) * 256U};
+    vkCmdCopyBuffer(cmd, importanceHistogram_[frame].handle(), importanceReadback_[frame].handle(), 1, &histogramCopy);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, buildDispatchPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, buildDispatchPipelineLayout_, 0, 1,
@@ -1409,11 +1533,11 @@ void VirtualWaterRenderer::onFrameCompleted(const std::uint32_t frameIndex, cons
     // from fixed score constants.  Timing pressure shifts the target
     // percentiles upward, preferentially dropping expensive quality tiers.
     const std::uint32_t frame = frameIndex % FramesInFlight;
-    if (importanceHistogram_[frame].handle() == VK_NULL_HANDLE)
+    if (importanceReadback_[frame].handle() == VK_NULL_HANDLE)
         return;
 
     std::array<std::uint32_t, 256> histogram{};
-    importanceHistogram_[frame].read(histogram.data(), sizeof(histogram));
+    importanceReadback_[frame].read(histogram.data(), sizeof(histogram));
     std::uint64_t total = 0;
     for (const std::uint32_t count : histogram)
         total += count;
@@ -1504,23 +1628,27 @@ void VirtualWaterRenderer::destroy() noexcept {
             vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
         for (const VkDescriptorSetLayout layout :
              {cullLayout_, buildLayout_, drawLayout_, classifyLayout_, buildDispatchLayout_, shadeLayout_,
-              compositeLayout_, stateLayout_, farLayout_, authoredLayout_, sssrInitLayout_, sssrReduceLayout_}) {
+              compositeLayout_, stateLayout_, farLayout_, authoredLayout_, sssrInitLayout_, sssrReduceLayout_,
+              depthInitLayout_}) {
             if (layout != VK_NULL_HANDLE)
                 vkDestroyDescriptorSetLayout(device_, layout, nullptr);
         }
     }
 
+    depthInitPipeline_.destroy();
     prepassPipeline_.destroy();
     farPrepassPipeline_.destroy();
     authoredPrepassPipeline_.destroy();
     compositePipeline_.destroy();
     surface_.destroy();
+    waterDepth_.destroy();
     meta_.destroy();
     velocity_.destroy();
     for (auto& lighting : lighting_)
         lighting.destroy();
     sssrDepth_.destroy();
     pages_.destroy();
+    pagesUpload_.destroy();
     drawTemplates_.destroy();
     oceanVertexBuffer_.destroy();
     oceanIndexBuffer_.destroy();
@@ -1534,6 +1662,8 @@ void VirtualWaterRenderer::destroy() noexcept {
     for (auto& buffer : frameBudgetBuffer_)
         buffer.destroy();
     for (auto& buffer : importanceHistogram_)
+        buffer.destroy();
+    for (auto& buffer : importanceReadback_)
         buffer.destroy();
     for (auto& buffer : candidateTiles_)
         buffer.destroy();
@@ -1577,6 +1707,8 @@ void VirtualWaterRenderer::destroy() noexcept {
     cullLayout_ = buildLayout_ = drawLayout_ = classifyLayout_ = buildDispatchLayout_ = shadeLayout_ =
         compositeLayout_ = stateLayout_ = farLayout_ = authoredLayout_ = sssrInitLayout_ = sssrReduceLayout_ =
             VK_NULL_HANDLE;
+    depthInitLayout_ = VK_NULL_HANDLE;
+    depthInitSet_ = VK_NULL_HANDLE;
     descriptorPool_ = VK_NULL_HANDLE;
     cullPipelineLayout_ = buildPipelineLayout_ = classifyPipelineLayout_ = buildDispatchPipelineLayout_ =
         shadePipelineLayout_ = statePipelineLayout_ = sssrInitPipelineLayout_ = sssrReducePipelineLayout_ =

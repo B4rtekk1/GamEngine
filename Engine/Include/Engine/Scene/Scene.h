@@ -10,10 +10,10 @@
 #include "Engine/ECS/Components/WaterShapeComponent.h"
 #include "Engine/ECS/GameObject.h"
 #include "Engine/ECS/Registry.h"
-#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
+#include "Engine/Renderer/RenderConfig.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/Prefab.h"
@@ -26,10 +26,12 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace Engine {
@@ -58,6 +60,23 @@ class Scene {
     /** Asset-root-relative equirectangular HDR/EXR used for global IBL. */
     [[nodiscard]] const std::filesystem::path& environmentEquirectangular() const noexcept {
         return environmentEquirectangular_;
+    }
+    /**
+     * The scene's GI choice, saved next to the scene file. Empty for scenes
+     * that never chose one; the renderer then keeps its configured default.
+     */
+    [[nodiscard]] const std::optional<GlobalIlluminationSettings>& globalIllumination() const noexcept {
+        return globalIllumination_;
+    }
+    void setGlobalIllumination(std::optional<GlobalIlluminationSettings> settings) noexcept {
+        globalIllumination_ = settings;
+    }
+    /** Exposure, grading and lens settings, saved next to the scene file. */
+    [[nodiscard]] const std::optional<PostProcessSettings>& postProcess() const noexcept {
+        return postProcess_;
+    }
+    void setPostProcess(std::optional<PostProcessSettings> settings) noexcept {
+        postProcess_ = settings;
     }
     void setEnvironmentEquirectangular(std::filesystem::path path) {
         environmentEquirectangular_ = std::move(path).lexically_normal();
@@ -231,95 +250,6 @@ class Scene {
     [[nodiscard]] Actor activeDirectionalLight() noexcept;
 
     /** Returns this scene's gameplay-facing physics queries. */
-    [[nodiscard]] MeshHandle glassGeometryHandle(const std::shared_ptr<Mesh>& geometry) {
-        for (const auto& entry : glassGeometryHandles_)
-            if (entry.source().get() == geometry.get())
-                return entry;
-        MeshHandle handle{geometry};
-        if (glassGeometryHandles_.size() < 128)
-            glassGeometryHandles_.push_back(handle);
-        return handle;
-    }
-    void beginGlassSimulationStep() noexcept {
-        glassNewDynamicFragments_ = 0;
-    }
-    [[nodiscard]] bool reserveGlassDynamicFragment() noexcept {
-        if (glassNewDynamicFragments_ >= glassSimulationSettings_.maxNewDynamicFragmentsPerStep)
-            return false;
-        ++glassNewDynamicFragments_;
-        return true;
-    }
-    [[nodiscard]] std::uint32_t glassDynamicFragmentBudget() const noexcept {
-        return std::min(glassSimulationSettings_.maxDynamicFragmentsGlobal, glassDynamicBudget_);
-    }
-    void reportGlassPhysicsCost(double milliseconds) noexcept {
-        glassPhysicsAverageMs_ =
-            glassPhysicsAverageMs_ == 0 ? milliseconds : glassPhysicsAverageMs_ * 0.9 + milliseconds * 0.1;
-        const auto maximum = glassSimulationSettings_.maxDynamicFragmentsGlobal;
-        if (!glassSimulationSettings_.adaptivePhysicsBudget) {
-            glassDynamicBudget_ = maximum;
-            return;
-        }
-        glassDynamicBudget_ = std::min(glassDynamicBudget_, maximum);
-        const auto minimum = std::min(16U, maximum);
-        const auto target = glassSimulationSettings_.targetPhysicsCpuMs;
-        if (glassPhysicsAverageMs_ > target)
-            glassDynamicBudget_ = std::max(minimum, glassDynamicBudget_ * 4U / 5U);
-        else if (glassPhysicsAverageMs_ < target * 0.6)
-            glassDynamicBudget_ = std::min(maximum, glassDynamicBudget_ + 8U);
-    }
-    [[nodiscard]] const std::vector<GlassParticleBurst>& glassParticleBursts() const noexcept {
-        return glassParticleBursts_;
-    }
-    void queueGlassParticleBurst(GlassParticleBurst burst) {
-        if (glassParticleBursts_.size() < 1024)
-            glassParticleBursts_.push_back(burst);
-    }
-    void clearGlassParticleBursts() noexcept {
-        glassParticleBursts_.clear();
-    }
-    [[nodiscard]] Actor acquireGlassDebrisActor(std::string name) {
-        while (!glassDebrisPool_.empty()) {
-            const Entity entity = glassDebrisPool_.back();
-            glassDebrisPool_.pop_back();
-            if (!valid(entity))
-                continue;
-            if (const auto* existing = find(name); existing != nullptr && existing->entity() != entity)
-                name += " " + std::to_string(entity);
-            rename(entity, std::move(name));
-            return Actor{*this, findByEntity(entity)->objectId()};
-        }
-        return createActor(std::move(name));
-    }
-    void recycleGlassDebrisActor(Entity entity) {
-        if (!valid(entity))
-            return;
-        GlassDestructionSystem::onActorDestroyed(*this, entity);
-        if (registry_.has<ColliderComponent>(entity))
-            registry_.remove<ColliderComponent>(entity);
-        if (registry_.has<RigidbodyComponent>(entity))
-            registry_.remove<RigidbodyComponent>(entity);
-        if (registry_.has<RigidbodyState>(entity))
-            registry_.remove<RigidbodyState>(entity);
-        if (registry_.has<MeshRendererComponent>(entity))
-            registry_.remove<MeshRendererComponent>(entity);
-        if (registry_.has<GlassFragmentBindingComponent>(entity))
-            registry_.remove<GlassFragmentBindingComponent>(entity);
-        if (registry_.has<GlassDebrisComponent>(entity))
-            registry_.remove<GlassDebrisComponent>(entity);
-        if (glassDebrisPool_.size() < 256) {
-            rename(entity, "__glass_debris_pool_" + std::to_string(entity));
-            glassDebrisPool_.push_back(entity);
-        } else {
-            destroy(entity);
-        }
-    }
-    [[nodiscard]] GlassSimulationSettings& glassSimulationSettings() noexcept {
-        return glassSimulationSettings_;
-    }
-    [[nodiscard]] const GlassSimulationSettings& glassSimulationSettings() const noexcept {
-        return glassSimulationSettings_;
-    }
     [[nodiscard]] Physics& physics() noexcept {
         return physics_;
     }
@@ -521,8 +451,6 @@ class Scene {
         GameObject* target = findByEntity(entity);
         if (target == nullptr)
             return;
-        GlassDestructionSystem::onActorDestroyed(*this, entity);
-
         // A parent owns the lifetime of its descendants. Work on a copy as
         // destroy() erases entries from objects_.
         const ObjectId objectId = target->objectId();
@@ -569,6 +497,10 @@ class Scene {
     /** Monotonic revision advanced by every explicit ECS mutation. */
     [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
         return registry_.mutationRevision();
+    }
+    /** Revision of one component type; changes when any instance is added, removed or edited. */
+    template <typename T> [[nodiscard]] std::uint64_t componentRevision() const noexcept {
+        return registry_.componentRevision<T>();
     }
 
     template <typename Func> void eachObject(Func&& func) {
@@ -669,6 +601,8 @@ class Scene {
 
   private:
     std::filesystem::path environmentEquirectangular_;
+    std::optional<GlobalIlluminationSettings> globalIllumination_;
+    std::optional<PostProcessSettings> postProcess_;
     friend class ScriptModuleManager;
     friend class Application;
     friend class Actor;
@@ -677,7 +611,6 @@ class Scene {
     friend class ScriptSystem;
     friend class Physics;
     friend class PhysicsSystem;
-    friend class GlassDestructionSystem;
 
     void rebuildObjectHandles();
     void indexObject(GameObject& object) {
@@ -751,13 +684,6 @@ class Scene {
     }
 
     Registry registry_;
-    std::vector<MeshHandle> glassGeometryHandles_;
-    std::uint32_t glassDynamicBudget_{~std::uint32_t{0}};
-    std::uint32_t glassNewDynamicFragments_{};
-    double glassPhysicsAverageMs_{};
-    std::vector<GlassParticleBurst> glassParticleBursts_;
-    std::vector<Entity> glassDebrisPool_;
-    GlassSimulationSettings glassSimulationSettings_;
     Physics physics_;
     std::vector<std::unique_ptr<GameObject>> objects_;
     std::unordered_map<const GameObject*, std::size_t> objectSlot_;

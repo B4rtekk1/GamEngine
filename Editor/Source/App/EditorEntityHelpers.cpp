@@ -39,6 +39,16 @@ const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity en
             return "Capsule";
         }
     }
+    for (const Engine::Entity editorCylinder : scene.editorCylinders) {
+        if (editorCylinder == entity) {
+            return "Cylinder";
+        }
+    }
+    for (const Engine::Entity editorCone : scene.editorCones) {
+        if (editorCone == entity) {
+            return "Cone";
+        }
+    }
     for (const Engine::Entity editorRamp : scene.editorRamps) {
         if (editorRamp == entity) {
             return "Ramp";

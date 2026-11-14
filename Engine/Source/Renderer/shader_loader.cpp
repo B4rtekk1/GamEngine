@@ -8,10 +8,13 @@
 #include "Engine/Assets/AssetManager.h"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace Engine {
@@ -35,7 +38,8 @@ ShaderModule::~ShaderModule() {
  * @param other Instance relinquishing ownership.
  */
 ShaderModule::ShaderModule(ShaderModule&& other) noexcept
-    : device_(std::exchange(other.device_, VK_NULL_HANDLE)), module_(std::exchange(other.module_, VK_NULL_HANDLE)) {}
+    : device_(std::exchange(other.device_, VK_NULL_HANDLE)), module_(std::exchange(other.module_, VK_NULL_HANDLE)),
+      vertexInputLocations_(std::move(other.vertexInputLocations_)) {}
 
 /**
  * @brief Replaces the owned shader module with one transferred from another instance.
@@ -47,6 +51,7 @@ ShaderModule& ShaderModule::operator=(ShaderModule&& other) noexcept {
         reset();
         device_ = std::exchange(other.device_, VK_NULL_HANDLE);
         module_ = std::exchange(other.module_, VK_NULL_HANDLE);
+        vertexInputLocations_ = std::move(other.vertexInputLocations_);
     }
     return *this;
 }
@@ -113,6 +118,74 @@ std::vector<uint32_t> loadSpirv(const std::filesystem::path& path) {
  * @throws std::runtime_error If the SPIR-V cannot be loaded or Vulkan fails to
  *         create the shader module.
  */
+std::optional<std::vector<uint32_t>> reflectVertexInputLocations(const std::vector<uint32_t>& code,
+                                                                  const std::string_view entryPoint) {
+    constexpr uint32_t magic = 0x07230203U;
+    if (code.size() < 5 || code[0] != magic)
+        return std::nullopt;
+    std::vector<uint32_t> interface;
+    bool foundEntry = false;
+    std::unordered_map<uint32_t, uint32_t> locations;  // variable id -> Location
+    std::unordered_map<uint32_t, uint32_t> pointee;    // pointer type id -> pointee type id
+    std::unordered_set<uint32_t> compositeTypes;       // matrix / array / struct ids
+    std::vector<std::pair<uint32_t, uint32_t>> inputs; // variable id, pointer type id
+    for (std::size_t offset = 5; offset < code.size();) {
+        const uint32_t word = code[offset];
+        const uint32_t opcode = word & 0xFFFFU;
+        const uint32_t length = word >> 16U;
+        if (length == 0 || offset + length > code.size())
+            return std::nullopt;
+        const uint32_t* operands = code.data() + offset + 1;
+        switch (opcode) {
+        case 15: { // OpEntryPoint: model, id, name..., interface...
+            if (operands[0] != 0 /* Vertex */)
+                break;
+            const char* name = reinterpret_cast<const char*>(&operands[2]);
+            const std::size_t nameBytes = (length - 3) * sizeof(uint32_t);
+            const std::size_t nameLength = strnlen(name, nameBytes);
+            if (std::string_view{name, nameLength} == entryPoint) {
+                foundEntry = true;
+                const std::size_t nameWords = nameLength / sizeof(uint32_t) + 1;
+                for (std::size_t i = 2 + nameWords; i + 1 < length; ++i)
+                    interface.push_back(operands[i]);
+            }
+            break;
+        }
+        case 71: // OpDecorate: target, decoration, literal
+            if (length >= 4 && operands[1] == 30 /* Location */)
+                locations[operands[0]] = operands[2];
+            break;
+        case 24: // OpTypeMatrix
+        case 28: // OpTypeArray
+        case 30: // OpTypeStruct
+            compositeTypes.insert(operands[0]);
+            break;
+        case 32: // OpTypePointer: id, storage class, type
+            pointee[operands[0]] = operands[2];
+            break;
+        case 59: // OpVariable: result type, id, storage class
+            if (operands[2] == 1 /* Input */)
+                inputs.emplace_back(operands[1], operands[0]);
+            break;
+        default:
+            break;
+        }
+        offset += length;
+    }
+    if (!foundEntry)
+        return std::nullopt;
+    std::vector<uint32_t> result;
+    for (const auto& [variable, pointerType] : inputs) {
+        if (std::ranges::find(interface, variable) == interface.end())
+            continue;
+        if (compositeTypes.contains(pointee[pointerType]))
+            return std::nullopt; // spans several locations; do not guess
+        if (const auto found = locations.find(variable); found != locations.end())
+            result.push_back(found->second);
+    }
+    return result;
+}
+
 ShaderModule loadShaderModule(VkDevice device, const std::filesystem::path& path) {
     if (device == VK_NULL_HANDLE) {
         throw std::invalid_argument("Couldnt create shader for null VkDevice");
@@ -130,7 +203,9 @@ ShaderModule loadShaderModule(VkDevice device, const std::filesystem::path& path
         throw std::runtime_error("Couldnt create VkShaderModule: " + path.string());
     }
 
-    return {device, module};
+    ShaderModule result{device, module};
+    result.setVertexInputLocations(reflectVertexInputLocations(code, "vertexMain"));
+    return result;
 }
 
 ShaderModule loadShaderModule(const VkDevice device, Assets::AssetManager& assets, const std::filesystem::path& path) {
@@ -155,7 +230,9 @@ ShaderModule loadShaderModule(const VkDevice device, Assets::AssetManager& asset
     if (vkCreateShaderModule(device, &createInfo, nullptr, &module) != VK_SUCCESS) {
         throw std::runtime_error("Couldnt create VkShaderModule: " + path.string());
     }
-    return {device, module};
+    ShaderModule result{device, module};
+    result.setVertexInputLocations(reflectVertexInputLocations(code, "vertexMain"));
+    return result;
 }
 } // namespace Vkutil
 } // namespace Engine

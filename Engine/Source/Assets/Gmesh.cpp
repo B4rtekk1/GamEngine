@@ -16,13 +16,16 @@
 #include <limits>
 #include <ranges>
 #include <string>
+#include <thread>
 #include <type_traits>
 
 namespace Engine::Assets {
 namespace {
 constexpr std::array<char, 8> magic{'G', 'M', 'E', 'S', 'H', '\0', '\0', '\0'};
-constexpr std::uint32_t version = 7;
-constexpr std::uint32_t FbxImporterVersion = 11;
+// 8: meshlet-friendly triangle order (build_meshlets); same layout as 7.
+constexpr std::uint32_t version = 8;
+// 12: leaf-strewn ground materials are no longer classified as foliage.
+constexpr std::uint32_t FbxImporterVersion = 22; // 13: FBX emission; 14: Bistro glass; 16: Bistro lamp and window glow; 17: brighter string lights; 18: dimmer lamp glass; 19: transmissive Bistro glass; 20: glass reflectivity; 21: Bistro lamp and string-light glow halved; 22: interior facade duplicate dropped
 constexpr std::uint32_t maxElements = 100'000'000;
 
 struct HeaderV1 {
@@ -62,6 +65,12 @@ struct RenderSectionV3 final {
 
 static_assert(std::is_trivially_copyable_v<Vertex>);
 static_assert(std::is_trivially_copyable_v<PBRMaterial>);
+
+// gmesh v7 stores PBRMaterial records including the glass tail
+// (transmission ... glassTextureTransforms). Versions before 7 stored only
+// the fields preceding `transmission`.
+constexpr std::size_t LegacyMaterialStride = offsetof(PBRMaterial, transmission);
+static_assert(std::is_standard_layout_v<PBRMaterial>);
 static_assert(std::is_trivially_copyable_v<Meshlet>);
 static_assert(std::is_trivially_copyable_v<Mesh::RenderSection>);
 static_assert(std::is_trivially_copyable_v<MeshletClusterNode>);
@@ -93,16 +102,17 @@ template <class T> bool read_vector(std::ifstream& file, std::vector<T>& values)
 bool read_materials(std::ifstream& file, std::vector<PBRMaterial>& materials, std::uint32_t fileVersion) {
     if (fileVersion >= 7)
         return read_vector(file, materials);
-    static_assert(std::is_standard_layout_v<PBRMaterial>);
-    // This engine's historical gmesh format stores native trivial structs.
-    // transmission starts immediately after the old, padded material record.
-    constexpr auto legacyStride = offsetof(PBRMaterial, transmission);
     for (auto& material : materials) {
-        file.read(reinterpret_cast<char*>(&material), static_cast<std::streamsize>(legacyStride));
+        material = PBRMaterial{};
+        file.read(reinterpret_cast<char*>(&material), static_cast<std::streamsize>(LegacyMaterialStride));
         if (!file)
             return false;
     }
     return true;
+}
+
+bool write_materials(std::ofstream& file, const std::vector<PBRMaterial>& materials) {
+    return write_vector(file, materials);
 }
 
 std::filesystem::path texture_path(const std::filesystem::path& mesh, const std::size_t index) {
@@ -113,14 +123,16 @@ std::filesystem::path texture_path(const std::filesystem::path& mesh, const std:
     const auto index = static_cast<std::int32_t>(imageIndex);
     bool color = false, normal = false, scalar = false, other = false;
     for (const PBRMaterial& material : mesh.materials) {
+        // The glass dirt map is a grime colour map (its red channel is the
+        // coverage), so it keeps sRGB like the base colour.
         color |= material.baseColorTexture == index || material.emissiveTexture == index ||
-                 material.specularColorTexture == index;
+                 material.specularColorTexture == index || material.dirtTexture == index;
         normal |= material.normalTexture == index;
         scalar |=
             material.aoTexture == index || material.opacityTexture == index || material.displacementTexture == index;
         other |= material.metallicRoughnessTexture == index || material.translucencyTexture == index ||
                  material.specularTexture == index || material.transmissionTexture == index ||
-                 material.thicknessTexture == index || material.dirtTexture == index;
+                 material.thicknessTexture == index;
     }
     if (color)
         return TextureFormat::BC7_SRGB;
@@ -369,7 +381,7 @@ bool save_gmesh(const std::filesystem::path& path, const Mesh& mesh, GltfPhaseTi
                         cooked.localBounds};
     if (!file || !write(file, header) || !write_vector(file, cooked.vertices) || !write_vector(file, cooked.indices) ||
         !write_vector(file, cooked.meshlets) || !write_vector(file, cooked.meshletVertices) ||
-        !write_vector(file, cooked.meshletTriangles) || !write_vector(file, cooked.materials) ||
+        !write_vector(file, cooked.meshletTriangles) || !write_materials(file, cooked.materials) ||
         !write_vector(file, cooked.renderSections) || !write_vector(file, cooked.meshletClusters))
         return false;
     for (const auto& image : cooked.images) {
@@ -591,8 +603,7 @@ std::shared_ptr<Mesh> load_gmesh_geometry(const std::filesystem::path& path) {
         file.seekg(static_cast<std::streamoff>(bytes), std::ios::cur);
         return static_cast<bool>(file);
     };
-    if (!skipRecords(header.materials,
-                     prefix.version >= 7 ? sizeof(PBRMaterial) : offsetof(PBRMaterial, transmission)) ||
+    if (!skipRecords(header.materials, prefix.version >= 7 ? sizeof(PBRMaterial) : LegacyMaterialStride) ||
         !skipRecords(header.renderSections, sizeof(Mesh::RenderSection)) || !read_vector(file, mesh.meshletClusters) ||
         mesh.empty() || !valid_meshlets(mesh) || !valid_cluster_hierarchy(mesh))
         return {};
@@ -600,6 +611,30 @@ std::shared_ptr<Mesh> load_gmesh_geometry(const std::filesystem::path& path) {
     mesh.sourcePath = path;
     return std::make_shared<Mesh>(std::move(mesh));
 }
+
+namespace {
+// Reports a model's images to the project cook progress and honours pause.
+struct ModelTextureProgress {
+    TextureCookProgress* progress{};
+    explicit ModelTextureProgress(TextureCookSummary* summary, const std::size_t images)
+        : progress(summary == nullptr ? nullptr : summary->progress) {
+        if (progress != nullptr)
+            progress->discovered.fetch_add(static_cast<std::uint32_t>(images), std::memory_order_release);
+    }
+    void begin(const std::filesystem::path& image) const {
+        if (progress == nullptr)
+            return;
+        while (progress->paused.load(std::memory_order_acquire))
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!image.empty())
+            progress->setCurrent(image.filename().string());
+    }
+    void done() const {
+        if (progress != nullptr)
+            progress->completed.fetch_add(1, std::memory_order_release);
+    }
+};
+} // namespace
 
 bool cook_gltf_mesh(const std::filesystem::path& source, const std::filesystem::path& requestedCacheRoot,
                     TextureCookSummary* const summary) {
@@ -635,10 +670,12 @@ bool cook_gltf_mesh(const std::filesystem::path& source, const std::filesystem::
     if (summary != nullptr)
         summary->gltf.geometryImportMilliseconds +=
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - copyStarted).count();
+    const ModelTextureProgress textureProgress{summary, mesh.images.size()};
     for (std::size_t i = 0; i < mesh.images.size(); ++i) {
         auto& image = mesh.images[i];
         if (image.sourcePath.empty())
             continue;
+        textureProgress.begin(image.sourcePath);
         const auto format = image_format(mesh, i);
         auto texture = cooked_source_texture_path(mesh, i, format);
         if (cook_source_texture_cached(image.sourcePath, texture, format, cacheRoot,
@@ -649,6 +686,7 @@ bool cook_gltf_mesh(const std::filesystem::path& source, const std::filesystem::
                                                                                    : output.parent_path());
         if (image.cookedPath.empty())
             return false;
+        textureProgress.done();
     }
     std::chrono::nanoseconds embeddedDecodeTime{};
     const bool hasEmbeddedImages =
@@ -662,6 +700,7 @@ bool cook_gltf_mesh(const std::filesystem::path& source, const std::filesystem::
                     auto& image = mesh.images[i];
                     if (!image.sourcePath.empty() || image.sourceImageIndex != sourceIndex)
                         continue;
+                    textureProgress.begin({});
                     const auto texture = texture_path(output, i);
                     if (cook_image_texture_cached(rgba, width, height, texture, image_format(mesh, i), cacheRoot,
                                                   summary == nullptr ? nullptr : &summary->gltfTextures,
@@ -670,6 +709,7 @@ bool cook_gltf_mesh(const std::filesystem::path& source, const std::filesystem::
                     image.width = width;
                     image.height = height;
                     image.cookedPath = texture.filename();
+                    textureProgress.done();
                 }
                 return true;
             },
@@ -700,8 +740,11 @@ bool cook_fbx_mesh(const std::filesystem::path& source, const std::filesystem::p
     Mesh mesh = *imported;
     separate_normal_images(mesh);
     const auto cacheRoot = requestedCacheRoot.empty() ? CookCache::root_for_source(source) : requestedCacheRoot;
+    const ModelTextureProgress textureProgress{summary, mesh.images.size()};
     for (std::size_t i = 0; i < mesh.images.size(); ++i) {
         auto& image = mesh.images[i];
+        if (!image.sourcePath.empty() || !image.rgbaPixels.empty())
+            textureProgress.begin(image.sourcePath);
         if (image.sourcePath.empty() && !image.rgbaPixels.empty()) {
             const auto texture = texture_path(output, i);
             if (cook_image_texture_cached(image.rgbaPixels, image.width, image.height, texture, image_format(mesh, i),
@@ -709,6 +752,7 @@ bool cook_fbx_mesh(const std::filesystem::path& source, const std::filesystem::p
                                           cutout_mip_settings(mesh, i)) == TextureCookResult::Failed)
                 return false;
             image.cookedPath = texture.filename();
+            textureProgress.done();
             continue;
         }
         if (image.sourcePath.empty())
@@ -723,6 +767,7 @@ bool cook_fbx_mesh(const std::filesystem::path& source, const std::filesystem::p
                                                                                    : output.parent_path());
         if (image.cookedPath.empty())
             return false;
+        textureProgress.done();
     }
     const bool hasEmbedded = std::ranges::any_of(
         mesh.images, [](const Mesh::Image& image) { return image.sourcePath.empty() && image.rgbaPixels.empty(); });
@@ -733,12 +778,14 @@ bool cook_fbx_mesh(const std::filesystem::path& source, const std::filesystem::p
                 auto& image = mesh.images[i];
                 if (!image.sourcePath.empty() || image.sourceImageIndex != sourceIndex)
                     continue;
+                textureProgress.begin({});
                 const auto texture = texture_path(output, i);
                 if (cook_image_texture_cached(rgba, width, height, texture, image_format(mesh, i), cacheRoot,
                                               summary == nullptr ? nullptr : &summary->gltfTextures,
                                               cutout_mip_settings(mesh, i)) == TextureCookResult::Failed)
                     return false;
                 image.cookedPath = texture.filename();
+                textureProgress.done();
             }
             return true;
         }))

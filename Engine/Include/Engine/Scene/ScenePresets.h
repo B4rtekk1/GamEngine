@@ -19,8 +19,6 @@ class ScenePreset final : public Scene {
 
     [[nodiscard]] Entity createCube();
 
-    [[nodiscard]] Entity createGlass();
-
     [[nodiscard]] Entity createPlane();
 
     [[nodiscard]] Entity createSphere();
@@ -28,9 +26,18 @@ class ScenePreset final : public Scene {
     [[nodiscard]] Entity createCapsule();
 
     [[nodiscard]] Entity createRamp();
+
+    [[nodiscard]] Entity createCylinder();
+
+    [[nodiscard]] Entity createCone();
+
+    /** Creates a clear 2 x 1.5 m window pane rendered by GlassPass. */
+    [[nodiscard]] Entity createGlassPane();
     [[nodiscard]] Entity createCamera();
 
     [[nodiscard]] Entity createLight();
+    [[nodiscard]] Entity createPointLight();
+    [[nodiscard]] Entity createSpotLight();
 
     [[nodiscard]] Entity createTerrain();
 
@@ -49,6 +56,8 @@ class ScenePreset final : public Scene {
     std::vector<Entity> editorPlanes;
     std::vector<Entity> editorSpheres;
     std::vector<Entity> editorCapsules;
+    std::vector<Entity> editorCylinders;
+    std::vector<Entity> editorCones;
     std::vector<Entity> editorRamps;
     std::vector<Entity> editorLights;
     std::vector<Entity> editorTerrains;
@@ -59,6 +68,8 @@ class ScenePreset final : public Scene {
     std::shared_ptr<const Mesh> cubeMesh_;
     std::shared_ptr<const Mesh> sphereMesh_;
     std::shared_ptr<const Mesh> capsuleMesh_;
+    std::shared_ptr<const Mesh> cylinderMesh_;
+    std::shared_ptr<const Mesh> coneMesh_;
     std::shared_ptr<const Mesh> rampMesh_;
 };
 } // namespace Engine

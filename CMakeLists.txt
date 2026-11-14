@@ -43,6 +43,10 @@ find_program(GAMEENGINE_SLANGC
     REQUIRED)
 
 add_subdirectory(Engine)
+# Content tool: turns a scene's glowing geometry into point and spot lights.
+add_executable(SceneLightBaker Tools/SceneLightBaker/main.cpp)
+target_link_libraries(SceneLightBaker PRIVATE Engine)
+gameengine_enable_warnings(SceneLightBaker)
 add_executable(GenerateBRDFLut Tools/GenerateBRDFLut/main.cpp Engine/Source/Renderer/Lighting/EnvironmentBaker.cpp)
 target_include_directories(GenerateBRDFLut PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" "${GLM_INCLUDE_DIR}")
 gameengine_enable_warnings(GenerateBRDFLut)

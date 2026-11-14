@@ -47,11 +47,16 @@ struct alignas(16) GPUMaterialData {
     std::array<glm::vec4, 8> waterWaves{};
     std::array<glm::vec4, 8> waterWaveMotion{};
     glm::uvec4 waterWaveCount{};
-    // transmission, IOR, thickness, dirt intensity.
+    // Glass block (GlassPass). x transmission, y IOR, z thickness (m),
+    // w dirt intensity.
     glm::vec4 glassParams{};
-    glm::vec4 glassAttenuation{}; // RGB attenuation colour, distance.
+    // RGB attenuation colour, w attenuation distance (0: no absorption).
+    glm::vec4 glassAttenuation{};
+    // Transmission (R), thickness (G) and dirt (R) textures, w unused.
     glm::ivec4 glassTextureIndices{-1};
+    // UV set per glass texture: bit 0 UV1, bit 1 identity transform.
     glm::ivec4 glassTextureCoordinateSets{};
+    // (m00, m01, offsetX, offsetY) and (m10, m11, -, -) per glass texture.
     std::array<glm::vec4, 3> glassTextureTransforms{};
     std::array<glm::vec4, 3> glassTextureRows1{};
 };

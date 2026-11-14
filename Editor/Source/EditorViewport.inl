@@ -638,6 +638,9 @@ bool drawScaleGizmo(Engine::ScenePreset& scene, const Engine::Entity selected,
     return dragging || hoveredAxis >= 0 || hoveringUniform;
 }
 
+/** Set by Edit > Frame Selected; consumed by the viewport, which knows the image rectangle. */
+inline bool frameSelectedRequest = false;
+
 enum class GizmoMode { Translate, Rotate, Scale };
 enum class SelectionTool { Rectangle, Lasso };
 
@@ -1874,8 +1877,9 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
                             position = camera.position() + direction * 5.0F;
                         }
                     }
-                    interaction.createdEntity = Editor::AssetDragDrop::instantiateModel(
-                        scene, content, Editor::AssetDragDrop::modelPath(*payload), position);
+                    // The entity is created (and selected) once the model has
+                    // loaded in the background.
+                    Editor::AssetDragDrop::requestModel(content, Editor::AssetDragDrop::modelPath(*payload), position);
                     assetDropError.clear();
                 } catch (const std::exception& exception) {
                     assetDropError = exception.what();
@@ -2043,7 +2047,8 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                     ImGui::SetTooltip("Move the selected camera to the Scene View camera");
             }
-            if (imageHovered && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F)) {
+            const bool frameFromMenu = std::exchange(frameSelectedRequest, false);
+            if (frameFromMenu || (imageHovered && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F))) {
                 focusSceneView(scene, selected, renderer, imageMin, imageMax);
             }
         }

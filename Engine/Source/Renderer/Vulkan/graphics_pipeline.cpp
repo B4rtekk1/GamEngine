@@ -3,6 +3,7 @@
 #include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/shader_loader.h"
 
+#include <algorithm>
 #include <array>
 #include <stdexcept>
 #include <vector>
@@ -283,9 +284,9 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             nullptr,
             0,
-            VK_SHADER_STAGE_VERTEX_BIT,
+            options.meshShader ? VK_SHADER_STAGE_MESH_BIT_EXT : VK_SHADER_STAGE_VERTEX_BIT,
             shader.get(),
-            "vertexMain",
+            options.meshShader ? "meshMain" : "vertexMain",
         },
         VkPipelineShaderStageCreateInfo{
             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -297,11 +298,16 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
         },
     };
 
+    // Attributes the vertex shader never reads trigger validation warnings, so
+    // only pass those that the entry point actually consumes.
+    const std::vector<VkVertexInputAttributeDescription> attributes =
+        options.meshShader ? std::vector<VkVertexInputAttributeDescription>{}
+                           : shader.filterVertexAttributes(options.vertexAttributes);
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vertexInput.vertexBindingDescriptionCount = static_cast<uint32_t>(options.vertexBindings.size());
     vertexInput.pVertexBindingDescriptions = options.vertexBindings.data();
-    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(options.vertexAttributes.size());
-    vertexInput.pVertexAttributeDescriptions = options.vertexAttributes.data();
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size());
+    vertexInput.pVertexAttributeDescriptions = attributes.data();
     VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -312,6 +318,8 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
     rasterizer.lineWidth = 1.0F;
     rasterizer.cullMode = options.cullMode;
     rasterizer.frontFace = options.frontFace;
+    rasterizer.depthBiasEnable = options.depthBiasConstantFactor != 0.0F ? VK_TRUE : VK_FALSE;
+    rasterizer.depthBiasConstantFactor = options.depthBiasConstantFactor;
     const VkPipelineMultisampleStateCreateInfo multisampling{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .pNext = nullptr,
@@ -343,6 +351,10 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
     // targets.
     VkPipelineColorBlendAttachmentState additionalColorAttachment = colorAttachment;
     additionalColorAttachment.colorWriteMask = options.additionalColorWriteMask;
+    // Integer targets cannot blend.
+    if (options.additionalColorFormat == VK_FORMAT_R32G32B32A32_UINT ||
+        options.additionalColorFormat == VK_FORMAT_R32G32_UINT || options.additionalColorFormat == VK_FORMAT_R32_UINT)
+        additionalColorAttachment.blendEnable = VK_FALSE;
     VkPipelineColorBlendAttachmentState thirdColorAttachment = colorAttachment;
     thirdColorAttachment.colorWriteMask = options.thirdColorWriteMask;
     std::array colorAttachments{colorAttachment, additionalColorAttachment, thirdColorAttachment};
@@ -360,8 +372,9 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
     VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     info.stageCount = static_cast<uint32_t>(stages.size());
     info.pStages = stages.data();
-    info.pVertexInputState = &vertexInput;
-    info.pInputAssemblyState = &assembly;
+    // Mesh pipelines ignore both states; the mesh shader emits primitives.
+    info.pVertexInputState = options.meshShader ? nullptr : &vertexInput;
+    info.pInputAssemblyState = options.meshShader ? nullptr : &assembly;
     info.pViewportState = &viewport;
     info.pRasterizationState = &rasterizer;
     info.pMultisampleState = &multisampling;

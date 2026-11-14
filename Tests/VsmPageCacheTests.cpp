@@ -85,8 +85,10 @@ TEST(VsmPageCacheTests, BorrowingNeverExceedsPhysicalAtlasCapacity) {
     for (std::uint32_t i = 0; i < requests.size(); ++i)
         requests[i] = i;
     pass.preparePages(matrices, Mat4{glm::mat4{1.0F}}, {}, {}, requests, true, 0, 256);
-    EXPECT_EQ(pass.grassPageMatrices(matrices).size(), ShadowMap::PhysicalPageCount);
-    EXPECT_FALSE(pass.hasPendingPageUpdates());
+    // One frame renders at most MaxPageUpdatesPerFrame pages; the rest of the
+    // (larger) pool is filled by later frames.
+    EXPECT_EQ(pass.grassPageMatrices(matrices).size(), ShadowMap::MaxPageUpdatesPerFrame);
+    EXPECT_TRUE(pass.hasPendingPageUpdates());
 }
 
 } // namespace Engine

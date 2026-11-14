@@ -4,6 +4,7 @@
 
 #include <Engine/ECS/Entity.h>
 #include <Engine/Math/Math.h>
+#include <cmath>
 #include <cstdint>
 
 namespace Engine {
@@ -42,13 +43,28 @@ struct TransformComponent {
 
     [[nodiscard]] TransformComponent worldTransform() const noexcept;
 
-    /** @brief Builds the local-space matrix. */
+    /**
+     * @brief Builds the local-space matrix T * Rx * Ry * Rz * S.
+     *
+     * Closed form of the same product. Three generic axis-angle rotations
+     * (each normalizing its axis and multiplying a 4x4 matrix) dominated
+     * TransformSystem cost for scenes with many moving bodies.
+     */
     [[nodiscard]] Mat4 matrix() const noexcept {
-        Mat4 result = Mat4::translate(position);
-        result = Mat4::rotate(result, Radians{Degrees{rotation.x()}}, Vec3{1.0F, 0.0F, 0.0F});
-        result = Mat4::rotate(result, Radians{Degrees{rotation.y()}}, Vec3{0.0F, 1.0F, 0.0F});
-        result = Mat4::rotate(result, Radians{Degrees{rotation.z()}}, Vec3{0.0F, 0.0F, 1.0F});
-        return Mat4::scale(result, scale);
+        const glm::vec3 radians = glm::radians(rotation.native());
+        const float sx = std::sin(radians.x);
+        const float cx = std::cos(radians.x);
+        const float sy = std::sin(radians.y);
+        const float cy = std::cos(radians.y);
+        const float sz = std::sin(radians.z);
+        const float cz = std::cos(radians.z);
+        const glm::vec3 s = scale.native();
+        glm::mat4 result{1.0F};
+        result[0] = glm::vec4{cy * cz, sx * sy * cz + cx * sz, sx * sz - cx * sy * cz, 0.0F} * s.x;
+        result[1] = glm::vec4{-cy * sz, cx * cz - sx * sy * sz, cx * sy * sz + sx * cz, 0.0F} * s.y;
+        result[2] = glm::vec4{sy, -sx * cy, cx * cy, 0.0F} * s.z;
+        result[3] = glm::vec4{position.native(), 1.0F};
+        return Mat4{result};
     }
 
     // TransformSystem-owned cache. Keep it public so it remains an ECS
