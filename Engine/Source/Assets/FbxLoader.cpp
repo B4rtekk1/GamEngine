@@ -4,7 +4,6 @@
 #include "DdsImage.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/Meshlet.h"
-#include <ufbx.h>
 
 #include <algorithm>
 #include <array>
@@ -21,6 +20,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
+#include <ufbx.h>
 #include <unordered_map>
 #include <vector>
 
@@ -327,6 +328,157 @@ void finish_tangents(Mesh& mesh, std::size_t vertexStart, const std::vector<glm:
     return true;
 }
 
+// Quixel Megascans exports (Fab "FBX" downloads) reference no textures: each
+// asset folder holds <stem>.fbx beside <stem>_<size>K_<Map>.jpg files. These
+// are the maps the engine material can use, found by that naming.
+struct SidecarMaps {
+    std::filesystem::path baseColor;
+    std::filesystem::path normal;
+    std::filesystem::path roughness;
+    std::filesystem::path gloss;
+    std::filesystem::path metalness;
+    std::filesystem::path ao;
+    std::filesystem::path opacity;
+    [[nodiscard]] bool empty() const noexcept {
+        return baseColor.empty() && normal.empty() && roughness.empty() && gloss.empty() && metalness.empty() &&
+               ao.empty() && opacity.empty();
+    }
+};
+
+std::string lowercase(std::string value) {
+    std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+SidecarMaps find_sidecar_maps(const std::filesystem::path& model) {
+    SidecarMaps maps;
+    const std::string prefix = lowercase(model.stem().string()) + "_";
+    // Per map slot: the chosen file's name rank (lower wins), then its size.
+    struct Pick {
+        int rank{};
+        std::uint32_t size{};
+    };
+    std::unordered_map<const std::filesystem::path*, Pick> picks;
+    std::error_code error;
+    for (std::filesystem::directory_iterator it(model.parent_path(), error), end; !error && it != end;
+         it.increment(error)) {
+        if (!it->is_regular_file(error))
+            continue;
+        const auto extension = lowercase(it->path().extension().string());
+        if (extension != ".jpg" && extension != ".jpeg" && extension != ".png" && extension != ".tga")
+            continue;
+        const auto stem = lowercase(it->path().stem().string());
+        if (!stem.starts_with(prefix))
+            continue;
+        // "<size>k_<map>", e.g. "2k_basecolor".
+        const std::string_view rest = std::string_view{stem}.substr(prefix.size());
+        const auto separator = rest.find("k_");
+        if (separator == std::string_view::npos || separator == 0)
+            continue;
+        std::uint32_t size = 0;
+        bool digits = true;
+        for (const char c : rest.substr(0, separator)) {
+            digits = digits && std::isdigit(static_cast<unsigned char>(c)) != 0;
+            size = size * 10 + static_cast<std::uint32_t>(c - '0');
+        }
+        if (!digits)
+            continue;
+        const std::string_view map = rest.substr(separator + 2);
+        // Diffuse is the legacy map Megascans ships beside BaseColor on metals.
+        const std::array<std::tuple<std::string_view, std::filesystem::path*, int>, 9> names{{
+            {"basecolor", &maps.baseColor, 0},
+            {"albedo", &maps.baseColor, 1},
+            {"diffuse", &maps.baseColor, 2},
+            {"normal", &maps.normal, 0},
+            {"roughness", &maps.roughness, 0},
+            {"gloss", &maps.gloss, 0},
+            {"metalness", &maps.metalness, 0},
+            {"ao", &maps.ao, 0},
+            {"opacity", &maps.opacity, 0},
+        }};
+        const auto match = std::ranges::find(names, map, [](const auto& entry) { return std::get<0>(entry); });
+        if (match == names.end())
+            continue;
+        auto* const slot = std::get<1>(*match);
+        const int rank = std::get<2>(*match);
+        auto [entry, inserted] = picks.try_emplace(slot, Pick{rank, size});
+        if (!inserted && (rank > entry->second.rank || (rank == entry->second.rank && size <= entry->second.size)))
+            continue;
+        entry->second = {rank, size};
+        *slot = it->path();
+    }
+    return maps;
+}
+
+bool load_rgba_file(const std::filesystem::path& file, std::vector<std::uint8_t>& rgba, std::uint32_t& width,
+                    std::uint32_t& height) {
+    int w{}, h{}, channels{};
+    const auto filename = utf8_path(file);
+    auto* pixels = stbi_load(filename.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+    if (!pixels || w <= 0 || h <= 0) {
+        stbi_image_free(pixels);
+        return false;
+    }
+    width = static_cast<std::uint32_t>(w);
+    height = static_cast<std::uint32_t>(h);
+    rgba.assign(pixels, pixels + static_cast<std::size_t>(w) * h * STBI_rgb_alpha);
+    stbi_image_free(pixels);
+    return true;
+}
+
+std::int32_t append_file_image(Mesh& mesh, const std::filesystem::path& file, const bool forCooking) {
+    if (file.empty())
+        return -1;
+    Mesh::Image image;
+    image.sourcePath = file;
+    if (!forCooking && !load_rgba_file(file, image.rgbaPixels, image.width, image.height))
+        return -1;
+    const auto index = static_cast<std::int32_t>(mesh.images.size());
+    mesh.images.push_back(std::move(image));
+    return index;
+}
+
+// The engine's metallic/roughness image (glTF layout): occlusion in red,
+// roughness in green, metalness in blue. Megascans ships each as its own
+// grey map, and only a few assets carry metalness or nothing but gloss.
+std::int32_t append_packed_orm(Mesh& mesh, const SidecarMaps& maps) {
+    const bool invertGloss = maps.roughness.empty();
+    const auto& roughnessFile = invertGloss ? maps.gloss : maps.roughness;
+    std::vector<std::uint8_t> ao, roughness, metalness;
+    std::uint32_t width{}, height{};
+    const auto load = [&](const std::filesystem::path& file, std::vector<std::uint8_t>& rgba) {
+        if (file.empty())
+            return true;
+        std::uint32_t w{}, h{};
+        if (!load_rgba_file(file, rgba, w, h))
+            return false;
+        if (width == 0) {
+            width = w;
+            height = h;
+        }
+        // Mismatched sizes are dropped rather than resampled.
+        if (w != width || h != height)
+            rgba.clear();
+        return true;
+    };
+    if (!load(roughnessFile, roughness) || !load(maps.metalness, metalness) || !load(maps.ao, ao) || width == 0)
+        return -1;
+    Mesh::Image packed;
+    packed.width = width;
+    packed.height = height;
+    packed.rgbaPixels.resize(static_cast<std::size_t>(width) * height * 4);
+    for (std::size_t i = 0; i < packed.rgbaPixels.size(); i += 4) {
+        packed.rgbaPixels[i] = ao.empty() ? 255 : ao[i];
+        packed.rgbaPixels[i + 1] =
+            roughness.empty() ? 255 : (invertGloss ? static_cast<std::uint8_t>(255 - roughness[i]) : roughness[i]);
+        packed.rgbaPixels[i + 2] = metalness.empty() ? 0 : metalness[i];
+        packed.rgbaPixels[i + 3] = 255;
+    }
+    const auto index = static_cast<std::int32_t>(mesh.images.size());
+    mesh.images.push_back(std::move(packed));
+    return index;
+}
+
 bool append_node(const ufbx_node& node, const ufbx_scene& scene, Mesh& result) {
     const auto* source = node.mesh;
     if (!source || !source->vertex_position.exists)
@@ -482,6 +634,26 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         imageFiles.push_back(i);
     }
     std::vector<std::int8_t> imageAlpha(imageFiles.size(), -1);
+    // An FBX that references no texture at all may still have its maps
+    // beside it by name (Megascans). They are loaded once for every material.
+    struct SidecarImages {
+        std::int32_t baseColor{-1};
+        std::int32_t normal{-1};
+        std::int32_t orm{-1};
+        std::int32_t opacity{-1};
+        bool hasAo{false};
+        bool hasRoughness{false};
+    } sidecar;
+    if (scene->texture_files.count == 0 && !bistro) {
+        if (const auto maps = find_sidecar_maps(path); !maps.empty()) {
+            sidecar.baseColor = append_file_image(result, maps.baseColor, forCooking);
+            sidecar.normal = append_file_image(result, maps.normal, forCooking);
+            sidecar.opacity = append_file_image(result, maps.opacity, forCooking);
+            sidecar.orm = append_packed_orm(result, maps);
+            sidecar.hasAo = !maps.ao.empty();
+            sidecar.hasRoughness = !maps.roughness.empty() || !maps.gloss.empty() || !maps.metalness.empty();
+        }
+    }
     const auto bistro_specular = [&](const std::int32_t baseColor, const std::int32_t fbxSpecular,
                                      const std::int32_t pbrSpecular, const std::int32_t ao) -> std::int32_t {
         const auto isSpecular = [&](const std::int32_t index) {
@@ -617,10 +789,32 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
             }
             material.normalConvention = NormalConvention::DirectX;
         }
+        if (sidecar.baseColor >= 0 || sidecar.normal >= 0 || sidecar.orm >= 0) {
+            // The exporter's material carries no maps; its colour factors
+            // would tint the scanned albedo, so the maps alone describe it.
+            material.baseColor = Math::Color{1.0F, 1.0F, 1.0F, 1.0F};
+            material.baseColorTexture = sidecar.baseColor;
+            material.normalTexture = sidecar.normal;
+            if (sidecar.orm >= 0 && sidecar.hasRoughness) {
+                material.metallicRoughnessTexture = sidecar.orm;
+                material.metallic = 1.0F;
+                material.roughness = 1.0F;
+            } else {
+                material.metallic = 0.0F;
+            }
+            if (sidecar.orm >= 0 && sidecar.hasAo)
+                material.aoTexture = sidecar.orm;
+            // White is opaque, as the engine's opacity map; the cutout
+            // follows from the opacity texture below.
+            if (sidecar.opacity >= 0)
+                material.opacityTexture = sidecar.opacity;
+        }
         if (opacity < 1.0F)
             material.alphaMode = AlphaMode::Blend;
         bool baseHasAlpha = false;
-        if (material.baseColorTexture >= 0) {
+        // Sidecar images lie past the FBX's own files and carry no cutout
+        // alpha (Megascans ships opacity as its own map).
+        if (material.baseColorTexture >= 0 && static_cast<std::size_t>(material.baseColorTexture) < imageAlpha.size()) {
             const auto index = static_cast<std::size_t>(material.baseColorTexture);
             if (imageAlpha[index] < 0)
                 imageAlpha[index] =
@@ -788,6 +982,23 @@ std::optional<std::uint64_t> fbx_source_hash(const std::filesystem::path& path) 
             return std::nullopt;
         hash.add(dependency.lexically_normal().generic_string());
         hash.add(*contentHash);
+    }
+    // Maps found beside the model by name (see load_fbx_mesh). Added only
+    // when present, so other models keep their existing cache keys.
+    if (scene->texture_files.count == 0) {
+        const auto maps = find_sidecar_maps(path);
+        if (!maps.empty())
+            hash.add("fbx-sidecar-maps-v1");
+        for (const auto* file :
+             {&maps.baseColor, &maps.normal, &maps.roughness, &maps.gloss, &maps.metalness, &maps.ao, &maps.opacity}) {
+            if (file->empty())
+                continue;
+            const auto contentHash = CookCache::hash_file(*file);
+            if (!contentHash)
+                return std::nullopt;
+            hash.add(file->lexically_normal().generic_string());
+            hash.add(*contentHash);
+        }
     }
     return hash.value;
 }
