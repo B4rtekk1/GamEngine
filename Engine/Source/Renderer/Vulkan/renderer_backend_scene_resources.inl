@@ -3154,9 +3154,10 @@ void updateShadowCullingUniformBuffer(const uint32_t frame) const {
 }
 
 void createUniformBuffers() {
+    // Device-local when possible; see createCullingResources().
     for (Buffer& buffer : uniformBuffers) {
-        buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(UniformBufferObject),
-                                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        buffer.createHostVisibleDeviceLocal(device, sizeof(UniformBufferObject), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                            vulkanDevice.allocator());
     }
 }
 

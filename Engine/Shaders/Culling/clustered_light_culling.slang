@@ -121,37 +121,82 @@ bool affectsCluster(ReflectionProbeData probe, uint3 cluster)
     return affectsCluster(bound, cluster);
 }
 
-[numthreads(4, 4, 4)]
-[shader("compute")]
-void main(uint3 id : SV_DispatchThreadID)
+// One workgroup per cluster: its threads test a batch of lights side by
+// side instead of one thread walking every light in turn (a 1080p grid is
+// only ~12k clusters, too few threads to hide that serial chain of loads).
+// The batch's hits are ranked through a shared bit mask, so the list keeps
+// ascending light order and the same first-48 overflow cut as a serial walk.
+static const uint ClusterCullThreads = 64u;
+groupshared uint batchHits[ClusterCullThreads / 32u];
+
+// Rank of `hit` among this batch's hits, and the batch's hit total.
+uint rankBatchHit(uint thread, bool hit, out uint total)
 {
+    if (thread < ClusterCullThreads / 32u)
+        batchHits[thread] = 0u;
+    GroupMemoryBarrierWithGroupSync();
+    if (hit)
+        InterlockedOr(batchHits[thread / 32u], 1u << (thread & 31u));
+    GroupMemoryBarrierWithGroupSync();
+    const uint low = batchHits[0];
+    const uint high = batchHits[1];
+    total = countbits(low) + countbits(high);
+    const uint below = thread < 32u ? countbits(low & ((1u << thread) - 1u))
+                                    : countbits(low) + countbits(high & ((1u << (thread - 32u)) - 1u));
+    // Every thread has read the mask before the next batch clears it.
+    GroupMemoryBarrierWithGroupSync();
+    return below;
+}
+
+[numthreads(ClusterCullThreads, 1, 1)]
+[shader("compute")]
+void main(uint3 groupId : SV_GroupID, uint thread : SV_GroupThreadID)
+{
+    const uint3 id = groupId;
     if (any(id >= uniforms.gridAndLightCount.xyz)) return;
-    uint clusterIndex = (id.z * uniforms.gridAndLightCount.y + id.y) * uniforms.gridAndLightCount.x + id.x;
-    uint offset = clusterIndex * MaxLightsPerCluster;
-    uint lightCount = 0u;
+    const uint clusterIndex = (id.z * uniforms.gridAndLightCount.y + id.y) * uniforms.gridAndLightCount.x + id.x;
+    const uint offset = clusterIndex * MaxLightsPerCluster;
     const float4 clusterSphere = clusterBoundingSphere(id);
-    // Hundreds of lights are tested per cluster; stop once the list is full.
-    for (uint lightIndex = 0u; lightIndex < uniforms.gridAndLightCount.w && lightCount < MaxLocalLightsPerCluster;
-         ++lightIndex)
+    const uint localLightCount = uniforms.gridAndLightCount.w;
+    uint lightCount = 0u;
+    // Stop once the list is full; lightCount is uniform across the group.
+    for (uint batch = 0u; batch < localLightCount && lightCount < MaxLocalLightsPerCluster;
+         batch += ClusterCullThreads)
     {
-        const LocalLightData light = localLights[lightIndex];
-        if (!affectsCluster(light, id))
-            continue;
-        if (light.parameters.y > 1.5 && spotMissesCluster(light, clusterSphere)) // Spot
-            continue;
-        clusterLightIndices[offset + lightCount++] = lightIndex;
+        const uint lightIndex = batch + thread;
+        bool hit = false;
+        if (lightIndex < localLightCount)
+        {
+            const LocalLightData light = localLights[lightIndex];
+            hit = affectsCluster(light, id) &&
+                  !(light.parameters.y > 1.5 && spotMissesCluster(light, clusterSphere)); // Spot
+        }
+        uint total;
+        const uint slot = lightCount + rankBatchHit(thread, hit, total);
+        if (hit && slot < MaxLocalLightsPerCluster)
+            clusterLightIndices[offset + slot] = lightIndex;
+        lightCount = min(lightCount + total, MaxLocalLightsPerCluster);
     }
     const uint probeOffset = offset + MaxLocalLightsPerCluster;
     uint probeCount = 0u;
-    for (uint probeIndex = 0u; probeIndex < frame.reflectionProbeCount; ++probeIndex)
+    for (uint batch = 0u; batch < frame.reflectionProbeCount && probeCount < MaxProbesPerCluster;
+         batch += ClusterCullThreads)
     {
-        if (affectsCluster(reflectionProbes[probeIndex], id) && probeCount < MaxProbesPerCluster)
-            clusterLightIndices[probeOffset + probeCount++] = probeIndex;
+        const uint probeIndex = batch + thread;
+        const bool hit = probeIndex < frame.reflectionProbeCount && affectsCluster(reflectionProbes[probeIndex], id);
+        uint total;
+        const uint slot = probeCount + rankBatchHit(thread, hit, total);
+        if (hit && slot < MaxProbesPerCluster)
+            clusterLightIndices[probeOffset + slot] = probeIndex;
+        probeCount = min(probeCount + total, MaxProbesPerCluster);
     }
-    ClusterLightRange range;
-    range.lightOffset = offset;
-    range.lightCount = lightCount;
-    range.probeOffset = probeOffset;
-    range.probeCount = probeCount;
-    clusterRanges[clusterIndex] = range;
+    if (thread == 0u)
+    {
+        ClusterLightRange range;
+        range.lightOffset = offset;
+        range.lightCount = lightCount;
+        range.probeOffset = probeOffset;
+        range.probeCount = probeCount;
+        clusterRanges[clusterIndex] = range;
+    }
 }

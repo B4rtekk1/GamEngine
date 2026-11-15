@@ -679,9 +679,12 @@ void createCullingResources() {
         createComputePipeline("shaders/clustered_light_culling.spv", clusteredLightingPipelineLayout);
 
     refreshCullingBatchObjects();
+    // CPU-written, GPU-read buffers live in device-local host-visible memory
+    // where the device has it (Buffer::createHostVisibleDeviceLocal): shader
+    // reads of host memory cross PCIe.
     for (Buffer& buffer : cullingObjectBuffers) {
-        buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(Culling::GPUObjectData) * genericCapacity,
-                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        buffer.createHostVisibleDeviceLocal(device, sizeof(Culling::GPUObjectData) * genericCapacity,
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
         const Culling::GPUObjectData emptyObject{};
         buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
                       sizeof(Culling::GPUObjectData) * std::max(1u, objectCount));
@@ -689,19 +692,19 @@ void createCullingResources() {
 
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
         const GpuReflectionProbe emptyProbe{};
-        reflectionProbeBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                                                        sizeof(GpuReflectionProbe) * ReflectionProbeManager::MaxProbes,
-                                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+        reflectionProbeBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(GpuReflectionProbe) * ReflectionProbeManager::MaxProbes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vulkanDevice.allocator());
         reflectionProbeBuffers[frame].update(&emptyProbe, sizeof(emptyProbe));
-        clusteredLightingUniformBuffers[frame].createHostVisible(
-            vulkanDevice.physical(), device, sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            vulkanDevice.allocator());
-        localLightBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                                                   sizeof(LocalLightGPU) * MaxClusteredLocalLights,
-                                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-        sceneClusteredLightingUniformBuffers[frame].createHostVisible(
-            vulkanDevice.physical(), device, sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            vulkanDevice.allocator());
+        clusteredLightingUniformBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        // Every light pass reads it (clusters, tiles, deferred lights, glass,
+        // fog, rain): keep it out of PCIe-only host memory.
+        localLightBuffers[frame].createHostVisibleDeviceLocal(device, sizeof(LocalLightGPU) * MaxClusteredLocalLights,
+                                                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                              vulkanDevice.allocator());
+        sceneClusteredLightingUniformBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
         std::vector<ClusterLightRangeGPU> emptyGameRanges(gameClusterCount);
         std::vector<ClusterLightRangeGPU> emptySceneRanges(sceneClusterCount);
         std::vector<std::uint32_t> emptyGameIndices(gameClusterCount * MaxLightsPerCluster);
@@ -724,24 +727,18 @@ void createCullingResources() {
             vulkanDevice.physical(), device, emptySceneIndices.data(), sizeof(std::uint32_t) * emptySceneIndices.size(),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool,
             vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-        cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                                                       sizeof(Culling::CullingUniformData),
-                                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
-        sceneCullingUniformBuffers[frame].createHostVisible(
-            vulkanDevice.physical(), device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            vulkanDevice.allocator());
-        meshletCullingUniformBuffers[frame].createHostVisible(
-            vulkanDevice.physical(), device, sizeof(Culling::MeshletCullUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            vulkanDevice.allocator());
-        foliageCullingUniformBuffers[frame].createHostVisible(
-            vulkanDevice.physical(), device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            vulkanDevice.allocator());
-        shadowCullingUniformBuffers[frame].createHostVisible(
-            vulkanDevice.physical(), device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            vulkanDevice.allocator());
-        shadowTwoSidedCullingUniformBuffers[frame].createHostVisible(
-            vulkanDevice.physical(), device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            vulkanDevice.allocator());
+        cullingUniformBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        sceneCullingUniformBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        meshletCullingUniformBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(Culling::MeshletCullUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        foliageCullingUniformBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        shadowCullingUniformBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+        shadowTwoSidedCullingUniformBuffers[frame].createHostVisibleDeviceLocal(
+            device, sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
         const std::uint32_t zero = 0;
         std::vector<std::uint32_t> emptyVisibleInstances(
             std::max<std::size_t>(1, sceneGpu.database.instances().size()));

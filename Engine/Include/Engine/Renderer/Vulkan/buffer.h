@@ -77,6 +77,16 @@ class Buffer final {
                            VkBufferUsageFlags usage, VmaAllocator allocator, bool enableDeviceAddress = false);
 
     /**
+     * A host-visible buffer the CPU rewrites every frame but shaders read
+     * many times over: placed in device-local, host-visible memory (the BAR
+     * window) when the device has it, else in ordinary host memory. Shader
+     * reads of host memory cross PCIe (object culling on Bistro: 0.16 ms in
+     * host memory, 0.02 ms in BAR).
+     */
+    void createHostVisibleDeviceLocal(VkDevice device, VkDeviceSize size, VkBufferUsageFlags usage,
+                                      VmaAllocator allocator);
+
+    /**
      * @brief Copies data into the mapped host-visible allocation.
      * @param data Source data to copy.
      * @param size Number of bytes to copy.
@@ -131,6 +141,7 @@ class Buffer final {
         VkMemoryPropertyFlags properties;
         VmaAllocator allocator;
         bool enableDeviceAddress{false};
+        bool preferDeviceLocal{false};
     };
 
     VkDevice device_ = VK_NULL_HANDLE;

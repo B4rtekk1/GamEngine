@@ -1288,17 +1288,43 @@ VisibilityBarycentrics visibilityBarycentrics(float4 clip0, float4 clip1, float4
     return result;
 }
 
-ForwardVertexOutput visibilityVertex(MeshletRecord meshlet, uint corner, uint visibleInstance)
+// The instance's affine transform, built once per resolved pixel. The
+// resolve used to run the full vertex program six times (three corners for
+// the barycentrics, three again for the attributes), each rebuilding the
+// rotation from the quaternion and transforming every attribute.
+struct VisibilityInstanceTransform
 {
-    const MeshletPackedVertex packed = meshletVertexHeap[meshletVertexRefs[meshlet.range.x + corner]];
-    ForwardVertexInput input;
-    input.position = packed.position;
-    input.color = unpackMeshletColor(packed.color);
-    input.texCoord = unpackMeshletHalf2(packed.texCoord);
-    input.texCoord1 = unpackMeshletHalf2(packed.texCoord1);
-    input.tangentFrame = packed.tangentFrame;
-    input.materialIndex = packed.materialIndex;
-    return shadeForwardVertex(input, visibleInstance);
+    float3x3 rotation;
+    float3 scale;
+    float3 translation;
+    uint materialBase;
+};
+
+VisibilityInstanceTransform visibilityInstanceTransform(uint visibleInstance)
+{
+    const RendererInstanceData instance = visibleInstances[visibleInstance];
+    const float4 q = instance.rotation;
+    VisibilityInstanceTransform result;
+    // Same matrix as shadeForwardVertex.
+    result.rotation = float3x3(
+        1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),
+        2.0 * (q.x * q.y - q.z * q.w), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.x * q.w),
+        2.0 * (q.x * q.z + q.y * q.w), 2.0 * (q.y * q.z - q.x * q.w), 1.0 - 2.0 * (q.x * q.x + q.y * q.y));
+    result.scale = instance.scaleBase.xyz;
+    result.translation = instance.positionMaterial.xyz;
+    result.materialBase = asuint(instance.positionMaterial.w);
+    return result;
+}
+
+MeshletPackedVertex visibilityPackedVertex(MeshletRecord meshlet, uint corner)
+{
+    return meshletVertexHeap[meshletVertexRefs[meshlet.range.x + corner]];
+}
+
+float4 visibilityClip(VisibilityInstanceTransform transform, float3 localPosition)
+{
+    const float3 world = mul(localPosition * transform.scale, transform.rotation) + transform.translation;
+    return mul(mul(float4(world, 1.0), frame.view), frame.projection);
 }
 
 // Tiles of this program's material class (visibility_classify.slang).
@@ -1331,13 +1357,13 @@ void visibilityResolveMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_Group
     const MeshletDrawEntry entry = meshletDrawList[visibilityListIndex(visibility)];
     const MeshletRecord meshlet = meshletRecords[entry.meshlet];
     const uint3 corners = unpackMeshletTriangle(meshletTriangleRefs[meshlet.range.z + visibilityTriangle(visibility)]);
+    const VisibilityInstanceTransform transform = visibilityInstanceTransform(entry.visibleInstance);
 
     // Two phases keep few vertices live: the clip positions alone give the
-    // barycentrics, then each corner is shaded again and accumulated, so
-    // three full vertex outputs never occupy registers together.
-    const float4 clip0 = visibilityVertex(meshlet, corners.x, entry.visibleInstance).position;
-    const float4 clip1 = visibilityVertex(meshlet, corners.y, entry.visibleInstance).position;
-    const float4 clip2 = visibilityVertex(meshlet, corners.z, entry.visibleInstance).position;
+    // barycentrics, then each corner's attributes are accumulated.
+    const float4 clip0 = visibilityClip(transform, visibilityPackedVertex(meshlet, corners.x).position);
+    const float4 clip1 = visibilityClip(transform, visibilityPackedVertex(meshlet, corners.y).position);
+    const float4 clip2 = visibilityClip(transform, visibilityPackedVertex(meshlet, corners.z).position);
     const float2 viewport = float2(width, height);
     const float2 pixelNdc = (float2(pixel) + 0.5) / viewport * 2.0 - 1.0;
     const VisibilityBarycentrics b = visibilityBarycentrics(clip0, clip1, clip2, pixelNdc, viewport);
@@ -1346,33 +1372,54 @@ void visibilityResolveMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_Group
     input.position = float4(float2(pixel) + 0.5, 0.0, 1.0);
     // Front faces have a negative signed area (meshletTriangleCulled).
     input.isFrontFace = determinant(float3x3(clip0.xyw, clip1.xyw, clip2.xyw)) < 0.0;
-    float3 normalDx = 0.0;
-    float3 normalDy = 0.0;
+    // The transform is affine, so the attributes are interpolated in object
+    // space and transformed once: the weights sum to one (their screen
+    // derivatives to zero), and normals and tangents transform linearly, as
+    // shadeForwardVertex does per vertex before interpolation.
+    float3 localPosition = 0.0;
+    float3 localNormal = 0.0;
+    float3 localNormalDx = 0.0;
+    float3 localNormalDy = 0.0;
+    float4 localTangent = 0.0;
+    uint packedMaterial = 0u;
     [loop] for (uint k = 0u; k < 3u; ++k)
     {
         const uint corner = k == 0u ? corners.x : k == 1u ? corners.y : corners.z;
         const float weight = k == 0u ? b.lambda.x : k == 1u ? b.lambda.y : b.lambda.z;
         const float weightDx = k == 0u ? b.ddx.x : k == 1u ? b.ddx.y : b.ddx.z;
         const float weightDy = k == 0u ? b.ddy.x : k == 1u ? b.ddy.y : b.ddy.z;
-        const ForwardVertexOutput v = visibilityVertex(meshlet, corner, entry.visibleInstance);
-        input.color += weight * v.color;
-        input.worldPosition += weight * v.worldPosition;
-        input.normal += weight * v.normal;
-        normalDx += weightDx * v.normal;
-        normalDy += weightDy * v.normal;
-        input.tangent += weight * v.tangent;
-        input.texCoord += weight * v.texCoord;
-        input.texCoordDx += weightDx * v.texCoord;
-        input.texCoordDy += weightDy * v.texCoord;
-        input.texCoord1 += weight * v.texCoord1;
-        input.texCoord1Dx += weightDx * v.texCoord1;
-        input.texCoord1Dy += weightDy * v.texCoord1;
+        const MeshletPackedVertex packed = visibilityPackedVertex(meshlet, corner);
+        const float3 normal = decodeVertexNormal(packed.tangentFrame);
+        const float3 unitNormal = normalize(normal);
+        const float2 texCoord = unpackMeshletHalf2(packed.texCoord);
+        const float2 texCoord1 = unpackMeshletHalf2(packed.texCoord1);
+        input.color += weight * unpackMeshletColor(packed.color);
+        localPosition += weight * packed.position;
+        localNormal += weight * unitNormal;
+        localNormalDx += weightDx * unitNormal;
+        localNormalDy += weightDy * unitNormal;
+        localTangent += weight * decodeVertexTangent(packed.tangentFrame, normal);
+        input.texCoord += weight * texCoord;
+        input.texCoordDx += weightDx * texCoord;
+        input.texCoordDy += weightDy * texCoord;
+        input.texCoord1 += weight * texCoord1;
+        input.texCoord1Dx += weightDx * texCoord1;
+        input.texCoord1Dy += weightDy * texCoord1;
         // Flat attributes: every vertex of a meshlet shares its material.
-        input.materialIndex = v.materialIndex;
-#if MATERIAL_VARIANT == 5
-        input.instancePivot = v.instancePivot;
-#endif
+        packedMaterial = packed.materialIndex;
     }
+    const float3x3 normalMatrix = float3x3(transform.rotation[0] / transform.scale.x,
+                                           transform.rotation[1] / transform.scale.y,
+                                           transform.rotation[2] / transform.scale.z);
+    input.worldPosition = mul(localPosition * transform.scale, transform.rotation) + transform.translation;
+    input.normal = mul(localNormal, normalMatrix);
+    const float3 normalDx = mul(localNormalDx, normalMatrix);
+    const float3 normalDy = mul(localNormalDy, normalMatrix);
+    input.tangent = float4(mul(localTangent.xyz * transform.scale, transform.rotation), localTangent.w);
+    input.materialIndex = transform.materialBase + packedMaterial;
+#if MATERIAL_VARIANT == 5
+    input.instancePivot = transform.translation;
+#endif
     // Derivative of normalize(n): the change of n without its radial part.
     const float inverseLength = rsqrt(max(dot(input.normal, input.normal), 1e-12));
     const float3 unitNormal = input.normal * inverseLength;

@@ -1249,8 +1249,13 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
         }
 
         if (particleSystem) {
+            // Its own zone, so the simulation is not billed to whichever
+            // zone follows it.
+            static const ProfileNameId particleSimulationProfileName = Profiler::registerName("Particle Simulation");
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, particleSimulationProfileName);
             particleSystem->recordCompute(commandBuffer, particleComputePipeline, particleComputePipelineLayout,
                                           currentFrame);
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
         }
 
         // Packed grass has an independent, fully GPU-resident command path.
@@ -1820,7 +1825,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, clusteredLightingPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, clusteredLightingPipelineLayout, 0,
                                     1, &set, 0, nullptr);
-            vkCmdDispatch(commandBuffer, (tilesX + 3U) / 4U, (tilesY + 3U) / 4U, (ClusterDepthSlices + 3U) / 4U);
+            // clustered_light_culling.slang: one workgroup per cluster.
+            vkCmdDispatch(commandBuffer, tilesX, tilesY, ClusterDepthSlices);
             const VkMemoryBarrier2 barrier{
                 VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,      nullptr,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,

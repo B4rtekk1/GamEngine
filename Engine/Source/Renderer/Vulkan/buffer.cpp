@@ -130,6 +130,22 @@ void Buffer::createHostVisible([[maybe_unused]] const VkPhysicalDevice physicalD
     });
 }
 
+void Buffer::createHostVisibleDeviceLocal(const VkDevice device, const VkDeviceSize size,
+                                          const VkBufferUsageFlags usage, VmaAllocator allocator) {
+    if (size == 0) {
+        throw std::invalid_argument("Host-visible buffer requires non-zero size");
+    }
+    create({
+        .device = device,
+        .size = size,
+        .usage = usage,
+        .properties = static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) |
+                      static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+        .allocator = allocator,
+        .preferDeviceLocal = true,
+    });
+}
+
 void Buffer::createDeviceLocalEmpty(const VkDevice device, const VkDeviceSize size, const VkBufferUsageFlags usage,
                                     VmaAllocator allocator, const bool enableDeviceAddress) {
     if (size == 0) {
@@ -296,8 +312,14 @@ void Buffer::create(const CreateParameters& parameters) {
     VmaAllocationCreateInfo allocationInfo{};
     constexpr VkMemoryPropertyFlags hostVisibleBit =
         static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
-    allocationInfo.usage = (parameters.properties & hostVisibleBit) != 0 ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST
-                                                                         : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    allocationInfo.usage = (parameters.properties & hostVisibleBit) != 0 && !parameters.preferDeviceLocal
+                               ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST
+                               : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    // Host access still requires mappable memory; VMA falls back to host
+    // memory when no device-local type is host-visible.
+    if ((parameters.properties & hostVisibleBit) != 0) {
+        allocationInfo.requiredFlags = hostVisibleBit;
+    }
     if ((parameters.properties & hostVisibleBit) == 0) {
         allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     }
