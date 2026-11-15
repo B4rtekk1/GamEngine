@@ -136,5 +136,13 @@ class SceneSerializer final {
      * decoded by a worker to the owner/render thread.
      */
     static void replace(Scene& destination, Scene& source);
+
+    /**
+     * Deletes the files saved next to a scene (terrain, sky, GI,
+     * post-process, surface and fog settings). Missing files are ignored;
+     * call it after deleting the scene itself so a new scene of the same
+     * name does not inherit them.
+     */
+    static void removeSidecars(const std::filesystem::path& scenePath) noexcept;
 };
 } // namespace Engine

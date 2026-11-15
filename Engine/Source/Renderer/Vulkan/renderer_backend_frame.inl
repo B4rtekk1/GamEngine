@@ -478,6 +478,9 @@ void updateUniformBuffer(const uint32_t frame) {
         gtaoPass.reset();
         // SSGI reprojects both its radiance and its accumulated GI.
         ssgiPass.reset();
+        // SSR reprojects its hits into the previous frame's colour.
+        ssrPass.reset();
+        volumetricFogPass.reset();
         if (taaResolveActive)
             temporalAaPass.reset();
     }
@@ -502,6 +505,14 @@ void updateUniformBuffer(const uint32_t frame) {
     // Histories left over from before SSGI was off belong to an older camera.
     if (ssgiTracedThisFrame && !ssgiTracedPreviousFrame)
         ssgiPass.reset();
+    // SSR needs the prepass depth of a single-sample Game View. It reflects
+    // last frame's colour, so the first frame after enabling only captures.
+    const bool ssrActivePreviousFrame = ssrActiveThisFrame;
+    ssrActiveThisFrame = renderGameViewport && surfaceSettings.screenSpaceReflections && !msaa.enabled() &&
+                         ssrPass.created();
+    if (ssrActiveThisFrame && !ssrActivePreviousFrame)
+        ssrPass.reset();
+    ssrTracedThisFrame = ssrActiveThisFrame && ssrPass.radianceValid();
     // The radiance history was captured with last frame's camera; previous*
     // still holds it until it advances to this frame below.
     ssgiViewToPreviousClip =
@@ -525,7 +536,9 @@ void updateUniformBuffer(const uint32_t frame) {
         editorSelectedRenderable, frameData.lightCount, static_cast<std::uint32_t>(reflectionProbes.size()),
         // Bit 0: Game View screen-space inputs are valid. Bit 1: SSGI is
         // traced. Bit 2: TAA resolves this view, so per-pixel dither is safe.
-        gameScreenSpaceEffects = 1u | (ssgiTracedThisFrame ? 2u : 0u) | (taaResolveActive ? 4u : 0u),
+        // Bit 6: SSR traces against this frame's pyramid and last frame's colour.
+        gameScreenSpaceEffects = 1u | (ssgiTracedThisFrame ? 2u : 0u) | (taaResolveActive ? 4u : 0u) |
+                                 (ssrTracedThisFrame ? 64u : 0u),
         // Do not vary PCF/VSM sample phase until TAA has stronger
         // per-surface confidence (normals/reactive mask).  Depth
         // rejection prevents trails, but cannot fully hide changing
@@ -539,6 +552,7 @@ void updateUniformBuffer(const uint32_t frame) {
                   // before the first submission reads the frame UBO.
                   0.0F},
         uniformLocalLights(frameData)};
+    applySurfaceUniforms(data);
     uniformBuffers[frame].update(&data, sizeof(data));
     // Game View and Scene View read the same lights from this frame slot.
     localLightBuffers[frame].update(frameData.lights.data(),
@@ -698,6 +712,7 @@ void updateSceneViewportUniformBuffer(const uint32_t frame) {
         glm::vec4{24.0F / std::log2(1000.0F / 0.1F), -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                   static_cast<float>(imageBasedLighting.prefilteredMipLevels()), 0.0F},
         uniformLocalLights(frameData)};
+    applySurfaceUniforms(data);
     sceneUniformBuffers[frame].update(&data, sizeof(data));
     const ClusteredLightingUniforms clustered{
         sceneView.native(), sceneProjection.native(),
@@ -805,10 +820,16 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
     static const ProfileNameId localShadowDenoiseProfileName = Profiler::registerName("Local Light Shadow Denoise");
     static const ProfileNameId tileLightCullingProfileName = Profiler::registerName("Tile Light Culling");
     static const ProfileNameId deferredLocalProfileName = Profiler::registerName("Deferred Local Lights");
+    static const ProfileNameId visibilityResolveProfileName = Profiler::registerName("Visibility Resolve");
+    static const ProfileNameId visibilitySsrProfileName = Profiler::registerName("Visibility SSR");
     static const ProfileNameId ssgiProfileName = Profiler::registerName("SSGI");
     static const ProfileNameId gtaoProfileName = Profiler::registerName("GTAO");
     static const ProfileNameId ddgiProfileName = Profiler::registerName("DDGI");
     static const ProfileNameId ssgiCaptureProfileName = Profiler::registerName("SSGI.Capture");
+    static const ProfileNameId ssrPyramidProfileName = Profiler::registerName("SSR.Pyramid");
+    static const ProfileNameId ssrCaptureProfileName = Profiler::registerName("SSR.Capture");
+    static const ProfileNameId volumetricFogProfileName = Profiler::registerName("Volumetric Fog");
+    static const ProfileNameId rainProfileName = Profiler::registerName("Rain");
     const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
     // Scene View replaces the embedded Game View in the editor.  Do
     // not submit hidden Game View work: this also makes the shared
@@ -867,9 +888,16 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
     }
     std::vector<RenderGraph::TextureHandle>& frameUploadTextures = frameUploadTextureScratch;
     frameUploadTextures.clear();
+    // A texture whose upload already retired needs neither a wait nor a
+    // barrier: importing every material texture each frame only fed the
+    // graph hundreds of no-op reads (~0.06 ms of recording on Bistro).
+    // legacyUploadValue() below reads the same snapshot of pending uploads.
+    const std::uint64_t completedUploadValue = uploadContext.completedValue();
+    std::uint64_t pendingTextureUploadValue = 0;
     const auto importFrameUploadTexture = [&](const char* name, const Texture2D& texture) {
-        if (!texture.valid())
+        if (!texture.valid() || texture.readyTimeline() <= completedUploadValue)
             return;
+        pendingTextureUploadValue = std::max(pendingTextureUploadValue, texture.readyTimeline());
         const auto handle = frameGraph.importTexture(name, texture.image(),
                                                      {.extent = {texture.width(), texture.height(), 1},
                                                       .format = texture.format(),
@@ -915,18 +943,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
         value = std::max(value, sceneClusteredLightingUniformBuffers[currentFrame].readyTimeline());
         if (particleSystem && particleSystem->particleBuffer() != VK_NULL_HANDLE)
             value = std::max(value, particleSystem->readyTimeline());
-        const auto includeTexture = [&](const Texture2D& texture) {
-            if (texture.valid())
-                value = std::max(value, texture.readyTimeline());
-        };
-        includeTexture(fallbackMaterialTexture);
-        includeTexture(grassHeightTexture);
-        includeTexture(grassDensityTexture);
-        for (const auto& [id, resource] : textureGpuResources) {
-            (void)id;
-            includeTexture(resource.texture);
-        }
-        return value;
+        // Textures that were already complete at import time cannot raise
+        // the wait above what the caller compares against.
+        return std::max(value, pendingTextureUploadValue);
     };
     VkPipelineStageFlags2 legacyUploadStages = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT |
                                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
@@ -975,6 +994,18 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
         sceneViewportForwardPass.useFlatMeshShaders(noDisplacement);
         materialsDisplaced = !noDisplacement;
         displacedMaterialsDirty = false;
+    }
+    // The id prepass needs its target before it records (its pipelines
+    // render to R32_UINT); created lazily at the swapchain extent.
+    if (forwardPass.writesVisibilityIds()) {
+        const VkExtent2D extent = swapchain.extent();
+        if (!visibilityBuffer.ready() || visibilityBuffer.extent().width != extent.width ||
+            visibilityBuffer.extent().height != extent.height) {
+            if (visibilityBuffer.ready() && vkDeviceWaitIdle(device) != VK_SUCCESS)
+                throw std::runtime_error("Could not idle device to resize the visibility buffer");
+            visibilityBuffer.create(vulkanDevice.physical(), device, extent, vulkanDevice.allocator(), assetManager,
+                                    shadowPass.descriptorSetLayout(), meshletDrawDescriptorSetLayout);
+        }
     }
     {
         bool meshletForwardReady = meshletForwardPathActive && renderGameViewport &&
@@ -1101,6 +1132,10 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                               meshShaderForward ? meshletDrawBinPipeline : meshletIndirectPipeline);
             vkCmdFillBuffer(commandBuffer, meshletIndexedDrawCountBuffers[currentFrame].handle(), 0,
                             sizeof(std::uint32_t) * MaterialProgramSlotCount, 0);
+            if (meshShaderForward)
+                vkCmdFillBuffer(commandBuffer, meshletIndexedDrawCountBuffers[currentFrame].handle(),
+                                sizeof(std::uint32_t) * (MaterialProgramSlotCount + Culling::DrawBinOffsetCount),
+                                sizeof(std::uint32_t) * MaterialProgramSlotCount, 0);
             const VkMemoryBarrier2 meshletCountClearBarrier{
                 VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
                 nullptr,
@@ -1948,6 +1983,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
         // the trace's own queue instead, as GTAO does.
         if (!ssgiTracedThisFrame && !ssgiPass.initialized())
             ssgiPass.initialize(commandBuffer);
+        // Forward always binds the SSR images as well.
+        if (!ssrPass.initialized())
+            ssrPass.initialize(commandBuffer);
         if (!ddgiTracedThisFrame && ddgiPass.available() && !ddgiPass.initialized())
             ddgiPass.initialize(commandBuffer);
         if (renderGameViewport) {
@@ -2118,7 +2156,14 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                         cullingZoneOpen = false;
                     }
                     gpuTimestampProfiler.beginZone(buffer, currentFrame, depthPrepassProfileName);
-                    forwardPass.begin(buffer, msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(),
+                    // Visibility-buffer mode: colour target 0 holds triangle ids.
+                    const bool prepassIds = forwardPass.writesVisibilityIds() && visibilityBuffer.ready();
+                    if (prepassIds)
+                        visibilityBuffer.prepare(buffer);
+                    forwardPass.begin(buffer,
+                                      prepassIds        ? visibilityBuffer.ids()
+                                      : msaa.enabled() ? msaa.colorImageView()
+                                                       : hdrBuffer.imageView(),
                                       depthBuffer.imageView(),
                                       msaa.enabled() ? VK_NULL_HANDLE : velocityBuffer.imageView(),
                                       msaa.enabled() ? VK_NULL_HANDLE : gtaoViewNormalBuffer.imageView(),
@@ -2176,9 +2221,19 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                     ForwardPass::end(buffer);
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
-            const auto gtaoQueue = renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncComputeQueue()
-                                       ? RenderGraph::Queue::AsyncCompute
-                                       : RenderGraph::Queue::Graphics;
+            // GTAO, SSGI and the SSR pyramid stay on graphics in both render
+            // paths. On async compute they ran beside the VSM, directional
+            // visibility and ray-traced local shadow work, which saturates
+            // the SMs as much as they do: the pair took longer than in
+            // sequence, and graphics then idled ~1.5 ms waiting for them
+            // before forward shading (Bistro at night, RTX 3050 Laptop:
+            // +0.2 ms per frame over the sequential path). Only the Hi-Z
+            // pyramid, which overlaps the raster-bound forward pass, goes to
+            // async compute (-0.4 ms per frame over sequential).
+            const auto gtaoQueue = RenderGraph::Queue::Graphics;
+            const auto hiZQueue = renderPath == RenderPath::AsyncCompute && vulkanDevice.hasAsyncComputeQueue()
+                                      ? RenderGraph::Queue::AsyncCompute
+                                      : RenderGraph::Queue::Graphics;
             const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
             const Mat4 inverseProjection{glm::inverse(cameraController.camera()->projectionMatrix().native())};
             viewportFrameGraph.addPass(
@@ -2229,8 +2284,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                                                  .viewNormalSampler = gtaoViewNormalBuffer.sampler(),
                                                  .projection = cameraController.camera()->projectionMatrix(),
                                                  .viewToPreviousClip = ssgiViewToPreviousClip};
-                // Same inputs as GTAO, so it shares GTAO's queue and overlaps
-                // the shadow atlas work on graphics.
+                // Same inputs as GTAO, so it shares GTAO's queue.
                 viewportFrameGraph.addPass(
                     "SSGI", gtaoQueue,
                     [&](RenderGraph::PassBuilder& builder) {
@@ -2255,6 +2309,47 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                 ssgiTracedThisFrame = false;
                 if (!ssgiPass.initialized())
                     ssgiPass.initialize(commandBuffer);
+            }
+            // SSR's closest-surface pyramid of this frame's prepass depth,
+            // built with GlassPass's reduce kernel on the GTAO queue.
+            RenderGraph::TextureHandle graphSsrDepth{};
+            if (ssrActiveThisFrame) {
+                const Culling::HiZBuffer& ssrPyramid = ssrPass.pyramid();
+                const RenderGraph::TextureDesc ssrDepthDesc{
+                    .extent = {ssrPyramid.width(), ssrPyramid.height(), 1},
+                    .format = VK_FORMAT_R32_SFLOAT,
+                    .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevels = ssrPyramid.mipCount(),
+                    .concurrentSharing = ssrPyramid.concurrentSharing()};
+                graphSsrDepth = viewportFrameGraph.importTexture(
+                    "SSR depth pyramid", ssrPyramid.image(), ssrDepthDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                viewportFrameGraph.addPass(
+                    "SSR depth pyramid", gtaoQueue,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                        builder.write(graphSsrDepth, RenderGraph::TextureUsage::StorageWriteCompute);
+                        builder.setFinalTextureState(graphSsrDepth,
+                                                     {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                      .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                                      .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                      .write = false});
+                    },
+                    [&](const VkCommandBuffer buffer) {
+                        if (gtaoQueue == RenderGraph::Queue::Graphics)
+                            gpuTimestampProfiler.beginZone(buffer, currentFrame, ssrPyramidProfileName);
+                        else
+                            gpuTimestampProfiler.beginLabel(buffer, ssrPyramidProfileName);
+                        ssrPass.recordPyramid(buffer);
+                        if (gtaoQueue == RenderGraph::Queue::Graphics)
+                            gpuTimestampProfiler.endZone(buffer, currentFrame);
+                        else
+                            gpuTimestampProfiler.endLabel(buffer);
+                    });
+                viewportFrameGraph.exportTexture(graphSsrDepth);
             }
             // Mega Geometry ray tracing scene, shared by DDGI and the local
             // light shadows: every meshlet a cluster (CLAS), all opaque
@@ -2659,6 +2754,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                     builder.read(graphAo, RenderGraph::TextureUsage::SampledReadFragment);
                     if (graphSsgi)
                         builder.read(graphSsgi, RenderGraph::TextureUsage::SampledReadFragment);
+                    if (graphSsrDepth)
+                        builder.read(graphSsrDepth, RenderGraph::TextureUsage::SampledReadFragment);
                     if (graphDdgiIrradiance) {
                         builder.read(graphDdgiIrradiance, RenderGraph::TextureUsage::SampledReadFragment);
                         builder.read(graphDdgiDistance, RenderGraph::TextureUsage::SampledReadFragment);
@@ -2680,7 +2777,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
             // The viewport join is deferred to presentation for this reason.
             if (hizEnabled) {
                 viewportFrameGraph.addPass(
-                    "Hi-Z", gtaoQueue,
+                    "Hi-Z", hiZQueue,
                     [&](RenderGraph::PassBuilder& builder) {
                         builder.startNewBatch();
                         builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
@@ -2692,12 +2789,12 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                     },
                     [&](const VkCommandBuffer buffer) {
                         // Timestamps stay on graphics; async compute gets a label only.
-                        if (gtaoQueue == RenderGraph::Queue::Graphics)
+                        if (hiZQueue == RenderGraph::Queue::Graphics)
                             gpuTimestampProfiler.beginZone(buffer, currentFrame, hiZProfileName);
                         else
                             gpuTimestampProfiler.beginLabel(buffer, hiZProfileName);
                         hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame], VK_NULL_HANDLE, false);
-                        if (gtaoQueue == RenderGraph::Queue::Graphics)
+                        if (hiZQueue == RenderGraph::Queue::Graphics)
                             gpuTimestampProfiler.endZone(buffer, currentFrame);
                         else
                             gpuTimestampProfiler.endLabel(buffer);
@@ -2857,6 +2954,23 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
             // PBR programs may then drop their own local light walk.
             lightingForwardPass.useDeferredLocalShaders(deferredLocalThisFrame &&
                                                         pbrDebugView == PbrDebugView::FinalLighting);
+            // The resolve's single program covers flat, DDGI-less PBR with
+            // deferred local lights; every other pixel in front of a resolved
+            // one must have overwritten its id, so only mesh-shader built-in
+            // programs may draw in the prepass.
+            // The resolve programs carry no local light walk: the deferred pass
+            // must add the lights, unless the scene has none.
+            const bool resolveLocalLights = deferredLocalThisFrame || sceneFrameDataCache.data.lightCount == 0;
+            visibilityResolveThisFrame = forwardPass.writesVisibilityIds() && visibilityBuffer.ready() &&
+                                         meshShaderForward && !meshletSkipsFoliage && resolveLocalLights &&
+                                         pbrDebugView == PbrDebugView::FinalLighting && !materialsDisplaced &&
+                                         !ddgiPass.volumeValid(currentFrame) && sceneGpu.grassInstances.empty() &&
+                                         // Ids hold 22 bits of meshletDrawList index.
+                                         meshletBinBudget < (1U << 22U);
+            for (std::size_t shader = MaterialShaderCount; visibilityResolveThisFrame && shader < MaterialProgramSlotCount;
+                 ++shader)
+                if (activeShaderSlots.test(shader))
+                    visibilityResolveThisFrame = false;
             const std::uint32_t screenSpaceEffects = gameScreenSpaceEffects | (localShadowsReadyThisFrame ? 8U : 0U) |
                                                      (tileLightsThisFrame ? 16U : 0U) |
                                                      (deferredLocalThisFrame ? 32U : 0U);
@@ -2939,6 +3053,9 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                 if (isCompositedProgramSlot(shader))
                     continue;
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
+                // Shaded by the visibility resolve after this pass.
+                if (visibilityResolveThisFrame && ForwardPass::isVisibilityResolvedSlot(shader))
+                    continue;
                 if (meshShaderForward) {
                     lightingForwardPass.drawMeshShaderMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
                                                                meshletDrawSets[currentFrame], shader,
@@ -2987,6 +3104,23 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                 // color with HDR and depth only (their pipelines have no
                 // deferred-light target).
                 ForwardPass::end(commandBuffer);
+                if (visibilityResolveThisFrame) {
+                    const VisibilityBufferPass::Targets visibilityTargets{
+                        .hdr = hdrBuffer.image(),
+                        .hdrView = hdrBuffer.imageView(),
+                        .surface = deferredLocalLighting.surfaceImage(),
+                        .surfaceView = deferredLocalLighting.surfaceData()};
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, visibilityResolveProfileName);
+                    const bool resolved =
+                        visibilityBuffer.record(commandBuffer, currentFrame, shadowPass.descriptorSet(currentFrame),
+                                                meshletDrawSets[currentFrame], visibilityTargets);
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                    if (resolved) {
+                        gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, visibilitySsrProfileName);
+                        visibilityBuffer.recordReflections(commandBuffer, visibilityTargets);
+                        gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                    }
+                }
                 if (deferredLocalThisFrame) {
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, deferredLocalProfileName);
                     deferredLocalLighting.record(
@@ -3247,7 +3381,10 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
                      .twoSided = &foliageIndirectDraws[currentFrame],
                      .commandOffset = binnedCommandOffset(static_cast<std::uint32_t>(GlassProgramSlot), false),
                      .twoSidedCommandOffset = binnedCommandOffset(static_cast<std::uint32_t>(GlassProgramSlot), true),
-                     .countOffset = static_cast<VkDeviceSize>(GlassProgramSlot) * sizeof(std::uint32_t)});
+                     .countOffset = static_cast<VkDeviceSize>(GlassProgramSlot) * sizeof(std::uint32_t),
+                     // Game View only: the Scene View glass would share the Glass.* zone names.
+                     .profiler = &gpuTimestampProfiler,
+                     .profilerFrame = currentFrame});
                 gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
         }
@@ -3619,6 +3756,63 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer) {
     if (ssgiTracedThisFrame) {
         gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, ssgiCaptureProfileName);
         ssgiPass.captureRadiance(commandBuffer, currentFrame, hdrBuffer.imageView(), hdrBuffer.sampler());
+        gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+    }
+    // ...and the colour the next frame's screen-space reflections reflect.
+    if (ssrActiveThisFrame) {
+        gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, ssrCaptureProfileName);
+        ssrPass.captureRadiance(commandBuffer);
+        gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+    }
+    // Volumetric fog over the lit Game View, after the radiance captures (the
+    // reflections and the next bounce must not carry the fog twice) and
+    // before TAA. Its grid follows the swapchain and the quality preset.
+    if (renderGameViewport && fogSettings.enabled) {
+        const DepthBuffer& fogDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+        if (!volumetricFogPass.matches(swapchain.extent(), fogSettings.quality, fogDepth.imageView(),
+                                       hdrBuffer.imageView())) {
+            // A previous grid may still be read by the frame in flight.
+            if (volumetricFogPass.created() && vkDeviceWaitIdle(device) != VK_SUCCESS)
+                throw std::runtime_error("Could not idle the device to resize the volumetric fog");
+            volumetricFogPass.create({.physicalDevice = vulkanDevice.physical(),
+                                      .device = device,
+                                      .allocator = vulkanDevice.allocator(),
+                                      .assets = &assetManager,
+                                      .sceneLayout = shadowPass.descriptorSetLayout(),
+                                      .extent = swapchain.extent(),
+                                      .quality = fogSettings.quality,
+                                      .depthView = fogDepth.imageView(),
+                                      .depthSampler = fogDepth.sampler(),
+                                      .hdrImage = hdrBuffer.image(),
+                                      .hdrView = hdrBuffer.imageView()});
+        }
+        gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, volumetricFogProfileName);
+        volumetricFogPass.record(commandBuffer, shadowPass.descriptorSet(currentFrame), fogSettings);
+        gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+    } else {
+        // Re-enabling must not blend in a stale history.
+        volumetricFogPass.reset();
+    }
+    // Falling rain over the fogged scene: the streaks lie within a few metres,
+    // where the fog barely attenuates. MSAA renders into a multisampled
+    // target, which the single-sample streak pipeline does not match.
+    if (renderGameViewport && surfaceSettings.rainIntensity > 0.0F && !msaa.enabled()) {
+        if (!rainPass.matches(HdrBuffer::Format, depthBuffer.format()))
+            rainPass.create({.device = device,
+                             .assets = &assetManager,
+                             .sceneLayout = shadowPass.descriptorSetLayout(),
+                             .colorFormat = HdrBuffer::Format,
+                             .depthFormat = depthBuffer.format()});
+        gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rainProfileName);
+        rainPass.record(commandBuffer,
+                        {.sceneSet = shadowPass.descriptorSet(currentFrame),
+                         .color = hdrBuffer.image(),
+                         .colorView = hdrBuffer.imageView(),
+                         .depthView = depthBuffer.imageView(),
+                         .extent = swapchain.extent(),
+                         .intensity = surfaceSettings.rainIntensity,
+                         // Wrapped: float time loses the drops' sub-frame motion after hours.
+                         .time = static_cast<float>(std::fmod(Time::elapsedTime(), 3600.0))});
         gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
     }
 
@@ -4042,6 +4236,9 @@ void cleanupSwapChain() {
     bloomPass.destroy();
     gtaoPass.destroy();
     ssgiPass.destroy();
+    ssrPass.destroy();
+    volumetricFogPass.destroy();
+    rainPass.destroy();
     destroyVelocityResources();
     if (hdrFramebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -4124,6 +4321,9 @@ void recreateSwapChain() {
     bloomPass.destroy();
     gtaoPass.destroy();
     ssgiPass.destroy();
+    ssrPass.destroy();
+    volumetricFogPass.destroy();
+    rainPass.destroy();
     destroyVelocityResources();
     if (hdrFramebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -4167,6 +4367,7 @@ void recreateSwapChain() {
     createDepthResources();
     createGtaoPass();
     createSsgiPass();
+    createSsrPass();
     createRenderFinishedSemaphores();
 
     createCullingResources();
@@ -4400,6 +4601,10 @@ void waitFrameSlot() {
 [[nodiscard]] bool acquireSwapchainImage() {
     if (swapchainImageAcquired)
         return true;
+    // Blocks while the GPU is the bottleneck (no image released yet). It is
+    // called mid-recording, so it gets a zone of its own: otherwise this wait
+    // reads as "Command Recording" CPU cost (~2.2 ms of its 3.1 ms on Bistro).
+    GE_PROFILE_SCOPE("Acquire Swapchain Image");
     const VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
                                                   imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE,
                                                   &acquiredImageIndex);

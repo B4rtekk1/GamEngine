@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/TempImageLog.h" // TEMP-DEBUG
 #include "Engine/Renderer/Vulkan/msaa.h"
 
 #include <stdexcept>
@@ -97,6 +98,7 @@ void MsaaResources::create(VkExtent2D extent, VkFormat colorFormat) {
             VK_SUCCESS) {
             throw std::runtime_error("GPU does not support the requested memory type for MSAA");
         }
+        tempLogImage("MSAA color", colorImage_, imageInfo); // TEMP-DEBUG
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

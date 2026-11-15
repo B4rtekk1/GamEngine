@@ -41,9 +41,9 @@ function(gameengine_add_engine_shaders)
     # Only entry-point modules produce SPIR-V.  The remaining .slang files are
     # imports, tracked per output through slangc depfiles.
     set(shader_entries
-        Culling/gpu_culling.slang Culling/gpu_instance_culling.slang Culling/meshlet_culling.slang Culling/meshlet_build_dispatch.slang Culling/meshlet_build_indirect.slang Culling/meshlet_build_indexed.slang Culling/meshlet_build_mesh_draws.slang Culling/meshlet_build_mesh_commands.slang Culling/shadow_meshlet_culling.slang Culling/shadow_meshlet_build_indirect.slang Culling/shadow_meshlet_refine.slang Culling/shadow_meshlet_build_mesh_commands.slang Culling/hiz_initialize.slang Culling/hiz_reduce.slang Glass/glass_depth_reduce.slang Glass/glass_depth_seed.slang Culling/clustered_light_culling.slang
+        Culling/gpu_culling.slang Culling/gpu_instance_culling.slang Culling/meshlet_culling.slang Culling/meshlet_build_dispatch.slang Culling/meshlet_build_indirect.slang Culling/meshlet_build_indexed.slang Culling/meshlet_build_mesh_draws.slang Culling/meshlet_build_mesh_commands.slang Culling/shadow_meshlet_culling.slang Culling/shadow_meshlet_build_indirect.slang Culling/shadow_meshlet_refine.slang Culling/shadow_meshlet_build_mesh_commands.slang Culling/hiz_initialize.slang Culling/hiz_reduce.slang Glass/glass_depth_reduce.slang Glass/glass_depth_seed.slang Glass/glass_depth_downsample.slang Glass/glass_snapshot_downsample.slang Glass/glass_inputs_gate.slang Culling/clustered_light_culling.slang
         Grass/grass_generate.slang Grass/grass_cull.slang Grass/grass_packed_cull.slang Grass/grass_cluster_cull.slang Grass/grass_shadow_page_cull.slang Grass/grass_packed_bin.slang Grass/grass_packed_prefix.slang Grass/grass_packed_scatter.slang Grass/grass_packed_finalize.slang Grass/grass_classify.slang Grass/grass_build_dispatch.slang Grass/grass_forward.slang Grass/grass_shadow.slang Grass/grass_velocity.slang Grass/grass_build_indirect.slang Grass/grass_finalize_indirect.slang Grass/grass_prefix_sum.slang Grass/grass_scatter_instances.slang
-        Environment/skybox.slang Forward/forward_pbr.slang Forward/depth_velocity.slang Particles/particle_billboard.slang Particles/particle_simulation.slang Water/water_page_cull.slang Water/water_depth_init.slang Water/water_page_build_indirect.slang Water/water_sssr_depth_init.slang Water/water_sssr_depth_reduce.slang Water/water_state_allocate.slang Water/water_state_update.slang Water/water_far_ocean_prepass.slang Water/water_authored_prepass.slang Water/water_virtual_prepass.slang Water/water_tile_classify.slang Water/water_tile_build_dispatch.slang Water/water_virtual_shade.slang Water/water_virtual_composite.slang PostProcess/aces_tonemap.slang PostProcess/bloom_downsample.slang PostProcess/bloom_upsample.slang PostProcess/gtao_prefilter_depth.slang PostProcess/gtao_denoise.slang PostProcess/gtao_upsample_compute.slang PostProcess/gtao_denoise_upsample.slang PostProcess/ssgi_capture.slang PostProcess/ssgi_prepare.slang PostProcess/ssgi_trace.slang PostProcess/ssgi_temporal.slang PostProcess/ssgi_resolve.slang RayTracing/cluster_prepare.slang RayTracing/cluster_displace.slang RayTracing/ptlas_patch_instances.slang GI/ddgi_probe_select.slang GI/ddgi_probe_blend.slang PostProcess/temporal_aa.slang PostProcess/temporal_velocity.slang PostProcess/auto_exposure.slang Samples/basic_pbr.slang Shadow/shadow_map.slang Shadow/shadow_opaque.slang Shadow/vsm_page_marking.slang Shadow/vsm_page_compact.slang Shadow/rt_contact_shadow.slang Shadow/local_light_shadow.slang Shadow/local_light_shadow_denoise.slang Culling/tile_light_culling.slang Lighting/deferred_local_lights.slang Lighting/megalights_shade.slang Lighting/megalights_temporal.slang UI/canvas.slang)
+        Environment/skybox.slang Weather/rain.slang Forward/forward_pbr.slang Forward/depth_velocity.slang Particles/particle_billboard.slang Particles/particle_simulation.slang Water/water_page_cull.slang Water/water_depth_init.slang Water/water_page_build_indirect.slang Water/water_sssr_depth_init.slang Water/water_sssr_depth_reduce.slang Water/water_state_allocate.slang Water/water_state_update.slang Water/water_far_ocean_prepass.slang Water/water_authored_prepass.slang Water/water_virtual_prepass.slang Water/water_tile_classify.slang Water/water_tile_build_dispatch.slang Water/water_virtual_shade.slang Water/water_virtual_composite.slang PostProcess/aces_tonemap.slang PostProcess/bloom_downsample.slang PostProcess/bloom_upsample.slang PostProcess/gtao_prefilter_depth.slang PostProcess/gtao_denoise.slang PostProcess/gtao_upsample_compute.slang PostProcess/gtao_denoise_upsample.slang PostProcess/ssgi_capture.slang PostProcess/ssgi_prepare.slang PostProcess/ssgi_trace.slang PostProcess/ssgi_temporal.slang PostProcess/ssgi_resolve.slang PostProcess/fog_integrate.slang PostProcess/fog_apply.slang RayTracing/cluster_prepare.slang RayTracing/cluster_displace.slang RayTracing/ptlas_patch_instances.slang GI/ddgi_probe_select.slang GI/ddgi_probe_blend.slang PostProcess/temporal_aa.slang PostProcess/temporal_velocity.slang PostProcess/auto_exposure.slang Samples/basic_pbr.slang Shadow/shadow_map.slang Shadow/shadow_opaque.slang Shadow/vsm_page_marking.slang Shadow/vsm_page_compact.slang Shadow/rt_contact_shadow.slang Shadow/local_light_shadow.slang Shadow/local_light_shadow_denoise.slang Culling/tile_light_culling.slang Lighting/deferred_local_lights.slang Lighting/megalights_shade.slang Lighting/megalights_temporal.slang UI/canvas.slang)
     set(shader_outputs)
     foreach(shader_entry IN LISTS shader_entries)
         set(shader_source "${ENGINE_SHADER_SOURCE_DIR}/${shader_entry}")
@@ -69,6 +69,11 @@ function(gameengine_add_engine_shaders)
         PROFILE glsl_460+spirv_1_4
         DEFINES SHADOW_MESH_ALPHA_TEST=1
         COMMENT "Compiling alpha-tested mesh-shader VSM caster shader")
+    # Volumetric fog samples the directional VSM from compute: no derivatives.
+    set(fog_inject_output "${SHADER_OUT_DIR}/fog_inject.spv")
+    gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/PostProcess/fog_inject.slang" OUTPUT "${fog_inject_output}"
+        DEFINES SHADOW_COMPUTE=1
+        COMMENT "Compiling volumetric fog injection")
     set(directional_visibility_output "${SHADER_OUT_DIR}/directional_visibility.spv")
     gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Shadow/directional_visibility.slang" OUTPUT "${directional_visibility_output}"
         DEFINES SHADOW_COMPUTE=1
@@ -250,11 +255,20 @@ function(gameengine_add_engine_shaders)
             COMMENT "Compiling meshlet depth prepass shader")
         # VK_EXT_mesh_shader twins of the meshlet programs (`_meshshader`):
         # meshMain replaces the vertex stage and needs SPIR-V 1.4.
-        set(meshshader_depth_output "${SHADER_OUT_DIR}/depth_velocity${meshlet_depth_suffix}_meshshader.spv")
-        gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" OUTPUT "${meshshader_depth_output}"
-            PROFILE glsl_460+spirv_1_4
-            DEFINES DEPTH_OUTPUT_VELOCITY=${meshlet_depth_define} FORWARD_MESH_SHADER=1
-            COMMENT "Compiling mesh-shader depth prepass shader")
+        # `_opaque` twins drop the alpha test and force early depth testing
+        # for material slots without masked or blended materials.
+        foreach(depth_alpha_test IN ITEMS 1 0)
+            if(depth_alpha_test)
+                set(depth_alpha_suffix "")
+            else()
+                set(depth_alpha_suffix "_opaque")
+            endif()
+            set(meshshader_depth_output "${SHADER_OUT_DIR}/depth_velocity${meshlet_depth_suffix}_meshshader${depth_alpha_suffix}.spv")
+            gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" OUTPUT "${meshshader_depth_output}"
+                PROFILE glsl_460+spirv_1_4
+                DEFINES DEPTH_OUTPUT_VELOCITY=${meshlet_depth_define} FORWARD_MESH_SHADER=1 DEPTH_ALPHA_TEST=${depth_alpha_test}
+                COMMENT "Compiling mesh-shader depth prepass shader")
+        endforeach()
     endforeach()
     # Prepass variants for scenes without displaced materials (_flat).
     foreach(flat_depth_velocity IN ITEMS full no_velocity)
@@ -275,31 +289,59 @@ function(gameengine_add_engine_shaders)
                 DEFINES DEPTH_OUTPUT_VELOCITY=${flat_depth_define} FORWARD_MESHLET_INDEXED=${flat_depth_meshlet} DEPTH_DISPLACEMENT=0
                 COMMENT "Compiling depth prepass shader without displacement")
         endforeach()
-        set(flat_meshshader_output "${SHADER_OUT_DIR}/depth_velocity${flat_depth_suffix}_flat_meshshader.spv")
-        gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" OUTPUT "${flat_meshshader_output}"
-            PROFILE glsl_460+spirv_1_4
-            DEFINES DEPTH_OUTPUT_VELOCITY=${flat_depth_define} FORWARD_MESH_SHADER=1 DEPTH_DISPLACEMENT=0
-            COMMENT "Compiling mesh-shader depth prepass shader without displacement")
+        foreach(depth_alpha_test IN ITEMS 1 0)
+            if(depth_alpha_test)
+                set(depth_alpha_suffix "")
+            else()
+                set(depth_alpha_suffix "_opaque")
+            endif()
+            set(flat_meshshader_output "${SHADER_OUT_DIR}/depth_velocity${flat_depth_suffix}_flat_meshshader${depth_alpha_suffix}.spv")
+            gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" OUTPUT "${flat_meshshader_output}"
+                PROFILE glsl_460+spirv_1_4
+                DEFINES DEPTH_OUTPUT_VELOCITY=${flat_depth_define} FORWARD_MESH_SHADER=1 DEPTH_DISPLACEMENT=0 DEPTH_ALPHA_TEST=${depth_alpha_test}
+                COMMENT "Compiling mesh-shader depth prepass shader without displacement")
+        endforeach()
     endforeach()
-    # Visibility-buffer prototype (GAMENGINE_VISBUFFER=1): the mesh-shader
+    # Visibility buffer (default; GAMENGINE_VISBUFFER=0 disables it): the mesh-shader
     # prepass also writes triangle ids (_vis), and forward_pbr's extended PBR
     # program resolves them in compute; see VisibilityBufferPass.
     foreach(vis_displacement IN ITEMS 1 0)
-        if(vis_displacement)
-            set(vis_output "${SHADER_OUT_DIR}/depth_velocity_vis_meshshader.spv")
-        else()
-            set(vis_output "${SHADER_OUT_DIR}/depth_velocity_vis_flat_meshshader.spv")
-        endif()
-        gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" OUTPUT "${vis_output}"
-            PROFILE glsl_460+spirv_1_4
-            DEFINES DEPTH_OUTPUT_VELOCITY=1 FORWARD_MESH_SHADER=1 DEPTH_DISPLACEMENT=${vis_displacement} DEPTH_VISIBILITY_ID=1
-            COMMENT "Compiling mesh-shader depth prepass shader with visibility ids")
+        foreach(depth_alpha_test IN ITEMS 1 0)
+            if(depth_alpha_test)
+                set(depth_alpha_suffix "")
+            else()
+                set(depth_alpha_suffix "_opaque")
+            endif()
+            if(vis_displacement)
+                set(vis_output "${SHADER_OUT_DIR}/depth_velocity_vis_meshshader${depth_alpha_suffix}.spv")
+            else()
+                set(vis_output "${SHADER_OUT_DIR}/depth_velocity_vis_flat_meshshader${depth_alpha_suffix}.spv")
+            endif()
+            gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" OUTPUT "${vis_output}"
+                PROFILE glsl_460+spirv_1_4
+                DEFINES DEPTH_OUTPUT_VELOCITY=1 FORWARD_MESH_SHADER=1 DEPTH_DISPLACEMENT=${vis_displacement} DEPTH_VISIBILITY_ID=1
+                        DEPTH_ALPHA_TEST=${depth_alpha_test}
+                COMMENT "Compiling mesh-shader depth prepass shader with visibility ids")
+        endforeach()
     endforeach()
-    gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang"
-        OUTPUT "${SHADER_OUT_DIR}/visibility_resolve.spv"
-        DEFINES MATERIAL_VARIANT=4 FORWARD_OUTPUT_VELOCITY=0 FORWARD_RESOLVED_VSM=1 FORWARD_DDGI=0
-                FORWARD_DISPLACEMENT=0 FORWARD_LOCAL_LIGHT_LOOP=0 FORWARD_VISIBILITY_RESOLVE=1
-        COMMENT "Compiling visibility-buffer resolve shader")
+    # One resolve program per material class (visibilityClassOfSlot in
+    # MeshletDraw.slang): standard, normal-mapped, extended and foliage PBR.
+    foreach(vis_class_variant IN ITEMS "0;0" "1;3" "2;4" "3;5")
+        list(GET vis_class_variant 0 vis_class)
+        list(GET vis_class_variant 1 vis_variant)
+        gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang"
+            OUTPUT "${SHADER_OUT_DIR}/visibility_resolve_class${vis_class}.spv"
+            DEFINES MATERIAL_VARIANT=${vis_variant} VISIBILITY_CLASS=${vis_class} FORWARD_OUTPUT_VELOCITY=0
+                    FORWARD_RESOLVED_VSM=1 FORWARD_DDGI=0 FORWARD_DISPLACEMENT=0 FORWARD_LOCAL_LIGHT_LOOP=0
+                    FORWARD_VISIBILITY_RESOLVE=1
+            COMMENT "Compiling visibility-buffer resolve shader, material class ${vis_class}")
+    endforeach()
+    gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/visibility_classify.slang"
+        OUTPUT "${SHADER_OUT_DIR}/visibility_classify.spv"
+        COMMENT "Compiling visibility-buffer classification shader")
+    gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/visibility_ssr.slang"
+        OUTPUT "${SHADER_OUT_DIR}/visibility_ssr.spv"
+        COMMENT "Compiling visibility-buffer screen-space reflection shader")
     # Indexed meshlet draws use the same material fragment programs, but their
     # firstInstance directly addresses RendererInstanceData.
     foreach(meshlet_variant IN ITEMS pbr unlit hologram pbr_normal pbr_extended pbr_foliage pbr_terrain)
@@ -351,6 +393,33 @@ function(gameengine_add_engine_shaders)
                     DEFINES MATERIAL_VARIANT=${meshlet_define} FORWARD_OUTPUT_VELOCITY=${meshlet_velocity_define} FORWARD_RESOLVED_VSM=${meshlet_resolved_define} FORWARD_MESH_SHADER=1 FORWARD_DISPLACEMENT=0
                     COMMENT "Compiling forward ${meshlet_variant} mesh shader without displacement")
             endforeach()
+        endforeach()
+    endforeach()
+    # `_nolocal` twins of the indexed resolved no-velocity programs, for the
+    # Scene View lighting pass: it has no deferred local light data target,
+    # so these light every local light themselves and write colour only.
+    foreach(nolocal_stem IN ITEMS forward_pbr forward_pbr_normal forward_pbr_extended forward_pbr_foliage forward_pbr_terrain)
+        if(nolocal_stem STREQUAL "forward_pbr")
+            set(nolocal_define 0)
+        elseif(nolocal_stem STREQUAL "forward_pbr_normal")
+            set(nolocal_define 3)
+        elseif(nolocal_stem STREQUAL "forward_pbr_extended")
+            set(nolocal_define 4)
+        elseif(nolocal_stem STREQUAL "forward_pbr_foliage")
+            set(nolocal_define 5)
+        else()
+            set(nolocal_define 6)
+        endif()
+        foreach(nolocal_ddgi IN ITEMS 1 0)
+            if(nolocal_ddgi)
+                set(nolocal_output "${SHADER_OUT_DIR}/${nolocal_stem}_no_velocity_resolved_nolocal.spv")
+            else()
+                set(nolocal_output "${SHADER_OUT_DIR}/${nolocal_stem}_no_velocity_resolved_nolocal_noddgi.spv")
+            endif()
+            gameengine_compile_shader(SOURCE "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" OUTPUT "${nolocal_output}"
+                DEFINES MATERIAL_VARIANT=${nolocal_define} FORWARD_OUTPUT_VELOCITY=0 FORWARD_RESOLVED_VSM=1
+                        FORWARD_DDGI=${nolocal_ddgi} FORWARD_DEFERRED_LOCAL=0
+                COMMENT "Compiling colour-only resolved forward PBR shader ${nolocal_stem}")
         endforeach()
     endforeach()
     # Lighting-pass variants without the DDGI probe lookup (_noddgi). The

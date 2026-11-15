@@ -115,6 +115,7 @@ void initSceneResources() {
         GE_PROFILE_SCOPE("Renderer.GTAO");
         createGtaoPass();
         createSsgiPass();
+        createSsrPass();
     });
     timeInitialization("Material textures", [&] {
         GE_PROFILE_SCOPE("Renderer.MaterialTextures");
@@ -256,6 +257,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
                                                     void* pUserData) {
     if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         std::fprintf(stderr, "TEMP-DEBUG VK: %s\n", pCallbackData && pCallbackData->pMessage ? pCallbackData->pMessage : ""); // TEMP-DEBUG
+        for (std::uint32_t l = 0; pCallbackData && l < pCallbackData->cmdBufLabelCount; ++l) std::fprintf(stderr, "  LABEL[%u] %s\n", l, pCallbackData->pCmdBufLabels[l].pLabelName); // CLAUDE-DIAG
         const auto severity = messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
                                   ? DiagnosticSeverity::Error
                                   : DiagnosticSeverity::Warning;
@@ -436,6 +438,40 @@ void createSsgiPass() {
                     sharingFamilies);
 }
 
+// Like SSGI, SSR exists at the swapchain size whether or not it traces, so
+// Forward's descriptors always name live images. MSAA resolves its depth
+// into hiZDepthBuffer, the single-sample copy the pyramid can sample.
+void createSsrPass() {
+    const std::array families{vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+    const DepthBuffer& depth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+    ssrPass.create({.physicalDevice = vulkanDevice.physical(),
+                    .device = device,
+                    .allocator = vulkanDevice.allocator(),
+                    .assets = &assetManager,
+                    .extent = swapchain.extent(),
+                    .depthView = depth.imageView(),
+                    .depthSampler = depth.sampler(),
+                    .colorView = hdrBuffer.imageView(),
+                    .colorSampler = hdrBuffer.sampler(),
+                    .sharingFamilies = vulkanDevice.hasAsyncComputeQueue() && families[0] != families[1]
+                                           ? std::span<const std::uint32_t>(families)
+                                           : std::span<const std::uint32_t>{}});
+}
+
+// Rain wetness and SSR parameters of the frame UBO (Forward PBR).
+void applySurfaceUniforms(UniformBufferObject& data) const {
+    const SurfaceSettings& surface = surfaceSettings;
+    data.wetnessParams = glm::vec4{std::clamp(surface.wetness, 0.0F, 1.0F),
+                                   std::clamp(surface.puddleCoverage, 0.0F, 1.0F),
+                                   1.0F / std::max(surface.puddleScale, 0.05F), std::max(surface.rainRipples, 0.0F)};
+    data.ssrParams = glm::vec4{std::max(surface.ssrIntensity, 0.0F), std::clamp(surface.ssrMaxRoughness, 0.01F, 1.0F),
+                               static_cast<float>(std::clamp<std::uint32_t>(surface.ssrMaxSteps, 8U, 256U)),
+                               std::max(surface.ssrThickness, 0.01F)};
+    data.rainParams = glm::vec4{std::clamp(surface.rainIntensity, 0.0F, 1.0F),
+                                std::clamp(surface.rippleFrequency, 0.0F, 8.0F),
+                                std::clamp(surface.rippleSize, 0.05F, 2.0F), 0.0F};
+}
+
 void createRtContactShadowPass() {
     if (!vulkanDevice.supportsRayQuery() || msaa.enabled())
         return;
@@ -587,6 +623,15 @@ void bindSsgiTexture(ShadowPass& descriptors) {
         descriptors.setSsgiTexture(frame, ssgi);
 }
 
+void bindSsrTextures(ShadowPass& descriptors) {
+    const VkDescriptorImageInfo depth{ssrPass.pyramid().sampler(), ssrPass.pyramid().fullView(),
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo radiance{ssrPass.radianceSampler(), ssrPass.radianceView(),
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+        descriptors.setSsrTextures(frame, depth, radiance);
+}
+
 void bindLocalLights(const ShadowPass& descriptors) {
     for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
         descriptors.setLocalLights(frame, localLightBuffers[frame].handle());
@@ -674,6 +719,7 @@ void createShadowPass() {
     }
     bindGtaoTexture(shadowPass);
     bindSsgiTexture(shadowPass);
+    bindSsrTextures(shadowPass);
     bindLocalLights(shadowPass);
     createDdgiPass();
     bindDdgiResources(shadowPass);
@@ -756,6 +802,7 @@ void createSceneDescriptorPass() {
     }
     bindGtaoTexture(sceneDescriptorPass);
     bindSsgiTexture(sceneDescriptorPass);
+    bindSsrTextures(sceneDescriptorPass);
     bindLocalLights(sceneDescriptorPass);
     bindDdgiResources(sceneDescriptorPass);
     bindContactShadowFallback(sceneDescriptorPass);
@@ -956,6 +1003,8 @@ void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
     waterPass.destroy();
     glassPass.destroy();
     directionalVisibilityPass.destroy();
+    // The visibility resolve layout embeds shadowPass's set layout.
+    visibilityBuffer.destroy();
     // The DDGI trace pipeline layout embeds the forward set layout.
     clusterScene.destroy();
     ddgiPass.destroy();
@@ -969,6 +1018,9 @@ void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
     bloomPass.destroy();
     gtaoPass.destroy();
     ssgiPass.destroy();
+    ssrPass.destroy();
+    volumetricFogPass.destroy();
+    rainPass.destroy();
     destroyVelocityResources();
 
     skyPass.destroy();
@@ -999,6 +1051,7 @@ void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
     createDepthResources();
     createGtaoPass();
     createSsgiPass();
+    createSsrPass();
     configuredGtaoQuality = gtaoQuality;
 
     // Instance buffers outlive swapchain attachments, so changing

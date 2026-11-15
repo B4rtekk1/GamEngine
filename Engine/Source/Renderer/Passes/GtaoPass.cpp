@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/TempImageLog.h" // TEMP-DEBUG
 #include "Engine/Renderer/Passes/GtaoPass.h"
 
 #include "Engine/Renderer/Vulkan/PipelineCache.h"
@@ -275,6 +276,7 @@ void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkCommandPool 
         if (vmaCreateImage(allocator, &image, &alloc, &linearDepthImage_, &linearDepthAllocation_, nullptr) !=
             VK_SUCCESS)
             throw std::runtime_error("Could not create GTAO depth pyramid");
+        tempLogImage("GTAO linear depth", linearDepthImage_, image); // TEMP-DEBUG
         VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         view.image = linearDepthImage_;
         view.viewType = VK_IMAGE_VIEW_TYPE_2D;

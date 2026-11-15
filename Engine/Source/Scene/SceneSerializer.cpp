@@ -1124,6 +1124,134 @@ void loadPostProcess(Scene& scene, const std::filesystem::path& scenePath) {
     }
     scene.setPostProcess(settings);
 }
+
+// Reflection and wetness sidecar, "key value" per line like the post-process one.
+std::filesystem::path surfaceDataPath(const std::filesystem::path& scenePath) {
+    return std::filesystem::path{scenePath.string() + ".surface"};
+}
+
+template <typename Visitor> void visitSurfaceFields(SurfaceSettings& settings, Visitor&& visit) {
+    visit("screenSpaceReflections", settings.screenSpaceReflections);
+    visit("ssrIntensity", settings.ssrIntensity);
+    visit("ssrMaxRoughness", settings.ssrMaxRoughness);
+    visit("ssrThickness", settings.ssrThickness);
+    visit("ssrMaxSteps", settings.ssrMaxSteps);
+    visit("wetness", settings.wetness);
+    visit("puddleCoverage", settings.puddleCoverage);
+    visit("puddleScale", settings.puddleScale);
+    visit("rainRipples", settings.rainRipples);
+    visit("rainIntensity", settings.rainIntensity);
+    visit("rippleFrequency", settings.rippleFrequency);
+    visit("rippleSize", settings.rippleSize);
+}
+
+void saveSurface(const Scene& scene, const std::filesystem::path& scenePath) {
+    const auto path = surfaceDataPath(scenePath);
+    if (!scene.surface()) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        return;
+    }
+    std::ofstream output{path, std::ios::trunc};
+    if (!output)
+        throw std::runtime_error("Could not write scene surface settings");
+    SurfaceSettings settings = *scene.surface();
+    visitSurfaceFields(settings, [&](const char* key, const auto& value) { output << key << ' ' << value << '\n'; });
+}
+
+void loadSurface(Scene& scene, const std::filesystem::path& scenePath) {
+    scene.setSurface(std::nullopt);
+    std::ifstream input{surfaceDataPath(scenePath)};
+    if (!input)
+        return;
+    SurfaceSettings settings{};
+    std::string key;
+    while (input >> key) {
+        bool known = false;
+        visitSurfaceFields(settings, [&](const char* name, auto& value) {
+            if (known || key != name)
+                return;
+            known = true;
+            input >> value;
+        });
+        if (!input)
+            return;
+        if (!known)
+            input.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    }
+    scene.setSurface(settings);
+}
+
+// Volumetric fog sidecar, "key value" per line.
+std::filesystem::path fogDataPath(const std::filesystem::path& scenePath) {
+    return std::filesystem::path{scenePath.string() + ".fog"};
+}
+
+template <typename Visitor> void visitFogFields(FogSettings& settings, Visitor&& visit) {
+    visit("enabled", settings.enabled);
+    visit("quality", settings.quality);
+    visit("density", settings.density);
+    visit("heightFalloff", settings.heightFalloff);
+    visit("baseHeight", settings.baseHeight);
+    visit("albedoR", settings.albedoR);
+    visit("albedoG", settings.albedoG);
+    visit("albedoB", settings.albedoB);
+    visit("anisotropy", settings.anisotropy);
+    visit("localLightScattering", settings.localLightScattering);
+    visit("directionalScattering", settings.directionalScattering);
+    visit("ambientScattering", settings.ambientScattering);
+    visit("noise", settings.noise);
+    visit("distance", settings.distance);
+    visit("temporalBlend", settings.temporalBlend);
+}
+
+void saveFog(const Scene& scene, const std::filesystem::path& scenePath) {
+    const auto path = fogDataPath(scenePath);
+    if (!scene.fog()) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        return;
+    }
+    std::ofstream output{path, std::ios::trunc};
+    if (!output)
+        throw std::runtime_error("Could not write scene fog settings");
+    FogSettings settings = *scene.fog();
+    visitFogFields(settings, [&]<typename T>(const char* key, const T& value) {
+        if constexpr (std::is_enum_v<T>)
+            output << key << ' ' << static_cast<int>(value) << '\n';
+        else
+            output << key << ' ' << value << '\n';
+    });
+}
+
+void loadFog(Scene& scene, const std::filesystem::path& scenePath) {
+    scene.setFog(std::nullopt);
+    std::ifstream input{fogDataPath(scenePath)};
+    if (!input)
+        return;
+    FogSettings settings{};
+    std::string key;
+    while (input >> key) {
+        bool known = false;
+        visitFogFields(settings, [&]<typename T>(const char* name, T& value) {
+            if (known || key != name)
+                return;
+            known = true;
+            if constexpr (std::is_enum_v<T>) {
+                int raw = 0;
+                if (input >> raw && raw >= 0 && raw <= static_cast<int>(VolumetricFogQuality::High))
+                    value = static_cast<T>(raw);
+            } else {
+                input >> value;
+            }
+        });
+        if (!input)
+            return;
+        if (!known)
+            input.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    }
+    scene.setFog(settings);
+}
 } // namespace
 
 void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path) {
@@ -1131,6 +1259,8 @@ void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path
     saveEnvironment(scene, path);
     saveGlobalIllumination(scene, path);
     savePostProcess(scene, path);
+    saveSurface(scene, path);
+    saveFog(scene, path);
 }
 
 void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path,
@@ -1139,6 +1269,8 @@ void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path
     saveEnvironment(scene, path);
     saveGlobalIllumination(scene, path);
     savePostProcess(scene, path);
+    saveSurface(scene, path);
+    saveFog(scene, path);
 }
 
 void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path, const std::uint32_t msaaSamples) {
@@ -1172,6 +1304,8 @@ void SceneSerializer::load(Scene& scene, const std::filesystem::path& path) {
     loadEnvironment(scene, path);
     loadGlobalIllumination(scene, path);
     loadPostProcess(scene, path);
+    loadSurface(scene, path);
+    loadFog(scene, path);
 }
 
 void SceneSerializer::load(Scene& scene, const std::filesystem::path& path,
@@ -1187,6 +1321,8 @@ void SceneSerializer::load(Scene& scene, const std::filesystem::path& path,
     loadEnvironment(scene, path);
     loadGlobalIllumination(scene, path);
     loadPostProcess(scene, path);
+    loadSurface(scene, path);
+    loadFog(scene, path);
 }
 
 void SceneSerializer::load(Scene& scene, const std::filesystem::path& path, std::optional<std::uint32_t>& msaaSamples) {
@@ -1260,8 +1396,22 @@ void SceneSerializer::replace(Scene& destination, Scene& source) {
     destination.detachObjectHandles();
     destination.registry_ = std::move(source.registry_);
     destination.environmentEquirectangular_ = std::move(source.environmentEquirectangular_);
+    // The sidecar settings belong to the loaded scene too: leaving the old
+    // ones in place applied (and on the next save, wrote) the previous
+    // scene's GI, post-process, surface and fog over this scene's files.
+    destination.globalIllumination_ = source.globalIllumination_;
+    destination.postProcess_ = source.postProcess_;
+    destination.surface_ = source.surface_;
+    destination.fog_ = source.fog_;
     source.detachObjectHandles();
     destination.rebuildObjectHandles();
+}
+
+void SceneSerializer::removeSidecars(const std::filesystem::path& scenePath) noexcept {
+    for (const char* suffix : {".terrain", ".environment", ".gi", ".post", ".surface", ".fog"}) {
+        std::error_code ignored;
+        std::filesystem::remove(std::filesystem::path{scenePath.string() + suffix}, ignored);
+    }
 }
 #endif
 

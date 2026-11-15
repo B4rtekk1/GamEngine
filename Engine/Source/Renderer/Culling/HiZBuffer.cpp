@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/TempImageLog.h" // TEMP-DEBUG
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 
 #include <algorithm>
@@ -158,6 +159,7 @@ void HiZBuffer::createImage() {
     allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &m_image, &m_allocation, nullptr) != VK_SUCCESS)
         throw std::runtime_error("Failed to allocate Hi-Z image memory");
+    tempLogImage("HiZBuffer", m_image, imageInfo); // TEMP-DEBUG
 }
 
 void HiZBuffer::createViews() {

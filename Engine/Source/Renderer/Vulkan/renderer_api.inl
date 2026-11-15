@@ -9,7 +9,9 @@ Renderer::Renderer(RenderConfig config)
       gtaoQuality_(config.gtaoQuality), gtaoDebugView_(config.gtaoDebugView), pbrDebugView_(config.pbrDebugView),
       iblQuality_(config.iblQuality), shadowDebugView_(config.shadowDebugView), grassSettings_(config.grass),
       ssgiSettings_(config.ssgi), ddgiSettings_(config.ddgi), postProcessSettings_(config.postProcess),
-      configuredPostProcess_(config.postProcess), state_(std::make_unique<State>()) {
+      configuredPostProcess_(config.postProcess), surfaceSettings_(config.surface),
+      configuredSurface_(config.surface), fogSettings_(config.fog), configuredFog_(config.fog),
+      state_(std::make_unique<State>()) {
     configuredGlobalIllumination_ = globalIllumination();
 }
 
@@ -172,9 +174,25 @@ void Renderer::setPostProcessSettings(const PostProcessSettings& settings) noexc
 const PostProcessSettings& Renderer::postProcessSettings() const noexcept {
     return postProcessSettings_;
 }
+// Read every frame; the SSR pass exists whether or not it traces.
+void Renderer::setSurfaceSettings(const SurfaceSettings& settings) noexcept {
+    surfaceSettings_ = settings;
+}
+const SurfaceSettings& Renderer::surfaceSettings() const noexcept {
+    return surfaceSettings_;
+}
+// Read every frame; the fog pass (re)creates its grid when the quality changes.
+void Renderer::setFogSettings(const FogSettings& settings) noexcept {
+    fogSettings_ = settings;
+}
+const FogSettings& Renderer::fogSettings() const noexcept {
+    return fogSettings_;
+}
 void Renderer::applySceneSettings(const Scene& scene) noexcept {
     setGlobalIllumination(scene.globalIllumination().value_or(configuredGlobalIllumination_));
     setPostProcessSettings(scene.postProcess().value_or(configuredPostProcess_));
+    setSurfaceSettings(scene.surface().value_or(configuredSurface_));
+    setFogSettings(scene.fog().value_or(configuredFog_));
 }
 void Renderer::requestHdrCapture() noexcept {
     if (backend_)
@@ -309,7 +327,7 @@ void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     backend_ = std::make_unique<Backend>(
         scene, window, optimizationFeatures_, renderPath_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_,
         gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, ssgiSettings_,
-        ddgiSettings_, postProcessSettings_, state_->projectRoot,
+        ddgiSettings_, postProcessSettings_, surfaceSettings_, fogSettings_, state_->projectRoot,
         state_->assetManager, state_->forwardPass, state_->skyPass, state_->tonemapPass, state_->temporalAaPass,
         state_->bloomPass, state_->gtaoPass, state_->particlePipeline, state_->canvasRenderer, editorUiBackend_);
     backend_->initializeCore();

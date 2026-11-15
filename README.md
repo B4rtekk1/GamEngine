@@ -65,8 +65,8 @@ cmake --build --preset linux-release --parallel "$(nproc)"
 Windows:
 ```bash
 cmake --preset release
-cmake build --preset release
-./out/build/linux-release/Editor/Editor.exe
+cmake --build --preset release
+.\out\build\release\Editor\Debug\Editor.exe
 ```
 
 ## Contributing

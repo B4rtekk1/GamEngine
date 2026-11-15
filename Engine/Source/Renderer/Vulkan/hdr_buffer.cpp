@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/TempImageLog.h" // TEMP-DEBUG
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 
 #include <stdexcept>
@@ -63,6 +64,7 @@ void HdrBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice dev
         if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS) {
             throw std::runtime_error("Could not allocate HDR image memory");
         }
+        tempLogImage("HdrBuffer", image_, imageInfo); // TEMP-DEBUG
 
         VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         viewInfo.image = image_;

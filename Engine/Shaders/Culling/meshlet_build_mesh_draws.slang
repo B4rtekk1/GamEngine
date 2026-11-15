@@ -24,6 +24,8 @@ struct MeshletDrawEntry { uint visibleInstance; uint meshletId; };
 [[vk::binding(4, 0)]] StructuredBuffer<GPUSceneMaterialRecord> materials;
 [[vk::binding(5, 0)]] RWStructuredBuffer<MeshletDrawEntry> drawList;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> drawCounts;
+// 32 one-sided counts + 36 slot offsets (Culling::DrawBinOffsetCount).
+static const uint TwoSidedCountBase = 68u;
 
 // Every lane of a wave calls this together (`valid` false past the count), so
 // the per-slot reservations can be combined into one atomic per slot and wave.
@@ -40,31 +42,40 @@ void binVisible(uint index, bool valid) {
         flags = instance.idsAndFlags.w;
     }
     // idsAndFlags.w: bit 1 foliage pipeline, bit 3 double-sided material.
-    const uint firstMeshlet = (visible.meshletId & 0x00ffffffu) | ((flags & 10u) != 0u ? 0x80000000u : 0u);
+    const bool twoSided = (flags & 10u) != 0u;
+    const uint firstMeshlet = (visible.meshletId & 0x00ffffffu) | (twoSided ? 0x80000000u : 0u);
     const uint runLength = (visible.meshletId >> 24u) + 1u;
     // Material slots are few and visible runs arrive grouped by instance, so a
     // wave usually spans one or two slots: reserve each slot's entries with a
     // single atomic instead of one per run.
+    // One reservation per (slot, sidedness): one-sided entries fill the
+    // slot's range from the front, two-sided ones from the back
+    // (MeshletDrawTwoSidedCountBase in Common/MeshletDraw.slang).
+    const uint binKey = shaderSlot < 32u ? shaderSlot * 2u + (twoSided ? 1u : 0u) : 0xffffffffu;
     bool pending = shaderSlot < 32u;
     while (WaveActiveAnyTrue(pending)) {
-        const uint slot = WaveActiveMin(pending ? shaderSlot : 0xffffffffu);
-        const bool inSlot = pending && shaderSlot == slot;
+        const uint key = WaveActiveMin(pending ? binKey : 0xffffffffu);
+        const uint slot = key >> 1u;
+        const bool back = (key & 1u) != 0u;
+        const bool inSlot = pending && binKey == key;
         const uint length = inSlot ? runLength : 0u;
         const uint total = WaveActiveSum(length);
         const uint offsetInWave = WavePrefixSum(length);
         uint base = 0u;
         if (WaveIsFirstLane())
-            InterlockedAdd(drawCounts[slot], total, base);
+            InterlockedAdd(drawCounts[back ? TwoSidedCountBase + slot : slot], total, base);
         base = WaveReadLaneFirst(base);
         if (inSlot) {
-            // drawCounts holds the 32 per-slot counts, then the packed slot
+            // drawCounts holds the 32 one-sided counts, then the packed slot
             // offsets: slot s owns entries [drawCounts[32 + s], drawCounts[33 + s]).
             const uint slotStart = drawCounts[32u + slot];
             const uint slotCapacity = drawCounts[33u + slot] - slotStart;
             const uint destination = base + offsetInWave;
-            // The count may pass the capacity; consumers clamp it.
+            // The counts may pass the capacity; consumers clamp them. An
+            // overflowing two-sided entry can then replace a one-sided one,
+            // which the depth prepass's per-entry test still routes right.
             for (uint offset = 0u; offset < runLength && destination + offset < slotCapacity; ++offset)
-                drawList[slotStart + destination + offset] =
+                drawList[slotStart + (back ? slotCapacity - 1u - (destination + offset) : destination + offset)] =
                     MeshletDrawEntry(visibleInstance, firstMeshlet + offset);
             pending = false;
         }

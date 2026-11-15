@@ -70,6 +70,13 @@ uint outputLight(uint4 value, uint slot)
     return ((slot < 2u ? value.x : value.y) >> ((slot & 1u) * 16u)) & 0xffffu;
 }
 
+// Bit 15 of each 16-bit lane of `value` set where that lane is zero. The
+// 15-bit add cannot carry across lanes, so each lane is tested exactly.
+uint zeroLanes(uint value)
+{
+    return ~(((value & 0x7fff7fffu) + 0x7fff7fffu) | value) & 0x80008000u;
+}
+
 float outputOcclusion(uint4 value, uint slot)
 {
     return float((value.z >> (slot * 8u)) & 0xffu) / 255.0;
@@ -210,6 +217,12 @@ void main(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint group
     }
 
     // Spatial estimate of each: weighted mean of its samples around here.
+    // A sample counts for a light when its slot is valid, traced (bits 15
+    // and 13 = 1, 0) and names it: (slot & 0xa3ff) == 0x8000 | light. Both
+    // slots of a word are compared at once, two 16-bit lanes per operation;
+    // a quad traces distinct lights, so at most one slot matches. An empty
+    // light (0xffff) keys 0xffff, which no masked slot equals.
+    const uint4 keys = (lightIds | 0x8000u) * 0x00010001u;
     float4 occlusionSum = 0.0;
     float4 weightSum = 0.0;
     [unroll] for (int dy = -Radius; dy <= Radius; ++dy)
@@ -219,15 +232,15 @@ void main(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint group
             const float weight = weights[(dy + Radius) * (2 * Radius + 1) + dx + Radius];
             if (weight <= 1e-3) continue;
             const uint2 raw = tileRaw[uint((local.y + dy) * TileSize + local.x + dx)];
+            const uint2 masked = raw & 0xa3ffa3ffu;
+            // Bit 14 (occluded) of each lane moved to the lane's bit 15.
+            const uint2 occluded = raw << 1u;
             [unroll] for (uint s = 0u; s < 4u; ++s)
             {
-                const uint slot = rawSlot(raw, s);
-                // An invalid slot yields 0xffff and matches nothing.
-                // Untraced slots name a light but carry no sample.
-                const uint light = (slot & 0xa000u) == 0x8000u ? (slot & 0x3ffu) : 0xfffeu;
-                const float4 match = select(lightIds == light, float4(weight), float4(0.0));
-                weightSum += match;
-                occlusionSum += (slot & 0x4000u) != 0u ? match : float4(0.0);
+                const uint low = zeroLanes(masked.x ^ keys[s]);
+                const uint high = zeroLanes(masked.y ^ keys[s]);
+                weightSum[s] += (low | high) != 0u ? weight : 0.0;
+                occlusionSum[s] += ((low & occluded.x) | (high & occluded.y)) != 0u ? weight : 0.0;
             }
         }
     }

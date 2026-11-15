@@ -7,6 +7,7 @@
 #include "Editor/UI/EditorTheme.h"
 #include "Editor/UI/EditorWidgets.h"
 #include "Elements/NumericControl.h"
+#include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Assets/TextureCooker.h"
 #include "Engine/Core/TaskScheduler.h"
 #include "Engine/Renderer/MeshRenderer.h"
@@ -318,9 +319,8 @@ bool delete_asset_file(const Engine::ScenePreset& scene, const std::filesystem::
         error = "Could not delete asset: " + relative.generic_string();
         return false;
     }
-    if (path.extension() == ".scene") {
-        std::filesystem::remove(std::filesystem::path{path.string() + ".terrain"}, filesystemError);
-    }
+    if (path.extension() == ".scene")
+        Engine::SceneSerializer::removeSidecars(path);
     return true;
 }
 

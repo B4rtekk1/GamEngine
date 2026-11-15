@@ -65,6 +65,18 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     options.colorFormat = colorFormat;
     options.dynamicRendering = true;
     options.additionalColorFormat = hasLocalLightDataAttachment_ ? localLightDataFormat : velocityFormat;
+    // The `_no_velocity_resolved` programs (FORWARD_DEFERRED_LOCAL) write the
+    // local light data at location 1. A resolved lighting pass without that
+    // target (Scene View) selects their colour-only `_nolocal` twins instead.
+    // Only the indexed programs have such twins.
+    const bool colorOnlyResolved = !depthOnly && preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT &&
+                                   !hasVelocityAttachment_ && !hasLocalLightDataAttachment_ &&
+                                   !enableMeshletPipelines;
+    const auto resolvedShader = [colorOnlyResolved](const std::filesystem::path& path) {
+        return path.parent_path() /
+               (path.stem().string() + (colorOnlyResolved ? "_resolved_nolocal" : "_resolved") +
+                path.extension().string());
+    };
     if (hasLocalLightDataAttachment_)
         options.additionalColorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -165,9 +177,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
         stripDepthOnlyAttributes(materialOptions);
         if (preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT &&
             (index == materialShaderIndex(MaterialShader::StandardPBR) || index >= PbrNormalProgramSlot)) {
-            const auto& path = materialOptions.shader;
-            materialOptions.shader =
-                path.parent_path() / (path.stem().string() + "_resolved" + path.extension().string());
+            materialOptions.shader = resolvedShader(materialOptions.shader);
         }
         if (index == PbrFoliageProgramSlot)
             materialOptions.cullMode = VK_CULL_MODE_NONE;
@@ -187,6 +197,11 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
             meshShaderMaterialPipelines_[index].create(
                 device, meshShaderOptions(materialOptions, path.parent_path() / (path.stem().string() + "_meshshader" +
                                                                                  path.extension().string())));
+            if (depthOnly)
+                opaqueMeshShaderMaterialPipelines_[index].create(
+                    device, meshShaderOptions(materialOptions,
+                                              path.parent_path() / (path.stem().string() + "_meshshader_opaque" +
+                                                                    path.extension().string())));
             meshShaderDrawFlags_[index] =
                 (materialOptions.cullMode == VK_CULL_MODE_BACK_BIT ? 1U : 0U) | meshShaderSmallPrimitiveFlag_;
             // MeshletDrawVisibility: the slots the visibility resolve shades.
@@ -214,6 +229,10 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
             if (drawMeshTasksIndirect_ != nullptr) {
                 reducedMeshShaderMaterialPipelines_[index].create(
                     device, meshShaderOptions(materialOptions, reducedShader(materialOptions.shader, "_meshshader")));
+                if (depthOnly)
+                    opaqueReducedMeshShaderMaterialPipelines_[index].create(
+                        device, meshShaderOptions(materialOptions,
+                                                  reducedShader(materialOptions.shader, "_meshshader_opaque")));
                 if (!depthOnly)
                     flatReducedMeshShaderMaterialPipelines_[index].create(
                         device,
@@ -245,10 +264,8 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     foliageOptions.shader = depthOnly                ? options.shader
                             : hasVelocityAttachment_ ? "shaders/forward_pbr.spv"
                                                      : "shaders/forward_pbr_no_velocity.spv";
-    if (preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT) {
-        const auto& path = foliageOptions.shader;
-        foliageOptions.shader = path.parent_path() / (path.stem().string() + "_resolved" + path.extension().string());
-    }
+    if (preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT)
+        foliageOptions.shader = resolvedShader(foliageOptions.shader);
     foliageOptions.cullMode = VK_CULL_MODE_NONE;
     // Vegetation cards use alpha cutout.  They must populate depth before the
     // sky draw and TAA resolve; treating them as a generic transparent stream
@@ -305,7 +322,8 @@ void ForwardPass::destroy() noexcept {
     for (auto& pipelines :
          {&reducedMaterialPipelines_, &reducedTwoSidedMaterialPipelines_, &reducedMeshletMaterialPipelines_,
           &meshShaderMaterialPipelines_, &reducedMeshShaderMaterialPipelines_, &flatMeshShaderMaterialPipelines_,
-          &flatReducedMeshShaderMaterialPipelines_})
+          &flatReducedMeshShaderMaterialPipelines_, &opaqueMeshShaderMaterialPipelines_,
+          &opaqueReducedMeshShaderMaterialPipelines_})
         for (auto& pipeline : *pipelines)
             pipeline.destroy();
     drawMeshTasksIndirect_ = nullptr;
@@ -485,11 +503,14 @@ void ForwardPass::drawMeshShaderMaterial(VkCommandBuffer commandBuffer, VkDescri
     if (drawMeshTasksIndirect_ == nullptr || commands == VK_NULL_HANDLE)
         return;
     const GraphicsPipeline* selected = nullptr;
+    const GraphicsPipeline* opaqueSelected = nullptr;
     std::uint32_t flags = 0;
     if (shaderSlot < MaterialShaderCount) {
         const bool reduced =
             useReduced_ && reducedMeshShaderMaterialPipelines_[shaderSlot].handle() != VK_NULL_HANDLE;
         selected = &(reduced ? reducedMeshShaderMaterialPipelines_ : meshShaderMaterialPipelines_)[shaderSlot];
+        opaqueSelected =
+            &(reduced ? opaqueReducedMeshShaderMaterialPipelines_ : opaqueMeshShaderMaterialPipelines_)[shaderSlot];
         bool flatSelected = false;
         if (useFlatMeshShaders_) {
             const GraphicsPipeline& flat =
@@ -513,16 +534,35 @@ void ForwardPass::drawMeshShaderMaterial(VkCommandBuffer commandBuffer, VkDescri
     }
     if (selected == nullptr || selected->handle() == VK_NULL_HANDLE)
         return;
-    const GraphicsPipeline& pipeline = *selected;
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-    const VkDescriptorSet sets[]{sceneDescriptorSet, meshletDrawSet};
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 2, sets, 0, nullptr);
-    // MeshletDrawConstants in MeshletDraw.slang.
-    const std::uint32_t constants[]{shaderSlot, flags};
-    vkCmdPushConstants(commandBuffer, pipeline.layout(), VK_SHADER_STAGE_MESH_BIT_EXT, 0, sizeof(constants), constants);
-    drawMeshTasksIndirect_(commandBuffer, commands,
-                           static_cast<VkDeviceSize>(shaderSlot) * sizeof(VkDrawMeshTasksIndirectCommandEXT), 1,
-                           sizeof(VkDrawMeshTasksIndirectCommandEXT));
+    // meshlet_build_mesh_commands.slang writes three commands per slot: all
+    // entries, the one-sided ones and the two-sided ones.
+    const auto drawWith = [&](const GraphicsPipeline& pipeline, const std::uint32_t drawFlags,
+                              const std::uint32_t commandSet) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+        const VkDescriptorSet sets[]{sceneDescriptorSet, meshletDrawSet};
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 2, sets, 0,
+                                nullptr);
+        // MeshletDrawConstants in MeshletDraw.slang.
+        const std::uint32_t constants[]{shaderSlot, drawFlags};
+        vkCmdPushConstants(commandBuffer, pipeline.layout(), VK_SHADER_STAGE_MESH_BIT_EXT, 0, sizeof(constants),
+                           constants);
+        drawMeshTasksIndirect_(commandBuffer, commands,
+                               static_cast<VkDeviceSize>(commandSet * MaterialProgramSlotCount + shaderSlot) *
+                                   sizeof(VkDrawMeshTasksIndirectCommandEXT),
+                               1, sizeof(VkDrawMeshTasksIndirectCommandEXT));
+    };
+    // Depth prepass: any `discard` in a fragment program moves all of its
+    // fragments to late depth testing. Only two-sided meshlets can carry
+    // masked or blended materials (they always use the foliage pipeline),
+    // and the binning keeps them at the back of the slot's range, so the
+    // one-sided meshlets are drawn first with the early-depth `_opaque`
+    // program and only the two-sided ones with the alpha-tested program.
+    if (opaqueSelected != nullptr && opaqueSelected->handle() != VK_NULL_HANDLE) {
+        drawWith(*opaqueSelected, flags | MeshShaderSkipTwoSidedFlag, 1U);
+        drawWith(*selected, flags | MeshShaderSkipOneSidedFlag, 2U);
+        return;
+    }
+    drawWith(*selected, flags, 0U);
 }
 
 void ForwardPass::drawFoliage(VkCommandBuffer commandBuffer, const VkDescriptorSet sceneDescriptorSet,

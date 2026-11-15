@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/TempImageLog.h" // TEMP-DEBUG
 #include "Engine/Renderer/Textures/Texture2D.h"
 
 #include "Engine/Assets/Gtex.h"
@@ -320,6 +321,7 @@ void Texture2D::create(const VkPhysicalDevice physicalDevice, const VkDevice dev
         if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS) {
             throw std::runtime_error("Could not allocate Texture2D image with VMA");
         }
+        tempLogImage("Texture2D", image_, imageInfo); // TEMP-DEBUG
         VmaAllocationInfo allocationDetails{};
         vmaGetAllocationInfo(allocator_, allocation_, &allocationDetails);
         memory_ = allocationDetails.deviceMemory;
@@ -532,6 +534,7 @@ void Texture2D::createCooked(const VkPhysicalDevice physicalDevice, const VkDevi
         allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS)
             throw std::runtime_error("Could not allocate cooked Texture2D image with VMA");
+        tempLogImage("Texture2D cooked", image_, imageInfo); // TEMP-DEBUG
         VmaAllocationInfo allocationDetails{};
         vmaGetAllocationInfo(allocator_, allocation_, &allocationDetails);
         memory_ = allocationDetails.deviceMemory;
@@ -677,6 +680,7 @@ void Texture2D::createGtex(const VkPhysicalDevice physicalDevice, const VkDevice
         allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS)
             throw std::runtime_error("Could not allocate resident GTEX Texture2D image");
+        tempLogImage("Texture2D gtex", image_, imageInfo); // TEMP-DEBUG
         VmaAllocationInfo allocationDetails{};
         vmaGetAllocationInfo(allocator_, allocation_, &allocationDetails);
         memory_ = allocationDetails.deviceMemory;

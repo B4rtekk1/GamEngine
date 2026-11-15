@@ -106,6 +106,12 @@ struct RendererFrameData
     float4 clusteredViewportNearFar;
     float4 clusterZScaleBiasEnvironmentMipRtContact;
     LocalLightData localLights[32];
+    // x: wetness, y: puddle coverage, z: 1 / puddle scale (m), w: rain ripple strength.
+    float4 wetnessParams;
+    // x: SSR intensity, y: max roughness, z: Hi-Z steps, w: hit thickness (m).
+    float4 ssrParams;
+    // x: rain intensity (0..1), y: ripple frequency, z: ripple size (m), w: unused.
+    float4 rainParams;
 };
 
 struct MaterialData

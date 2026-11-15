@@ -7,6 +7,8 @@ import Common.ShadowSampling;
 import Common.Displacement;
 import Common.DdgiCommon;
 import Common.DeferredLocalLighting;
+import Common.HiZTrace;
+import Common.ScreenSpaceReflection;
 
 // GENERATED_SHADER_GRAPH_DECLARATIONS
 
@@ -39,11 +41,15 @@ import Common.DeferredLocalLighting;
 // The Game View lighting pass's PBR programs (single-sample, after the depth
 // prepass, no velocity) leave local lights to the deferred compute pass when
 // it runs: they write their shading inputs instead (Common/DeferredLocalLighting).
+// The `_nolocal` variants set it to 0 for lighting passes without that data
+// target (Scene View), which would otherwise leave location 1 unconsumed.
+#ifndef FORWARD_DEFERRED_LOCAL
 #if FORWARD_RESOLVED_VSM && !FORWARD_OUTPUT_VELOCITY && !defined(ENGINE_SHADER_GRAPH) && \
     (MATERIAL_VARIANT == 0 || MATERIAL_VARIANT >= 3)
 #define FORWARD_DEFERRED_LOCAL 1
 #else
 #define FORWARD_DEFERRED_LOCAL 0
+#endif
 #endif
 #endif
 #ifndef FORWARD_MESHLET_INDEXED
@@ -88,12 +94,29 @@ import Common.MeshletDraw;
 #if FORWARD_MESH_SHADER
 #error The visibility resolve replaces the raster stages
 #endif
+// VisibilityClassCount classes; see visibilityClassOfSlot in MeshletDraw.
+#ifndef VISIBILITY_CLASS
+#error The visibility resolve needs its material class
+#endif
 import Common.MeshletDraw;
 // The prepass already rejected cutout texels; compute cannot discard.
 #define FORWARD_DISCARD {}
 // Screen-space inputs and the BRDF LUT have one mip: no derivatives needed.
 #define screenSample(tex, uv) (tex).SampleLevel((uv), 0.0)
+// The resolve queues its screen-space reflections for VisibilityBufferPass's
+// reflection pass (Forward/visibility_ssr.slang) instead of tracing them:
+// the Hi-Z loop and its live state cost every resolve program registers, so
+// every pixel ran at the occupancy of the trace, and the traced pixels
+// diverged from the rest of their warp.
+#ifndef FORWARD_DEFERRED_SSR
+#define FORWARD_DEFERRED_SSR 1
+#endif
+#if FORWARD_DEFERRED_SSR && !FORWARD_DEFERRED_LOCAL
+#error The queued reflections read the normal and roughness of the deferred surface
+#endif
 #else
+#undef FORWARD_DEFERRED_SSR
+#define FORWARD_DEFERRED_SSR 0
 #define FORWARD_DISCARD discard
 #define screenSample(tex, uv) (tex).Sample(uv)
 #endif
@@ -108,6 +131,8 @@ static const uint PBR_DEBUG_NORMALS = 6u;
 static const uint PBR_DEBUG_ROUGHNESS = 7u;
 static const uint PBR_DEBUG_METALLIC = 8u;
 static const uint PBR_DEBUG_AO = 9u;
+static const uint PBR_DEBUG_REFLECTIONS = 10u;
+static const uint PBR_DEBUG_SSR_CONFIDENCE = 11u;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
@@ -134,6 +159,11 @@ static const uint SCREEN_SPACE_EFFECTS_TILE_LIGHTS = 16u;
 // Local lights are added by the deferred compute pass (Game View only).
 static const uint SCREEN_SPACE_EFFECTS_DEFERRED_LOCAL = 32u;
 [[vk::binding(26, 0)]] StructuredBuffer<uint> tileLightIndices;
+// Screen-space reflections (Passes/SsrPass): this frame's closest-surface
+// depth pyramid (level 0 included) and the previous frame's lit colour with
+// its mip chain. Traced only while bit 6 of `screenSpaceEffects` is set.
+[[vk::binding(27, 0)]] Sampler2D ssrClosestDepth;
+[[vk::binding(28, 0)]] Sampler2D ssrRadiance;
 // World-space ray-traced probes. The volume is per frame and view independent,
 // so Scene View samples it as well; gridMin.w is zero while it holds no data.
 [[vk::binding(21, 0)]] Sampler2D ddgiIrradianceAtlas;
@@ -376,6 +406,13 @@ struct ForwardFragmentOutput
 #if FORWARD_DEFERRED_LOCAL
     [[vk::location(1)]] uint4 localLightData : SV_Target1;
 #endif
+#if FORWARD_DEFERRED_SSR
+    // A queued reflection (ScreenSpaceReflection's SsrRequest): `color`
+    // holds `ssrFallback` * `ssrWeight` where the trace may replace it.
+    bool ssrRequested;
+    float3 ssrWeight;
+    float3 ssrFallback;
+#endif
 };
 
 #if MATERIAL_VARIANT == 5
@@ -399,6 +436,78 @@ float foliageNDotL(bool doubleSided, float3 normal, float3 lightDirection)
         return saturate((dot(normal, lightDirection) + FOLIAGE_DIFFUSE_WRAP) / (1.0 + FOLIAGE_DIFFUSE_WRAP));
 #endif
     return doubleSided ? abs(dot(normal, lightDirection)) : max(dot(normal, lightDirection), 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Rain wetness (frame.wetnessParams): porous materials darken and every
+// surface smooths; puddles of standing water collect on upward-facing ground
+// and turn it into a flat dielectric mirror, optionally rippled by raindrops.
+
+float wetHash(float2 p)
+{
+    p = frac(p * float2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return frac(p.x * p.y);
+}
+
+float wetValueNoise(float2 p)
+{
+    const float2 cell = floor(p);
+    const float2 f = frac(p);
+    const float2 u = f * f * (3.0 - 2.0 * f);
+    return lerp(lerp(wetHash(cell), wetHash(cell + float2(1.0, 0.0)), u.x),
+                lerp(wetHash(cell + float2(0.0, 1.0)), wetHash(cell + float2(1.0, 1.0)), u.x), u.y);
+}
+
+// Low-frequency puddle mask in [0, 1]; world XZ divided by the puddle size.
+float wetPuddleNoise(float2 p)
+{
+    return wetValueNoise(p) * 0.6 + wetValueNoise(p * 2.37 + 17.1) * 0.3 + wetValueNoise(p * 5.11 - 3.7) * 0.1;
+}
+
+// Horizontal slope (d height / dx, d height / dz) of expanding raindrop
+// rings. Every cell of a unit grid holds one drop that lands at a random
+// time and place each cycle; a ring travels up to 0.9 cells, so the 3x3
+// neighbourhood is summed and rings cross cell borders. `density` is the
+// share of cells whose drop falls this cycle.
+float2 wetRippleLayer(float2 p, float time, float seed, float density, float rate)
+{
+    const float2 cell = floor(p);
+    const float2 local = p - cell;
+    float2 slope = float2(0.0, 0.0);
+    [unroll] for (int y = -1; y <= 1; ++y)
+    {
+        [unroll] for (int x = -1; x <= 1; ++x)
+        {
+            const float2 neighbour = cell + float2(x, y);
+            const float phase = wetHash(neighbour + seed);
+            const float cycle = time * rate + phase;
+            // A new random landing spot and a new chance to fall every cycle.
+            const float2 cycleSeed = neighbour + seed + floor(cycle) * 7.31;
+            if (wetHash(cycleSeed + 19.3) > density)
+                continue;
+            const float age = frac(cycle);
+            const float2 centre = float2(x, y) + 0.15 + 0.7 * float2(wetHash(cycleSeed + 3.1), wetHash(cycleSeed + 7.7));
+            const float2 delta = local - centre;
+            const float radius = length(delta);
+            const float front = age * 0.9;
+            // A train of two crests behind the front, fading as the ring grows.
+            const float offset = radius - front;
+            const float envelope = saturate(1.0 - abs(offset + 0.06) * 9.0) * (1.0 - age) * (1.0 - age);
+            const float wave = cos(offset * 55.0) * envelope;
+            if (radius > 1.0e-4)
+                slope += delta / radius * wave;
+        }
+    }
+    return slope;
+}
+
+// Screen-space reflections against SsrPass's inputs (Common/ScreenSpaceReflection).
+ReflectionCandidate screenSpaceReflectionAt(float2 pixel, float3 worldPosition, float3 reflectionDirection,
+                                            float roughness)
+{
+    return traceScreenSpaceReflection(ssrClosestDepth, ssrRadiance, frame, pixel, worldPosition, reflectionDirection,
+                                      roughness);
 }
 
 ForwardFragmentOutput shadeForwardFragment(ForwardFragmentInput input)
@@ -607,6 +716,54 @@ ForwardFragmentOutput shadeForwardFragment(ForwardFragmentInput input)
     roughness = clamp(graphSurface.roughness, 0.045, 1.0);
     normal = normalize(graphSurface.normal);
 #endif
+    // Rain wetness. World-space and view independent, so Scene View shows it too.
+    if (frame.wetnessParams.x > 0.0)
+    {
+        const float wetness = saturate(frame.wetnessParams.x);
+        // Ground takes the full rain; walls stay damp, ceilings and the
+        // undersides of eaves stay dry.
+        const float upFacing = saturate((geometricNormal.y - 0.55) / 0.35);
+        float surfaceWet = wetness * lerp(0.4, 1.0, upFacing) * saturate(geometricNormal.y * 2.0 + 1.0);
+        float puddle = 0.0;
+        if (frame.wetnessParams.y > 0.0 && upFacing > 0.0)
+        {
+            const float mask = wetPuddleNoise(input.worldPosition.xz * frame.wetnessParams.z);
+            const float threshold = 1.0 - saturate(frame.wetnessParams.y);
+            puddle = smoothstep(threshold - 0.04, threshold + 0.06, mask) * upFacing * wetness;
+            // A soaked rim around every puddle.
+            surfaceWet = max(surfaceWet, smoothstep(threshold - 0.22, threshold, mask) * upFacing * wetness);
+        }
+        // Water fills a porous surface's pores and darkens it (Lagarde,
+        // "Water drop"); polished and metallic surfaces barely change colour.
+        const float porosity = saturate((roughness - 0.15) * 2.0) * (1.0 - metallic);
+        albedo *= lerp(1.0, lerp(0.85, 0.45, porosity), surfaceWet);
+        roughness = lerp(roughness, 0.06 + 0.3 * roughness, surfaceWet * 0.85);
+        if (puddle > 0.0)
+        {
+            // Standing water: a flat, smooth dielectric layer over the ground.
+            float3 waterNormal = geometricNormal;
+            if (frame.wetnessParams.w > 0.0 && frame.rainParams.x > 0.0)
+            {
+                const float time = frame.windGustFrequencyTime.z;
+                // Frequency raises both how many drop sites are hit per cycle
+                // and how fast the cycles run.
+                const float frequency = max(frame.rainParams.y, 0.0);
+                const float density = saturate((0.25 + 0.75 * frame.rainParams.x) * frequency);
+                const float rate = 1.1 * max(sqrt(frequency), 0.1);
+                // Two overlapping drop grids: rippleSize apart and 0.6 of it.
+                const float2 p = input.worldPosition.xz / max(frame.rainParams.z, 0.05);
+                const float2 slope = wetRippleLayer(p, time, 0.0, density, rate) +
+                                     0.7 * wetRippleLayer(p * 1.7 + 0.37, time * 1.27, 11.0, density, rate);
+                waterNormal = normalize(geometricNormal + float3(slope.x, 0.0, slope.y) * 0.16 * frame.wetnessParams.w);
+            }
+            normal = normalize(lerp(normal, waterNormal, puddle));
+            albedo *= lerp(1.0, 0.7, puddle);
+            metallic = lerp(metallic, 0.0, puddle);
+            roughness = lerp(roughness, 0.03, puddle);
+        }
+        roughness = clamp(roughness, 0.03, 1.0);
+    }
+
     // Specular anti-aliasing: high-frequency normal maps otherwise steer
     // adjacent pixels to unrelated parts of the environment, especially at
     // grazing angles. Derivative-based normal-to-roughness broadens the GGX
@@ -945,9 +1102,16 @@ ForwardFragmentOutput shadeForwardFragment(ForwardFragmentInput input)
     ReflectionCandidate localProbeReflection = {0.0, 0.0};
 #endif
     ReflectionCandidate screenSpaceReflection = {0.0, 0.0};
+    const bool ssrTraced = (frame.screenSpaceEffects & SCREEN_SPACE_EFFECTS_SSR) != 0u && !disableSpecularIbl &&
+                           roughness < frame.ssrParams.y && dot(reflection, geometricNormal) > 0.0;
+#if !FORWARD_DEFERRED_SSR
+    if (ssrTraced)
+        screenSpaceReflection = screenSpaceReflectionAt(input.position.xy, input.worldPosition, reflection, roughness);
+#endif
     ReflectionCandidate rayTracedReflection = {0.0, 0.0};
     prefiltered = resolveReflection(rayTracedReflection, screenSpaceReflection,
                                     localProbeReflection, skyReflection);
+    const float3 resolvedReflection = prefiltered;
     float3 specularIbl = prefiltered * singleScatterSpecular;
     // Horizon specular occlusion (Filament-style): if normal mapping turns
     // the reflection vector below the geometric surface, no environment
@@ -1030,12 +1194,31 @@ ForwardFragmentOutput shadeForwardFragment(ForwardFragmentInput input)
         color = metallic;
     else if (frame.pbrDebugView == PBR_DEBUG_AO)
         color = min(ao, dynamicAo);
+    else if (frame.pbrDebugView == PBR_DEBUG_REFLECTIONS)
+        color = resolvedReflection;
+    else if (frame.pbrDebugView == PBR_DEBUG_SSR_CONFIDENCE)
+        color = !ssrTraced ? float3(0.0, 0.0, 0.08)
+                           : lerp(float3(0.6, 0.0, 0.0), float3(0.0, 1.0, 0.0), screenSpaceReflection.confidence);
 
     ForwardFragmentOutput output;
     output.color = float4(color, baseColor.a);
 #if FORWARD_OUTPUT_VELOCITY
     float2 previousNdc = input.previousClip.xy / input.previousClip.w;
     output.velocity = (input.currentNdc - previousNdc) * 0.5;
+#endif
+#if FORWARD_DEFERRED_SSR
+    // `color` holds specularIbl with the fallback reflection; the trace
+    // replaces it by confidence. The reflection pass rebuilds the ray from
+    // the depth and the deferred surface's normal and roughness.
+    output.ssrRequested = ssrTraced && (frame.pbrDebugView < PBR_DEBUG_ALBEDO ||
+                                        frame.pbrDebugView == PBR_DEBUG_REFLECTIONS ||
+                                        frame.pbrDebugView == PBR_DEBUG_SSR_CONFIDENCE);
+    output.ssrFallback = resolvedReflection;
+    output.ssrWeight = singleScatterSpecular * (horizon * horizon * specularOcclusion);
+    if (frame.pbrDebugView == PBR_DEBUG_REFLECTIONS)
+        output.ssrWeight = 1.0;
+    else if (frame.pbrDebugView == PBR_DEBUG_SSR_CONFIDENCE)
+        output.ssrWeight = float3(0.0, 1.0, 0.0) - float3(0.6, 0.0, 0.0);
 #endif
 #if FORWARD_DEFERRED_LOCAL
     uint nDotLMode = doubleSided ? LocalNDotLTwoSided : LocalNDotLOneSided;
@@ -1118,63 +1301,106 @@ ForwardVertexOutput visibilityVertex(MeshletRecord meshlet, uint corner, uint vi
     return shadeForwardVertex(input, visibleInstance);
 }
 
+// Tiles of this program's material class (visibility_classify.slang).
+[[vk::binding(3, 2)]] StructuredBuffer<uint> classTiles;
+struct VisibilityResolveConstants
+{
+    uint tileCapacity;
+};
+[[vk::push_constant]] ConstantBuffer<VisibilityResolveConstants> resolveConstants;
+// Queued reflections (packSsrRequest), one slot per pixel, and the dispatch
+// buffer whose SsrDispatchBase command the reflection pass runs.
+[[vk::binding(4, 2)]] RWStructuredBuffer<uint4> ssrRequests;
+[[vk::binding(5, 2)]] RWStructuredBuffer<uint> resolveDispatch;
+
+// One workgroup per classified 8x8 tile; pixels of other classes are left
+// to their own program.
 [numthreads(8, 8, 1)]
 [shader("compute")]
-void visibilityResolveMain(uint3 id : SV_DispatchThreadID)
+void visibilityResolveMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
 {
+    const uint tile = classTiles[VISIBILITY_CLASS * resolveConstants.tileCapacity + groupId.x];
+    const uint2 pixel = uint2(tile & 0xffffu, tile >> 16u) * 8u + threadId.xy;
     uint width, height;
     hdrOutput.GetDimensions(width, height);
-    if (id.x >= width || id.y >= height)
+    if (pixel.x >= width || pixel.y >= height)
         return;
-    const uint visibility = visibilityIds.Load(int3(id.xy, 0));
-    if (visibility == VisibilityNone)
+    const uint visibility = visibilityIds.Load(int3(pixel, 0));
+    if (visibility == VisibilityNone || visibilityClass(visibility) != VISIBILITY_CLASS)
         return;
-    const MeshletDrawEntry entry = meshletDrawList[visibility >> VisibilityTriangleBits];
+    const MeshletDrawEntry entry = meshletDrawList[visibilityListIndex(visibility)];
     const MeshletRecord meshlet = meshletRecords[entry.meshlet];
-    const uint3 corners = unpackMeshletTriangle(
-        meshletTriangleRefs[meshlet.range.z + (visibility & ((1u << VisibilityTriangleBits) - 1u))]);
-    const ForwardVertexOutput v0 = visibilityVertex(meshlet, corners.x, entry.visibleInstance);
-    const ForwardVertexOutput v1 = visibilityVertex(meshlet, corners.y, entry.visibleInstance);
-    const ForwardVertexOutput v2 = visibilityVertex(meshlet, corners.z, entry.visibleInstance);
+    const uint3 corners = unpackMeshletTriangle(meshletTriangleRefs[meshlet.range.z + visibilityTriangle(visibility)]);
 
+    // Two phases keep few vertices live: the clip positions alone give the
+    // barycentrics, then each corner is shaded again and accumulated, so
+    // three full vertex outputs never occupy registers together.
+    const float4 clip0 = visibilityVertex(meshlet, corners.x, entry.visibleInstance).position;
+    const float4 clip1 = visibilityVertex(meshlet, corners.y, entry.visibleInstance).position;
+    const float4 clip2 = visibilityVertex(meshlet, corners.z, entry.visibleInstance).position;
     const float2 viewport = float2(width, height);
-    const float2 pixelNdc = (float2(id.xy) + 0.5) / viewport * 2.0 - 1.0;
-    const VisibilityBarycentrics b = visibilityBarycentrics(v0.position, v1.position, v2.position, pixelNdc, viewport);
-#define VISIBILITY_INTERPOLATE(field, weights) \
-    ((weights).x * v0.field + (weights).y * v1.field + (weights).z * v2.field)
+    const float2 pixelNdc = (float2(pixel) + 0.5) / viewport * 2.0 - 1.0;
+    const VisibilityBarycentrics b = visibilityBarycentrics(clip0, clip1, clip2, pixelNdc, viewport);
 
-    ForwardFragmentInput input;
-    input.position = float4(float2(id.xy) + 0.5, 0.0, 1.0);
-    input.color = VISIBILITY_INTERPOLATE(color, b.lambda);
-    input.worldPosition = VISIBILITY_INTERPOLATE(worldPosition, b.lambda);
-    const float3 normal = VISIBILITY_INTERPOLATE(normal, b.lambda);
-    input.normal = normal;
-    input.materialIndex = v0.materialIndex;
-    input.texCoord = VISIBILITY_INTERPOLATE(texCoord, b.lambda);
-    input.tangent = VISIBILITY_INTERPOLATE(tangent, b.lambda);
-    input.texCoord1 = VISIBILITY_INTERPOLATE(texCoord1, b.lambda);
-#if MATERIAL_VARIANT == 5
-    input.instancePivot = v0.instancePivot;
-#endif
+    ForwardFragmentInput input = (ForwardFragmentInput)0;
+    input.position = float4(float2(pixel) + 0.5, 0.0, 1.0);
     // Front faces have a negative signed area (meshletTriangleCulled).
-    input.isFrontFace = determinant(float3x3(v0.position.xyw, v1.position.xyw, v2.position.xyw)) < 0.0;
-    input.texCoordDx = VISIBILITY_INTERPOLATE(texCoord, b.ddx);
-    input.texCoordDy = VISIBILITY_INTERPOLATE(texCoord, b.ddy);
-    input.texCoord1Dx = VISIBILITY_INTERPOLATE(texCoord1, b.ddx);
-    input.texCoord1Dy = VISIBILITY_INTERPOLATE(texCoord1, b.ddy);
+    input.isFrontFace = determinant(float3x3(clip0.xyw, clip1.xyw, clip2.xyw)) < 0.0;
+    float3 normalDx = 0.0;
+    float3 normalDy = 0.0;
+    [loop] for (uint k = 0u; k < 3u; ++k)
+    {
+        const uint corner = k == 0u ? corners.x : k == 1u ? corners.y : corners.z;
+        const float weight = k == 0u ? b.lambda.x : k == 1u ? b.lambda.y : b.lambda.z;
+        const float weightDx = k == 0u ? b.ddx.x : k == 1u ? b.ddx.y : b.ddx.z;
+        const float weightDy = k == 0u ? b.ddy.x : k == 1u ? b.ddy.y : b.ddy.z;
+        const ForwardVertexOutput v = visibilityVertex(meshlet, corner, entry.visibleInstance);
+        input.color += weight * v.color;
+        input.worldPosition += weight * v.worldPosition;
+        input.normal += weight * v.normal;
+        normalDx += weightDx * v.normal;
+        normalDy += weightDy * v.normal;
+        input.tangent += weight * v.tangent;
+        input.texCoord += weight * v.texCoord;
+        input.texCoordDx += weightDx * v.texCoord;
+        input.texCoordDy += weightDy * v.texCoord;
+        input.texCoord1 += weight * v.texCoord1;
+        input.texCoord1Dx += weightDx * v.texCoord1;
+        input.texCoord1Dy += weightDy * v.texCoord1;
+        // Flat attributes: every vertex of a meshlet shares its material.
+        input.materialIndex = v.materialIndex;
+#if MATERIAL_VARIANT == 5
+        input.instancePivot = v.instancePivot;
+#endif
+    }
     // Derivative of normalize(n): the change of n without its radial part.
-    const float inverseLength = rsqrt(max(dot(normal, normal), 1e-12));
-    const float3 unitNormal = normal * inverseLength;
-    const float3 normalDx = VISIBILITY_INTERPOLATE(normal, b.ddx);
-    const float3 normalDy = VISIBILITY_INTERPOLATE(normal, b.ddy);
+    const float inverseLength = rsqrt(max(dot(input.normal, input.normal), 1e-12));
+    const float3 unitNormal = input.normal * inverseLength;
     input.normalDx = (normalDx - unitNormal * dot(unitNormal, normalDx)) * inverseLength;
     input.normalDy = (normalDy - unitNormal * dot(unitNormal, normalDy)) * inverseLength;
-#undef VISIBILITY_INTERPOLATE
 
     const ForwardFragmentOutput output = shadeForwardFragment(input);
-    hdrOutput[id.xy] = output.color;
+    hdrOutput[pixel] = output.color;
 #if FORWARD_DEFERRED_LOCAL
-    localLightSurfaceOutput[id.xy] = output.localLightData;
+    localLightSurfaceOutput[pixel] = output.localLightData;
+#endif
+#if FORWARD_DEFERRED_SSR
+    // One atomic per wave appends its queued pixels and grows the reflection
+    // dispatch to cover them.
+    const uint queued = WaveActiveCountBits(output.ssrRequested);
+    if (queued != 0u)
+    {
+        uint base = 0u;
+        if (WaveIsFirstLane())
+        {
+            InterlockedAdd(resolveDispatch[SsrDispatchCount], queued, base);
+            InterlockedMax(resolveDispatch[SsrDispatchBase], (base + queued + SsrThreads - 1u) / SsrThreads);
+        }
+        base = WaveReadLaneFirst(base);
+        const uint slot = base + WavePrefixCountBits(output.ssrRequested);
+        if (output.ssrRequested && slot < width * height)
+            ssrRequests[slot] = packSsrRequest(pixel, output.ssrWeight, output.ssrFallback);
+    }
 #endif
 }
 #endif

@@ -95,7 +95,7 @@ void ShadowPass::create(
         }
 
         // This is a compact list, not an array indexed by binding number.
-        VkDescriptorSetLayoutBinding bindings[27]{};
+        VkDescriptorSetLayoutBinding bindings[29]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
@@ -154,6 +154,10 @@ void ShadowPass::create(
                         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // see setLocalShadowMask()
         bindings[26] = {TileLightBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
                         nullptr}; // depth-bounded tile light lists; see setTileLights()
+        bindings[27] = {SsrDepthBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                        nullptr}; // SSR closest-depth pyramid; see setSsrTextures()
+        bindings[28] = {SsrRadianceBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // previous frame's lit colour mip chain
         // The DDGI ray generation shader binds this set directly to shade hits
         // with the frame data, materials, their textures and the sky.
         if (rayTracingStages_)
@@ -168,6 +172,10 @@ void ShadowPass::create(
                     binding.stageFlags |= VK_SHADER_STAGE_MESH_BIT_EXT;
                 binding.stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
             }
+        // The volumetric fog kernels bind this set to read the frame data,
+        // light clusters, local lights and the shadow map from compute.
+        for (VkDescriptorSetLayoutBinding& binding : bindings)
+            binding.stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
         const VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr,
                                                          0, static_cast<std::uint32_t>(std::size(bindings)), bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &descriptorSetLayout_) != VK_SUCCESS) {
@@ -179,7 +187,7 @@ void ShadowPass::create(
         // IBL and material samplers, two UBOs and nine SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-             frameCount * 6U * (MaxMaterialTextures + 14U + ReflectionProbeManager::TextureDescriptorCount)},
+             frameCount * 6U * (MaxMaterialTextures + 16U + ReflectionProbeManager::TextureDescriptorCount)},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U * 2U},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 6U * 10U},
         };
@@ -251,7 +259,7 @@ void ShadowPass::create(
             const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
             std::vector<VkDescriptorImageInfo> reflectionTextures(ReflectionProbeManager::TextureDescriptorCount,
                                                                   imageBasedLighting[1]);
-            VkWriteDescriptorSet writes[22]{};
+            VkWriteDescriptorSet writes[24]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                          nullptr,
                          descriptorSets_[frame],
@@ -405,6 +413,11 @@ void ShadowPass::create(
             writes[20].dstBinding = 22;
             writes[21] = writes[1];
             writes[21].dstBinding = 23;
+            // 2D fallbacks until the SSR pass binds its images.
+            writes[22] = writes[18];
+            writes[22].dstBinding = SsrDepthBinding;
+            writes[23] = writes[18];
+            writes[23].dstBinding = SsrRadianceBinding;
             // Standard forward consumes bindings 3/7 as the clustered range
             // headers and compact light-index list.  Grass descriptors below
             // retain their vertex-only cluster/deformation bindings.
@@ -699,6 +712,23 @@ void ShadowPass::setSsgiTexture(const std::uint32_t frameIndex, const VkDescript
                                      nullptr,
                                      nullptr};
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void ShadowPass::setSsrTextures(const std::uint32_t frameIndex, const VkDescriptorImageInfo& depthPyramid,
+                                const VkDescriptorImageInfo& radiance) const {
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    for (std::size_t i = 0; i < writes.size(); ++i)
+        writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                     nullptr,
+                     descriptorSets_.at(frameIndex),
+                     i == 0 ? SsrDepthBinding : SsrRadianceBinding,
+                     0,
+                     1,
+                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                     i == 0 ? &depthPyramid : &radiance,
+                     nullptr,
+                     nullptr};
+    vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 void ShadowPass::setDdgiResources(const std::uint32_t frameIndex, const VkDescriptorImageInfo& irradiance,

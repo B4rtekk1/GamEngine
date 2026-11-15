@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/TempImageLog.h" // TEMP-DEBUG
 #include "Engine/Renderer/RenderGraph/RenderGraph.h"
 
 #include <algorithm>
@@ -1527,6 +1528,7 @@ void RenderGraph::allocateTransients(const std::vector<TextureDesc>& slotDescs) 
                                nullptr) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate a transient RenderGraph image");
             }
+            tempLogImage("RenderGraph transient", allocation.image, createInfo); // TEMP-DEBUG
             allocation.desc = desc;
             transientAllocations_.push_back(allocation);
             leased.push_back(true);

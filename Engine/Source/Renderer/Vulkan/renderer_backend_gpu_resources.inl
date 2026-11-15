@@ -771,8 +771,10 @@ void createCullingResources() {
             sizeof(VkDrawIndexedIndirectCommand) *
                 (static_cast<VkDeviceSize>(meshletBinBudget) + static_cast<VkDeviceSize>(meshletCapacity)),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, vulkanDevice.allocator());
-        // 32 per-slot draw counts (cleared every frame), then the packed slot offsets.
-        std::array<std::uint32_t, MaterialProgramSlotCount + Culling::DrawBinOffsetCount> emptyMeshletCounts{};
+        // 32 per-slot draw counts (cleared every frame), the packed slot
+        // offsets, then the 32 two-sided mesh-shader entry counts (cleared
+        // every frame; MeshletDrawTwoSidedCountBase in MeshletDraw.slang).
+        std::array<std::uint32_t, MaterialProgramSlotCount * 2 + Culling::DrawBinOffsetCount> emptyMeshletCounts{};
         std::ranges::copy(meshletBinOffsets, emptyMeshletCounts.begin() + MaterialProgramSlotCount);
         meshletIndexedDrawCountBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, emptyMeshletCounts.data(), sizeof(emptyMeshletCounts),
@@ -784,7 +786,8 @@ void createCullingResources() {
             meshletDrawListBuffers[frame].createDeviceLocalEmpty(
                 device, sizeof(std::uint32_t) * 2U * std::max<VkDeviceSize>(1, meshletBinBudget),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-            const std::array<VkDrawMeshTasksIndirectCommandEXT, MaterialProgramSlotCount> emptyMeshTasks{};
+            // All, one-sided and two-sided entries per slot (meshlet_build_mesh_commands).
+            const std::array<VkDrawMeshTasksIndirectCommandEXT, MaterialProgramSlotCount * 3> emptyMeshTasks{};
             meshletDrawCommandBuffers[frame].createDeviceLocal(
                 vulkanDevice.physical(), device, emptyMeshTasks.data(), sizeof(emptyMeshTasks),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
@@ -1094,11 +1097,15 @@ void createCullingResources() {
         const std::array<std::uint32_t, MaterialProgramSlotCount> zeroMaterialDrawCounts{};
         drawCountBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            // Transfer source: GlassPass copies its slot's count out.
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
         foliageDrawCountBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            // Transfer source: GlassPass copies its slot's count out.
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
         shadowDrawCountBuffers[frame].createDeviceLocal(
             vulkanDevice.physical(), device, zeroShadowCounts.data(), sizeof(zeroShadowCounts),

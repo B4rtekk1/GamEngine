@@ -17,6 +17,7 @@ import Common.ReflectionProbes;
 import Common.SceneData;
 import Common.ShadowSampling;
 import Common.Displacement;
+import Common.HiZTrace;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
@@ -33,16 +34,20 @@ import Common.Displacement;
 [[vk::binding(7, 0)]] StructuredBuffer<uint> clusterLightIndices;
 [[vk::binding(24, 0)]] StructuredBuffer<LocalLightData> localLights;
 
-// GlassPass inputs: the lit scene behind the glass (mip-mapped) and its
-// closest-surface hardware-depth pyramid (mip 0 is the exact depth).
+// GlassPass inputs: the lit scene behind the glass (mip-mapped), its
+// closest-surface hardware-depth pyramid and the hardware depth itself. The
+// pyramid's level 0 is never written: level 0 lookups read opaqueDepth.
 [[vk::binding(0, 1)]] Sampler2D sceneColor;
 [[vk::binding(1, 1)]] Sampler2D closestDepth;
+[[vk::binding(2, 1)]] Sampler2D opaqueDepth;
 
 static const uint SCREEN_SPACE_EFFECTS_TAA = 4u;
-static const float GLASS_FLT_MAX = 3.402823466e+38;
-// Hi-Z traversal budget. Mirror-like rays get the full budget; the trace
-// stops early when it leaves the screen or finds a hit.
-static const uint GLASS_HIZ_ITERATIONS = 96u;
+// Hi-Z traversal budget. Each step climbs or descends the depth pyramid, so a
+// ray crosses the screen in far fewer steps than a linear march; 32 covers
+// mirror-like rays, rough ones get half. The trace also stops early when it
+// leaves the screen or finds a hit.
+static const uint GLASS_HIZ_ITERATIONS = 32u;
+static const uint GLASS_HIZ_ROUGH_ITERATIONS = 16u;
 static const int GLASS_HIZ_MAX_MIP = 7;
 // Above this roughness SSR adds nothing a prefiltered probe does not.
 static const float GLASS_SSR_MAX_ROUGHNESS = 0.75;
@@ -145,28 +150,34 @@ int pyramidMipCount()
     return int(mips);
 }
 
-float loadClosestDepth(int2 texel, int mip)
+// mipSize: the level's extent (mipResolution), which callers already know;
+// a size query per lookup would cost a texture instruction of its own.
+float loadClosestDepth(int2 texel, int mip, float2 mipSize)
+{
+    return hizLoadClosestDepth(opaqueDepth, closestDepth, texel, mip, mipSize);
+}
+
+// Exact opaque depth (pyramid level 0).
+float loadOpaqueDepth(int2 texel)
 {
     uint width, height, mips;
-    closestDepth.GetDimensions(uint(mip), width, height, mips);
-    return closestDepth.Load(int3(clamp(texel, int2(0, 0), int2(int(width), int(height)) - 1), mip)).r;
+    opaqueDepth.GetDimensions(0, width, height, mips);
+    return opaqueDepth.Load(int3(clamp(texel, int2(0, 0), int2(int(width), int(height)) - 1), 0)).r;
 }
 
 float sceneDepthAt(float2 uv)
 {
-    return loadClosestDepth(int2(uv * screenSize()), 0);
+    return loadOpaqueDepth(int2(uv * screenSize()));
 }
 
 float3 viewFromScreen(float2 uv, float depth)
 {
-    const float4 view = mul(float4(uv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
-    return view.xyz / view.w;
+    return hizViewFromScreen(uv, depth, frame.inverseProjection);
 }
 
 float3 screenFromView(float3 view)
 {
-    const float4 clip = mul(float4(view, 1.0), frame.projection);
-    return float3(clip.xy / clip.w * 0.5 + 0.5, clip.z / clip.w);
+    return hizScreenFromView(view, frame.projection);
 }
 
 float3 viewPosition(float3 world)
@@ -182,7 +193,7 @@ float3 viewDirection(float3 world)
 // Mip extents follow HiZBuffer: floor(size / 2^mip), at least one texel.
 float2 mipResolution(float2 size, int mip)
 {
-    return max(floor(size * exp2(-float(mip))), float2(1.0, 1.0));
+    return hizMipResolution(size, mip);
 }
 
 // Projects a view-space ray to screen space (uv, hardware depth). Perspective
@@ -190,16 +201,7 @@ float2 mipResolution(float2 size, int mip)
 // same screen-space line; pull it towards the camera at most half way.
 bool screenSpaceRay(float3 originView, float3 directionView, out float3 originScreen, out float3 directionScreen)
 {
-    originScreen = screenFromView(originView);
-    directionScreen = float3(0.0, 0.0, 0.0);
-    const float originDistance = max(-originView.z, 1.0e-3);
-    float rayLength = max(originDistance, 1.0);
-    if (directionView.z > 1.0e-5)
-        rayLength = min(rayLength, 0.5 * originDistance / directionView.z);
-    if (rayLength <= 1.0e-5)
-        return false;
-    directionScreen = screenFromView(originView + directionView * rayLength) - originScreen;
-    return any(abs(directionScreen.xy) > 1.0e-7);
+    return hizScreenSpaceRay(originView, directionView, frame.projection, originScreen, directionScreen);
 }
 
 // Hierarchical traversal of the closest-depth pyramid (Uludag, GPU Pro 5;
@@ -210,103 +212,23 @@ bool screenSpaceRay(float3 originView, float3 directionView, out float3 originSc
 // in (uv, depth) and the surface test is a plane intersection.
 bool traceHiZ(float3 origin, float3 direction, uint maxIterations, out float3 hit)
 {
-    const float2 size = screenSize();
-    const int maxMip = min(pyramidMipCount() - 1, GLASS_HIZ_MAX_MIP);
-    const float3 inverseDirection = float3(direction.x != 0.0 ? 1.0 / direction.x : GLASS_FLT_MAX,
-                                           direction.y != 0.0 ? 1.0 / direction.y : GLASS_FLT_MAX,
-                                           direction.z != 0.0 ? 1.0 / direction.z : GLASS_FLT_MAX);
-    // Step just past a boundary so the next lookup lands in the next cell.
-    const float2 crossOffset = float2(direction.x < 0.0 ? -0.005 : 0.005, direction.y < 0.0 ? -0.005 : 0.005) / size;
-    const float2 floorOffset = float2(direction.x < 0.0 ? 0.0 : 1.0, direction.y < 0.0 ? 0.0 : 1.0);
-
-    int mip = 0;
-    float2 mipSize = size;
-    // Leave the origin texel first: the glass itself is not in the pyramid,
-    // but the surface right behind it is.
-    float2 boundary = (floor(origin.xy * mipSize) + floorOffset) / mipSize + crossOffset;
-    float2 boundaryT = (boundary - origin.xy) * inverseDirection.xy;
-    float t = min(boundaryT.x, boundaryT.y);
-    float3 position = origin + direction * t;
-
-    uint iteration = 0u;
-    [loop] while (mip >= 0 && iteration < maxIterations)
-    {
-        if (any(position.xy < 0.0) || any(position.xy > 1.0) || position.z < 0.0 || position.z > 1.0)
-        {
-            hit = position;
-            return false;
-        }
-        const float2 mipPosition = position.xy * mipSize;
-        const float surface = loadClosestDepth(int2(mipPosition), mip);
-        boundary = (floor(mipPosition) + floorOffset) / mipSize + crossOffset;
-        float3 planeT = (float3(boundary, surface) - origin) * inverseDirection;
-        // Only a ray moving away from the camera can meet the surface plane.
-        planeT.z = direction.z > 0.0 ? planeT.z : GLASS_FLT_MAX;
-        const float nearestT = min(min(planeT.x, planeT.y), planeT.z);
-        const bool inFront = surface > position.z;
-        // Reached the cell boundary in front of everything in the cell.
-        const bool skippedCell = inFront && nearestT != planeT.z;
-        if (inFront)
-            t = nearestT;
-        position = origin + direction * t;
-        if (skippedCell)
-        {
-            if (mip < maxMip)
-            {
-                ++mip;
-                mipSize = mipResolution(size, mip);
-            }
-        }
-        else
-        {
-            --mip;
-            if (mip >= 0)
-                mipSize = mipResolution(size, mip);
-        }
-        ++iteration;
-    }
-    hit = position;
-    return mip < 0;
+    return hizTrace(opaqueDepth, closestDepth, screenSize(), min(pyramidMipCount() - 1, GLASS_HIZ_MAX_MIP), origin,
+                    direction, maxIterations, hit);
 }
 
 // Accepts a hit only where the ray actually meets the depth surface (not a
 // thin object it passed behind) and fades it out at the screen border.
 float hitConfidence(float3 hit, float3 originScreen)
 {
-    if (any(hit.xy <= 0.0) || any(hit.xy >= 1.0))
-        return 0.0;
-    const float surface = sceneDepthAt(hit.xy);
-    if (surface >= 0.99999)
-        return 0.0;
-    const float3 surfaceView = viewFromScreen(hit.xy, surface);
-    const float3 hitView = viewFromScreen(hit.xy, hit.z);
-    const float thickness = GLASS_DEPTH_THICKNESS + GLASS_DEPTH_THICKNESS_SCALE * -surfaceView.z;
-    const float behind = length(hitView - surfaceView);
-    const float depthConfidence = 1.0 - smoothstep(0.5 * thickness, thickness, behind);
-    const float2 size = screenSize();
-    const float2 fade = 0.025 * float2(size.y / size.x, 1.0);
-    const float2 border = smoothstep(float2(0.0, 0.0), fade, hit.xy) *
-                          (1.0 - smoothstep(1.0 - fade, float2(1.0, 1.0), hit.xy));
-    // A ray that never left its own pixel hit the surface right behind the
-    // glass: valid for refraction, meaningless for a reflection.
-    return depthConfidence * border.x * border.y * (distance(hit.xy, originScreen.xy) > 0.5 / size.y ? 1.0 : 0.0);
+    return hizHitConfidence(opaqueDepth, screenSize(), frame.inverseProjection, hit, originScreen,
+                            GLASS_DEPTH_THICKNESS, GLASS_DEPTH_THICKNESS_SCALE);
 }
 
 // Samples the scene snapshot with a footprint of `radius` pixels: a rotated
 // four-tap pattern at the matching mip hides the box-filtered mip chain.
 float3 sampleSceneBlurred(float2 uv, float radius, float rotation)
 {
-    if (radius <= 0.75)
-        return sceneColor.SampleLevel(uv, 0.0).rgb;
-    const float2 size = screenSize();
-    const float lod = max(log2(radius) - 0.5, 0.0);
-    const float2 offset = float2(cos(rotation), sin(rotation)) * 0.5 * radius / size;
-    const float2 orthogonal = float2(-offset.y, offset.x);
-    float3 result = sceneColor.SampleLevel(uv + offset, lod).rgb;
-    result += sceneColor.SampleLevel(uv - offset, lod).rgb;
-    result += sceneColor.SampleLevel(uv + orthogonal, lod).rgb;
-    result += sceneColor.SampleLevel(uv - orthogonal, lod).rgb;
-    return result * 0.25;
+    return hizSampleBlurred(sceneColor, screenSize(), uv, radius, rotation);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,26 +257,13 @@ float3 safeRefract(float3 incident, float3 normal, float eta, float3 fallback)
 
 float interleavedGradientNoise(float2 pixel, uint frameIndex)
 {
-    pixel += 5.588238 * float(frameIndex & 63u);
-    return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
+    return hizInterleavedGradientNoise(pixel, frameIndex);
 }
 
 // GGX visible-normal sample (Heitz 2018) in the frame (tangent, bitangent, normal).
 float3 sampleGgxVisibleNormal(float3 viewTangent, float alpha, float2 u)
 {
-    const float3 stretched = normalize(float3(alpha * viewTangent.x, alpha * viewTangent.y, viewTangent.z));
-    const float lengthSquared = dot(stretched.xy, stretched.xy);
-    const float3 t1 = lengthSquared > 0.0 ? float3(-stretched.y, stretched.x, 0.0) * rsqrt(lengthSquared)
-                                          : float3(1.0, 0.0, 0.0);
-    const float3 t2 = cross(stretched, t1);
-    const float r = sqrt(u.x);
-    const float phi = 2.0 * PBR_PI * u.y;
-    const float p1 = r * cos(phi);
-    float p2 = r * sin(phi);
-    const float s = 0.5 * (1.0 + stretched.z);
-    p2 = (1.0 - s) * sqrt(max(1.0 - p1 * p1, 0.0)) + s * p2;
-    const float3 normal = p1 * t1 + p2 * t2 + sqrt(max(1.0 - p1 * p1 - p2 * p2, 0.0)) * stretched;
-    return normalize(float3(alpha * normal.x, alpha * normal.y, max(normal.z, 1.0e-4)));
+    return hizSampleGgxVisibleNormal(viewTangent, alpha, u);
 }
 
 float2 glassTextureUv(MaterialData material, uint slot, float2 uv0, float2 uv1)
@@ -377,8 +286,8 @@ GlassFragmentOutput fragmentMain(GlassFragmentInput input)
     const float2 pixelUv = input.position.xy / size;
     // Opaque occlusion: the scene depth is not this pass's depth attachment
     // (that one only orders glass against glass).
-    const float opaqueDepth = loadClosestDepth(pixel, 0);
-    if (input.position.z > opaqueDepth)
+    const float opaqueDepthHere = loadOpaqueDepth(pixel);
+    if (input.position.z > opaqueDepthHere)
         discard;
 
     MaterialData material = materials[input.materialIndex];
@@ -519,9 +428,18 @@ GlassFragmentOutput fragmentMain(GlassFragmentInput input)
             reflectionDirection = sampled;
     }
     const uint prefilteredMipCount = max(uint(frame.clusterZScaleBiasEnvironmentMipRtContact.z), 1u);
-    ReflectionCandidate sky = {
-        prefilteredEnvironmentMap.SampleLevel(reflectionDirection, roughness * float(prefilteredMipCount - 1u)).rgb,
-        1.0};
+    // The sky is the last resort: a ray that missed SSR and every probe
+    // usually left the screen towards whatever stands in front of the glass
+    // (the street, facades), not open sky. A smooth pane would otherwise
+    // mirror sharp sky detail (stars, sun disc) straight back at the camera.
+    // Only reflections that rise well above the horizon keep the sharp sky;
+    // lower ones get the cosine-convolved environment, which keeps the
+    // ambient level but carries no point detail.
+    const float skyOpenness = smoothstep(0.05, 0.45, reflectionDirection.y);
+    const float3 sharpSky =
+        prefilteredEnvironmentMap.SampleLevel(reflectionDirection, roughness * float(prefilteredMipCount - 1u)).rgb;
+    ReflectionCandidate sky = {lerp(irradianceMap.SampleLevel(reflectionDirection, 0.0).rgb, sharpSky, skyOpenness),
+                               1.0};
     ReflectionCandidate probe = sampleLocalProbes(frame, clusterLightIndices, input.worldPosition, reflectionDirection,
                                                   roughness, prefilteredMipCount, lightRange);
     ReflectionCandidate screenSpace = {float3(0.0, 0.0, 0.0), 0.0};
@@ -532,7 +450,7 @@ GlassFragmentOutput fragmentMain(GlassFragmentInput input)
         if (screenSpaceRay(originView, viewDirection(reflectionDirection), rayOrigin, rayDirection))
         {
             float3 hit;
-            const uint budget = uint(lerp(float(GLASS_HIZ_ITERATIONS), 32.0, saturate(roughness / GLASS_SSR_MAX_ROUGHNESS)));
+            const uint budget = uint(lerp(float(GLASS_HIZ_ITERATIONS), float(GLASS_HIZ_ROUGH_ITERATIONS), saturate(roughness / GLASS_SSR_MAX_ROUGHNESS)));
             if (traceHiZ(rayOrigin, rayDirection, budget, hit))
             {
                 const float confidence = hitConfidence(hit, rayOrigin) *
@@ -566,8 +484,8 @@ GlassFragmentOutput fragmentMain(GlassFragmentInput input)
     const float3 exitDirection = safeRefract(inside, geometricNormal, ior, incident);
 
     // Scene point behind this pixel, along the unrefracted view ray.
-    const float3 behindView = viewFromScreen(pixelUv, opaqueDepth);
-    const bool skyBehind = opaqueDepth >= 0.99999;
+    const float3 behindView = viewFromScreen(pixelUv, opaqueDepthHere);
+    const bool skyBehind = opaqueDepthHere >= 0.99999;
     const float behindDistance = skyBehind ? 1.0e4 : max(length(behindView - originView), 0.0);
     // Estimate: continue the exit ray as far as the scene behind the pixel.
     const float3 estimateView = viewPosition(exitPoint) + viewDirection(exitDirection) * behindDistance;
@@ -595,7 +513,7 @@ GlassFragmentOutput fragmentMain(GlassFragmentInput input)
     if (any(refractedUv <= 0.0) || any(refractedUv >= 1.0) || refractedDepth < input.position.z)
     {
         refractedUv = pixelUv;
-        refractedDepth = opaqueDepth;
+        refractedDepth = opaqueDepthHere;
     }
     // Frosting: the transmitted lobe widens with roughness (none at IOR 1)
     // and with the distance to what is seen through the glass.
@@ -642,12 +560,34 @@ GlassFragmentOutput fragmentMain(GlassFragmentInput input)
         }
         directIrradiance += radiance * abs(dot(normal, lightDirection));
     }
+    // Lights go in batches of four, as in forward_pbr: their indices and
+    // positions load as independent requests and the range test runs on all
+    // four before any shading. One light at a time, the index -> light load
+    // chain of every cluster entry dominated the glass at night, where most
+    // of a cluster's lights do not reach the pane.
     const uint lightCount = min(lightRange.lightCount, 256u);
-    for (uint entry = 0u; entry < lightCount; ++entry)
+    for (uint batchStart = 0u; batchStart < lightCount; batchStart += 4u)
     {
-        const uint lightIndex = clusterLightIndices[lightRange.lightOffset + entry];
-        if (lightIndex >= frame.localLightCount)
+    uint4 batch;
+    [unroll] for (uint k = 0u; k < 4u; ++k)
+        batch[k] = batchStart + k < lightCount ? clusterLightIndices[lightRange.lightOffset + batchStart + k]
+                                               : 0xffffffffu;
+    uint inRange = 0u;
+    [unroll] for (uint k = 0u; k < 4u; ++k)
+    {
+        if (batch[k] >= frame.localLightCount)
             continue;
+        const float4 positionRange = localLights[batch[k]].positionRange;
+        const float3 offset = positionRange.xyz - input.worldPosition;
+        const float squared = dot(offset, offset);
+        if (squared > 1.0e-8 && squared < positionRange.w * positionRange.w)
+            inRange |= 1u << k;
+    }
+    [loop] while (inRange != 0u)
+    {
+        const uint slot = firstbitlow(inRange);
+        inRange &= inRange - 1u;
+        const uint lightIndex = slot == 0u ? batch.x : slot == 1u ? batch.y : slot == 2u ? batch.z : batch.w;
         const LocalLightData local = localLights[lightIndex];
         const float3 toLight = local.positionRange.xyz - input.worldPosition;
         const float distanceSquared = dot(toLight, toLight);
@@ -664,8 +604,14 @@ GlassFragmentOutput fragmentMain(GlassFragmentInput input)
             const float cone = dot(normalize(-local.directionOuterCos.xyz), localDirection);
             attenuation *= smoothstep(local.directionOuterCos.w, local.parameters.x, cone);
         }
+        // Lights near the end of their range add almost nothing (dozens per
+        // cluster in dense scenes): skip them before the GGX, with the
+        // forward and deferred passes' cutoff. |N.L| bounds both terms.
+        const float cosine = dot(normal, localDirection);
+        if (local.colorIntensity.w * attenuation * abs(cosine) < LocalLightCutoff)
+            continue;
         const float3 radiance = local.colorIntensity.rgb * local.colorIntensity.w * attenuation;
-        const float nDotL = saturate(dot(normal, localDirection));
+        const float nDotL = saturate(cosine);
         if (nDotL > 0.0)
         {
             const float3 halfway = normalize(toCamera + localDirection);
@@ -675,7 +621,8 @@ GlassFragmentOutput fragmentMain(GlassFragmentInput input)
                               lerp(float3(fresnel, fresnel, fresnel), f0, metallic) / max(4.0 * nDotV * nDotL, 1.0e-4) *
                               radiance * nDotL;
         }
-        directIrradiance += radiance * abs(dot(normal, localDirection));
+        directIrradiance += radiance * abs(cosine);
+    }
     }
 
     // ---- Composite -------------------------------------------------------

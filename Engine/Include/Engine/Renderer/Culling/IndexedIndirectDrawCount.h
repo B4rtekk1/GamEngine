@@ -43,6 +43,14 @@ class IndexedIndirectDrawCount final {
     /** @brief Returns whether the operation has valid command and count buffers. */
     [[nodiscard]] bool valid() const noexcept;
 
+    /** @brief The buffer holding the draw count, and the count's byte offset in it. */
+    [[nodiscard]] VkBuffer countBuffer() const noexcept {
+        return countBuffer_;
+    }
+    [[nodiscard]] VkDeviceSize countOffset() const noexcept {
+        return countOffset_;
+    }
+
   private:
     VkBuffer commandBuffer_{VK_NULL_HANDLE};
     VkBuffer countBuffer_{VK_NULL_HANDLE};

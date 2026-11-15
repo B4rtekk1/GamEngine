@@ -161,13 +161,6 @@ bool shadowKernelInCenterPage(float2 virtualPixel, float radius)
            all(uint2(maxPixel) / PAGE_RESOLUTION == centerPage);
 }
 
-float sampleResolvedShadowKernelTap(Sampler2DShadow linearShadowMap,
-                                    float2 virtualPixel, uint physical, float compareDepth)
-{
-    return 1.0 - linearShadowMap.SampleCmpLevelZero(
-        virtualPixelAtlasUv(virtualPixel, physical), compareDepth);
-}
-
 // Read one unfiltered virtual texel for the PCSS blocker pass. Sampling the
 // physical atlas directly is safe only after this virtual-to-physical resolve.
 bool sampleVirtualShadowDepth(Sampler2D shadowDepthMap, float2 virtualPixel,
@@ -311,11 +304,10 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
         float2(-0.26496911, -0.41893023), float2(0.79197514, 0.19090188),
         float2(-0.24188840, 0.99706507), float2(-0.81409955, 0.91437590),
         float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)};
-    const float rotation = shadowKernelRotation(pixelCoordinate, temporalSampleIndex,
-                                                temporalShadowJitter);
+    // The kernel rotation (a hash and a sincos) is evaluated only by the
+    // Poisson filters below, which most receivers never reach.
     float rotationSin;
     float rotationCos;
-    sincos(rotation, rotationSin, rotationCos);
 
     if (useStablePoisson)
     {
@@ -412,29 +404,32 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
         // Contact shadows need silhouette antialiasing too; penumbra width
         // must not reduce the comparison budget below twelve samples.
         const uint tapCount = penumbraRadius < 3.5 ? 12u : 16u;
-        const uint kernelPhysical = centerPhysical;
-        const bool kernelInPage = shadowKernelInCenterPage(virtualPixel, penumbraRadius);
+        sincos(shadowKernelRotation(pixelCoordinate, temporalSampleIndex, temporalShadowJitter),
+               rotationSin, rotationCos);
+        const float2 axisX = float2(rotationCos, rotationSin) * penumbraRadius;
+        const float2 axisY = float2(-rotationSin, rotationCos) * penumbraRadius;
         float filteredShadow = 0.0;
         float totalWeight = 0.0;
+        if (shadowKernelInCenterPage(virtualPixel, penumbraRadius))
+        {
+            // One page: every tap is the receiver's atlas position plus its
+            // offset, with no residency test.
+            const float2 centerAtlasPixelUv = virtualPixelAtlasUv(virtualPixel, centerPhysical);
+            const float atlasTexel = 1.0 / float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
+            [loop]
+            for (uint tap = 0; tap < tapCount; ++tap)
+                filteredShadow += 1.0 - linearShadowMap.SampleCmpLevelZero(
+                    centerAtlasPixelUv + (poisson[tap].x * axisX + poisson[tap].y * axisY) * atlasTexel,
+                    currentDepth - bias);
+            return filteredShadow / float(tapCount);
+        }
         [loop]
         for (uint tap = 0; tap < tapCount; ++tap)
         {
             bool tapResident;
-            const float2 offset = float2(
-                poisson[tap].x * rotationCos - poisson[tap].y * rotationSin,
-                poisson[tap].x * rotationSin + poisson[tap].y * rotationCos);
-            const float2 tapPixel = virtualPixel + offset * penumbraRadius;
-            float tapShadow;
-            if (kernelInPage)
-            {
-                tapResident = true;
-                tapShadow = sampleResolvedShadowKernelTap(
-                    linearShadowMap, tapPixel, kernelPhysical, currentDepth - bias);
-            }
-            else
-                tapShadow = sampleVirtualShadowBilinear(
-                    shadowMap, linearShadowMap, tapPixel, level, pageTable,
-                    currentDepth - bias, tapResident);
+            const float tapShadow = sampleVirtualShadowBilinear(
+                shadowMap, linearShadowMap, virtualPixel + poisson[tap].x * axisX + poisson[tap].y * axisY,
+                level, pageTable, currentDepth - bias, tapResident);
             if (!tapResident)
                 continue;
             filteredShadow += tapShadow;
@@ -472,6 +467,10 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     // PCF16 is paid only where the footprint crosses a shadow silhouette.
     float initialShadow = 0.0;
     uint initialTapCount = 0;
+    // Inside one page the atlas is a translated copy of the virtual texels:
+    // address every tap relative to the receiver's atlas position.
+    const float2 centerAtlasPixelUv = virtualPixelAtlasUv(virtualPixel, centerPhysical);
+    const float atlasTexel = 1.0 / float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
     if (shadowKernelInCenterPage(virtualPixel, 0.5))
     {
         // Away from page edges the probes need neither a page-table fetch
@@ -481,9 +480,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
         {
             [unroll]
             for (int x = 0; x < 2; ++x)
-                initialShadow += sampleResolvedShadowKernelTap(
-                    linearShadowMap, virtualPixel + float2(x - 0.5, y - 0.5),
-                    centerPhysical, currentDepth - bias);
+                initialShadow += 1.0 - linearShadowMap.SampleCmpLevelZero(
+                    centerAtlasPixelUv + float2(x - 0.5, y - 0.5) * atlasTexel, currentDepth - bias);
         }
         initialTapCount = 4;
     }
@@ -511,27 +509,31 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
 
     float filteredShadow = 0.0;
     float totalWeight = 0.0;
-    const uint kernelPhysical = centerPhysical;
-    const bool kernelInPage = shadowKernelInCenterPage(virtualPixel, 1.25);
-    [unroll]
+    sincos(shadowKernelRotation(pixelCoordinate, temporalSampleIndex, temporalShadowJitter),
+           rotationSin, rotationCos);
+    // Rotate the radius into the basis once; each tap is then two FMAs.
+    const float2 axisX = float2(rotationCos, rotationSin) * 1.25;
+    const float2 axisY = float2(-rotationSin, rotationCos) * 1.25;
+    if (shadowKernelInCenterPage(virtualPixel, 1.25))
+    {
+        // The common case: one page, no residency test per tap.
+        [unroll]
+        for (uint tap = 0; tap < 16; ++tap)
+        {
+            const float2 offset = poisson[tap].x * axisX + poisson[tap].y * axisY;
+            filteredShadow += 1.0 - linearShadowMap.SampleCmpLevelZero(
+                centerAtlasPixelUv + offset * atlasTexel, currentDepth - bias);
+        }
+        return filteredShadow * (1.0 / 16.0);
+    }
+    [loop]
     for (uint tap = 0; tap < 16; ++tap)
     {
-        const float2 offset = float2(
-            poisson[tap].x * rotationCos - poisson[tap].y * rotationSin,
-            poisson[tap].x * rotationSin + poisson[tap].y * rotationCos);
+        const float2 offset = poisson[tap].x * axisX + poisson[tap].y * axisY;
         bool tapResident;
-        const float2 tapPixel = virtualPixel + offset * 1.25;
-        float tapShadow;
-        if (kernelInPage)
-        {
-            tapResident = true;
-            tapShadow = sampleResolvedShadowKernelTap(
-                linearShadowMap, tapPixel, kernelPhysical, currentDepth - bias);
-        }
-        else
-            tapShadow = sampleVirtualShadowBilinear(
-                shadowMap, linearShadowMap, tapPixel, level, pageTable,
-                currentDepth - bias, tapResident);
+        const float tapShadow = sampleVirtualShadowBilinear(
+            shadowMap, linearShadowMap, virtualPixel + offset, level, pageTable,
+            currentDepth - bias, tapResident);
         if (!tapResident) continue;
         filteredShadow += tapShadow;
         totalWeight += 1.0;
@@ -556,29 +558,12 @@ float shadowFootprintFromProjectedUv(float2 uv, float4x4 clipMatrix
 #endif
 }
 
-float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix
-#if defined(SHADOW_COMPUTE)
-    , float3 worldRight, float3 worldDown
-#endif
-)
-{
-    const float4 lightClip = mul(float4(worldPosition, 1.0), clipMatrix);
-    if (abs(lightClip.w) < 1.0e-6)
-        return 0.0;
-    const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
-    return shadowFootprintFromProjectedUv(uv, clipMatrix
-#if defined(SHADOW_COMPUTE)
-        , worldRight, worldDown
-#endif
-    );
-}
-
 uint selectVirtualShadowLevel(float3 worldPosition, ConstantBuffer<RendererFrameData> shadowFrame,
                               const uint shadowQuality,
 #if defined(SHADOW_COMPUTE)
                               float3 worldRight, float3 worldDown,
 #endif
-                              out float footprintInTexels)
+                              out float footprintInTexels, out float baseFootprintInTexels)
 {
     const float threshold = shadowTexelFootprintThreshold(shadowQuality);
     footprintInTexels = 0.0;
@@ -598,25 +583,27 @@ uint selectVirtualShadowLevel(float3 worldPosition, ConstantBuffer<RendererFrame
 #endif
         );
     }
+    baseFootprintInTexels = baseFootprint;
     [unroll]
     for (uint level = 0; level < SHADOW_CLIP_LEVELS; ++level)
     {
-        const float4 lightClip = mul(float4(worldPosition, 1.0), shadowFrame.shadowClipMatrices[level]);
-        if (abs(lightClip.w) < 1.0e-6) continue;
-        const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
-        if (any(uv < 0.0) || any(uv >= 1.0)) continue;
-
         // This is the same LOD rule as receiver marking, but uses both
         // screen-space axes. Sampling must never let incidental L0 cache
-        // residency override the requested geometric LOD.
+        // residency override the requested geometric LOD. Test the footprint
+        // first: a level it rejects needs no bounds test, and so no matrix
+        // multiply (most receivers select a coarser level than L0).
         const float levelFootprint = baseFootprint *
             shadowFrame.shadowClipConstants[0].worldTexelSize /
             max(shadowFrame.shadowClipConstants[level].worldTexelSize, 1.0e-6);
-        if (levelFootprint <= threshold || level + 1 == SHADOW_CLIP_LEVELS)
-        {
-            footprintInTexels = levelFootprint;
-            return level;
-        }
+        if (levelFootprint > threshold && level + 1 != SHADOW_CLIP_LEVELS) continue;
+
+        const float4 lightClip = level == 0
+            ? baseClip : mul(float4(worldPosition, 1.0), shadowFrame.shadowClipMatrices[level]);
+        if (abs(lightClip.w) < 1.0e-6) continue;
+        const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
+        if (any(uv < 0.0) || any(uv >= 1.0)) continue;
+        footprintInTexels = levelFootprint;
+        return level;
     }
     return SHADOW_CLIP_LEVELS - 1;
 }
@@ -643,12 +630,13 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
     debug.resolvedResident = 0;
     bool resident;
     float desiredFootprintInTexels;
+    float baseFootprintInTexels;
     const uint desiredLevel = selectVirtualShadowLevel(
         worldPosition, shadowFrame, shadowQuality,
 #if defined(SHADOW_COMPUTE)
         worldRight, worldDown,
 #endif
-        desiredFootprintInTexels);
+        desiredFootprintInTexels, baseFootprintInTexels);
     debug.desiredClipLevel = desiredLevel;
     debug.resolvedClipLevel = desiredLevel;
     [loop]
@@ -676,13 +664,12 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
             // screen-space footprint threshold.  The latter keeps adjacent
             // pixels from abruptly switching between independently rendered
             // clip levels, which otherwise appears as horizontal LOD seams.
+            // The clip levels share one light basis (selectVirtualShadowLevel):
+            // a fallback level's footprint is the L0 one scaled by texel size.
             const float footprintInTexels = level == desiredLevel
                 ? desiredFootprintInTexels
-                : shadowFootprintInTexels(worldPosition, shadowFrame.shadowClipMatrices[level]
-#if defined(SHADOW_COMPUTE)
-                    , worldRight, worldDown
-#endif
-                );
+                : baseFootprintInTexels * shadowFrame.shadowClipConstants[0].worldTexelSize /
+                      max(shadowFrame.shadowClipConstants[level].worldTexelSize, 1.0e-6);
             const float threshold = shadowTexelFootprintThreshold(shadowQuality);
             const float lodBlend = smoothstep(threshold * 0.70, threshold, footprintInTexels);
             const float clipBlend = smoothstep(0.75, 0.95, clipEdge);

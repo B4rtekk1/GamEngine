@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/TempImageLog.h" // TEMP-DEBUG
 #include "Engine/Renderer/Textures/VirtualTexture.h"
 
 #include "Engine/Assets/Gtex.h"
@@ -166,6 +167,7 @@ void VirtualTexture::create(const VkPhysicalDevice physicalDevice, const VkDevic
     allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (vmaCreateImage(allocator_, &info, &allocationInfo, &cacheImage_, &cacheAllocation_, nullptr) != VK_SUCCESS)
         throw std::runtime_error("Could not allocate virtual texture page cache");
+    tempLogImage("VirtualTexture cache", cacheImage_, info); // TEMP-DEBUG
 
     VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view.image = cacheImage_;

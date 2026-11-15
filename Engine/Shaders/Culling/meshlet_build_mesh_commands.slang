@@ -10,9 +10,20 @@ static const uint MeshletDrawRow = 32768u;
 // maxMeshWorkGroupTotalCount is at least 2^22.
 static const uint MaxWorkGroups = 1u << 22u;
 
-// 32 per-slot entry counts, then the packed slot offsets.
+// 32 one-sided entry counts, the 36 packed slot offsets, then the 32
+// two-sided entry counts (MeshletDrawTwoSidedCountBase).
 [[vk::binding(0, 0)]] StructuredBuffer<uint> drawCounts;
+// Three commands per slot, in sets of SlotCount: every entry, the one-sided
+// entries only, the two-sided entries only (ForwardPass::drawMeshShaderMaterial).
 [[vk::binding(1, 0)]] RWStructuredBuffer<MeshTasksIndirectCommand> commands;
+static const uint TwoSidedCountBase = SlotCount + 36u;
+
+MeshTasksIndirectCommand commandFor(uint count) {
+    count = min(count, MaxWorkGroups);
+    return count == 0u
+        ? MeshTasksIndirectCommand(0u, 0u, 0u)
+        : MeshTasksIndirectCommand(min(count, MeshletDrawRow), (count + MeshletDrawRow - 1u) / MeshletDrawRow, 1u);
+}
 
 [numthreads(32, 1, 1)]
 [shader("compute")]
@@ -20,8 +31,9 @@ void main(uint3 threadId : SV_DispatchThreadID) {
     const uint slot = threadId.x;
     if (slot >= SlotCount) return;
     const uint capacity = drawCounts[SlotCount + 1u + slot] - drawCounts[SlotCount + slot];
-    const uint count = min(min(drawCounts[slot], capacity), MaxWorkGroups);
-    commands[slot] = count == 0u
-        ? MeshTasksIndirectCommand(0u, 0u, 0u)
-        : MeshTasksIndirectCommand(min(count, MeshletDrawRow), (count + MeshletDrawRow - 1u) / MeshletDrawRow, 1u);
+    const uint oneSided = min(drawCounts[slot], capacity);
+    const uint twoSided = min(drawCounts[TwoSidedCountBase + slot], capacity - oneSided);
+    commands[slot] = commandFor(oneSided + twoSided);
+    commands[SlotCount + slot] = commandFor(oneSided);
+    commands[SlotCount * 2u + slot] = commandFor(twoSided);
 }

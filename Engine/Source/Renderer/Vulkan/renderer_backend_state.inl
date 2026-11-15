@@ -97,8 +97,9 @@ TileLightCullingPass tileLightCulling;
 DeferredLocalLightingPass deferredLocalLighting;
 // Set while recording a frame whose Game View local lights are deferred.
 bool deferredLocalThisFrame = false;
-// Visibility-buffer prototype (GAMENGINE_VISBUFFER=1): the depth prepass
-// writes triangle ids and a compute pass shades the PBR slots from them.
+// Visibility buffer: the depth prepass writes triangle ids and compute
+// passes shade the PBR and foliage slots from them. On by default;
+// GAMENGINE_VISBUFFER=0 keeps the raster lighting pass for every slot.
 VisibilityBufferPass visibilityBuffer;
 bool visibilityResolveThisFrame = false;
 // Any material displaces its vertices (the resolve has no displacement).
@@ -106,7 +107,7 @@ bool materialsDisplaced = true;
 static bool visibilityBufferRequested() noexcept {
     static const bool requested = [] {
         const char* value = std::getenv("GAMENGINE_VISBUFFER");
-        return value != nullptr && std::string_view{value} == "1";
+        return value == nullptr || std::string_view{value} != "0";
     }();
     return requested;
 }
@@ -176,6 +177,17 @@ void saveShadowTraceDecision(const float classicMs, const float clusterMs) const
 std::uint32_t gameScreenSpaceEffects{1};
 DirectionalVisibilityPass directionalVisibilityPass;
 SsgiPass ssgiPass;
+// Screen-space reflection inputs: this frame's MIN depth pyramid and the
+// previous frame's lit colour. Forward traces against them.
+SsrPass ssrPass;
+// SSR is enabled for the Game View this frame: build the pyramid, capture
+// the radiance. ssrTracedThisFrame additionally needs a captured radiance.
+bool ssrActiveThisFrame{false};
+bool ssrTracedThisFrame{false};
+// Froxel fog of the Game View; created on first use and with the grid size.
+VolumetricFogPass volumetricFogPass;
+// Falling rain streaks of the Game View; created on first use.
+RainPass rainPass;
 // Debug HDR readback (Renderer::requestHdrCapture).
 bool hdrCaptureRequested{false};
 std::array<Buffer, MAX_FRAMES_IN_FLIGHT> hdrCaptureBuffers{};
@@ -382,6 +394,8 @@ const GrassRenderSettings& grassSettings;
 const SsgiSettings& ssgiSettings;
 const DdgiSettings& ddgiSettings;
 const PostProcessSettings& postProcessSettings;
+const SurfaceSettings& surfaceSettings;
+const FogSettings& fogSettings;
 Assets::AssetManager& assetManager;
 SceneGpuResources sceneGpu;
 CameraController cameraController;

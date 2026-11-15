@@ -30,6 +30,9 @@ void cleanup() {
         sceneGlassPass.destroy();
         gtaoPass.destroy();
         ssgiPass.destroy();
+        ssrPass.destroy();
+        volumetricFogPass.destroy();
+        rainPass.destroy();
         for (Buffer& capture : hdrCaptureBuffers)
             capture.destroy();
         for (Buffer& capture : frameCaptureBuffers)

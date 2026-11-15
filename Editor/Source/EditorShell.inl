@@ -800,11 +800,7 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         if (EditorUI::dangerButton("Delete", {104.0F, 0.0F})) {
             std::error_code error;
             if (std::filesystem::remove(activeScenePath, error) && !error) {
-                const auto terrainPath = std::filesystem::path{activeScenePath.string() + ".terrain"};
-                std::filesystem::remove(terrainPath, error);
-                error.clear();
-                const auto environmentPath = std::filesystem::path{activeScenePath.string() + ".environment"};
-                std::filesystem::remove(environmentPath, error);
+                Engine::SceneSerializer::removeSidecars(activeScenePath);
                 EditorSceneSession::clearSavedScene();
                 sceneDeleted = true;
                 sceneFileError.clear();
@@ -1164,6 +1160,99 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             }
             ImGui::EndMenu();
         }
+        if (beginSubMenu("Volumetric fog###fog", EditorUI::Icon::Eye)) {
+            auto fog = renderer.fogSettings();
+            bool fogChanged = false;
+            ImGui::PushItemWidth(180.0F);
+            fogChanged |= ImGui::Checkbox("Enabled", &fog.enabled);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Froxel fog lit by the sun, local lights and the sky. Game View only.");
+            constexpr std::array<const char*, 3> fogQualityLabels{"Low (16 px, 48 slices)", "Medium (16 px, 64 slices)",
+                                                                  "High (8 px, 96 slices)"};
+            int fogQuality = static_cast<int>(fog.quality);
+            if (ImGui::Combo("Quality", &fogQuality, fogQualityLabels.data(),
+                             static_cast<int>(fogQualityLabels.size()))) {
+                fog.quality = static_cast<Engine::VolumetricFogQuality>(fogQuality);
+                fogChanged = true;
+            }
+            fogChanged |= ImGui::SliderFloat("Density", &fog.density, 0.0F, 0.3F, "%.4f /m", ImGuiSliderFlags_Logarithmic);
+            fogChanged |= ImGui::SliderFloat("Height falloff", &fog.heightFalloff, 0.0F, 2.0F, "%.3f /m");
+            fogChanged |= ImGui::SliderFloat("Base height", &fog.baseHeight, -50.0F, 50.0F, "%.1f m");
+            float albedo[3]{fog.albedoR, fog.albedoG, fog.albedoB};
+            if (ImGui::ColorEdit3("Scattering colour", albedo)) {
+                fog.albedoR = albedo[0];
+                fog.albedoG = albedo[1];
+                fog.albedoB = albedo[2];
+                fogChanged = true;
+            }
+            fogChanged |= ImGui::SliderFloat("Anisotropy", &fog.anisotropy, -0.9F, 0.95F, "%.2f");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Henyey-Greenstein g: higher values glow more around lights seen through fog.");
+            fogChanged |= ImGui::SliderFloat("Local lights", &fog.localLightScattering, 0.0F, 4.0F, "%.2f");
+            fogChanged |= ImGui::SliderFloat("Sun / moon", &fog.directionalScattering, 0.0F, 4.0F, "%.2f");
+            fogChanged |= ImGui::SliderFloat("Sky ambient", &fog.ambientScattering, 0.0F, 4.0F, "%.2f");
+            fogChanged |= ImGui::SliderFloat("Noise", &fog.noise, 0.0F, 1.0F, "%.2f");
+            fogChanged |= ImGui::SliderFloat("Distance", &fog.distance, 8.0F, 256.0F, "%.0f m",
+                                             ImGuiSliderFlags_Logarithmic);
+            fogChanged |= ImGui::SliderFloat("Temporal blend", &fog.temporalBlend, 0.0F, 0.98F, "%.2f");
+            ImGui::PopItemWidth();
+            if (menuItem("Reset to defaults")) {
+                fog = Engine::FogSettings{};
+                fogChanged = true;
+            }
+            if (fogChanged) {
+                renderer.setFogSettings(fog);
+                // Saved with the scene (<scene>.fog), and applied in the Player too.
+                scene.setFog(fog);
+            }
+            ImGui::EndMenu();
+        }
+        if (beginSubMenu("Reflections & rain###surface", EditorUI::Icon::Eye)) {
+            auto surface = renderer.surfaceSettings();
+            bool surfaceChanged = false;
+            ImGui::PushItemWidth(180.0F);
+            surfaceChanged |= ImGui::Checkbox("Screen-space reflections", &surface.screenSpaceReflections);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Hi-Z traced reflections of on-screen surfaces. Not available with MSAA.");
+            if (surface.screenSpaceReflections) {
+                surfaceChanged |= ImGui::SliderFloat("Intensity", &surface.ssrIntensity, 0.0F, 1.0F, "%.2f");
+                surfaceChanged |= ImGui::SliderFloat("Max roughness", &surface.ssrMaxRoughness, 0.05F, 1.0F, "%.2f");
+                surfaceChanged |= ImGui::SliderFloat("Thickness", &surface.ssrThickness, 0.01F, 2.0F, "%.2f m",
+                                                     ImGuiSliderFlags_Logarithmic);
+                int steps = static_cast<int>(surface.ssrMaxSteps);
+                if (ImGui::SliderInt("Hi-Z steps", &steps, 8, 128)) {
+                    surface.ssrMaxSteps = static_cast<std::uint32_t>(steps);
+                    surfaceChanged = true;
+                }
+            }
+            ImGui::Separator();
+            surfaceChanged |= ImGui::SliderFloat("Wetness", &surface.wetness, 0.0F, 1.0F, "%.2f");
+            surfaceChanged |= ImGui::SliderFloat("Puddles", &surface.puddleCoverage, 0.0F, 1.0F, "%.2f");
+            surfaceChanged |= ImGui::SliderFloat("Puddle size", &surface.puddleScale, 0.25F, 20.0F, "%.2f m",
+                                                 ImGuiSliderFlags_Logarithmic);
+            surfaceChanged |= ImGui::SliderFloat("Rain", &surface.rainIntensity, 0.0F, 1.0F, "%.2f");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Falling rain streaks lit by nearby lamps (Game View) and drops rippling the puddles.");
+            surfaceChanged |= ImGui::SliderFloat("Rain ripples", &surface.rainRipples, 0.0F, 2.0F, "%.2f");
+            surfaceChanged |= ImGui::SliderFloat("Ripple frequency", &surface.rippleFrequency, 0.0F, 8.0F, "%.2f");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("How often drops land on the puddles.");
+            surfaceChanged |= ImGui::SliderFloat("Ripple size", &surface.rippleSize, 0.05F, 2.0F, "%.2f m",
+                                                 ImGuiSliderFlags_Logarithmic);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Radius a ring grows to before it fades.");
+            ImGui::PopItemWidth();
+            if (menuItem("Reset to defaults")) {
+                surface = Engine::SurfaceSettings{};
+                surfaceChanged = true;
+            }
+            if (surfaceChanged) {
+                renderer.setSurfaceSettings(surface);
+                // Saved with the scene (<scene>.surface), and applied in the Player too.
+                scene.setSurface(surface);
+            }
+            ImGui::EndMenu();
+        }
         menuSection("Debug views");
         const Engine::ShadowDebugView shadowView = renderer.shadowDebugView();
         if (beginSubMenu(shadowView != Engine::ShadowDebugView::Off ? "Shadows (active)###shadow-debug"
@@ -1218,6 +1307,8 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             selectPbrDebugView("Roughness", Engine::PbrDebugView::Roughness);
             selectPbrDebugView("Metallic", Engine::PbrDebugView::Metallic);
             selectPbrDebugView("Ambient Occlusion", Engine::PbrDebugView::AmbientOcclusion);
+            selectPbrDebugView("Reflections", Engine::PbrDebugView::Reflections);
+            selectPbrDebugView("SSR Confidence", Engine::PbrDebugView::SsrConfidence);
             ImGui::Separator();
             selectPbrDebugView("Geometric Direct Diffuse", Engine::PbrDebugView::GeometricDirectDiffuse);
             ImGui::EndMenu();

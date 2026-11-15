@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/TempImageLog.h" // TEMP-DEBUG
 #include "Engine/Renderer/Textures/Cubemap.h"
 
 #include "Engine/Renderer/Vulkan/upload_context.h"
@@ -115,6 +116,7 @@ void Cubemap::createRenderTarget(const VkPhysicalDevice physicalDevice, const Vk
         if (vkCreateImage(device_, &imageInfo, nullptr, &image_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create reflection-probe cubemap image");
         }
+        tempLogImage("Probe cubemap", image_, imageInfo); // TEMP-DEBUG
 
         VkMemoryRequirements requirements{};
         vkGetImageMemoryRequirements(device_, image_, &requirements);
@@ -267,6 +269,7 @@ void Cubemap::createHdr(VkPhysicalDevice physicalDevice, VkDevice device, VkComm
         if (vkCreateImage(device_, &imageInfo, nullptr, &image_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create cubemap image");
         }
+        tempLogImage("Cubemap", image_, imageInfo); // TEMP-DEBUG
         VkMemoryRequirements requirements{};
         vkGetImageMemoryRequirements(device_, image_, &requirements);
         VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};

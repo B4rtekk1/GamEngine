@@ -140,6 +140,12 @@ class Renderer final {
     /** Exposure, display transform, colour grading and lens effects. */
     void setPostProcessSettings(const PostProcessSettings& settings) noexcept;
     [[nodiscard]] const PostProcessSettings& postProcessSettings() const noexcept;
+    /** Screen-space reflections and rain wetness (puddles). */
+    void setSurfaceSettings(const SurfaceSettings& settings) noexcept;
+    [[nodiscard]] const SurfaceSettings& surfaceSettings() const noexcept;
+    /** Volumetric (froxel) fog. */
+    void setFogSettings(const FogSettings& settings) noexcept;
+    [[nodiscard]] const FogSettings& fogSettings() const noexcept;
     /** DDGI replaces SSGI while it is enabled and the GPU supports it. */
     void setDdgiSettings(const DdgiSettings& settings) noexcept;
     [[nodiscard]] const DdgiSettings& ddgiSettings() const noexcept;
@@ -279,6 +285,12 @@ class Renderer final {
     PostProcessSettings postProcessSettings_{};
     // Post-process from RenderConfig, used for scenes that do not store their own.
     PostProcessSettings configuredPostProcess_{};
+    SurfaceSettings surfaceSettings_{};
+    // Surface settings from RenderConfig, used for scenes that do not store their own.
+    SurfaceSettings configuredSurface_{};
+    FogSettings fogSettings_{};
+    // Fog from RenderConfig, used for scenes that do not store their own.
+    FogSettings configuredFog_{};
     // GI from RenderConfig, used for scenes that do not store their own.
     GlobalIlluminationSettings configuredGlobalIllumination_{};
     void applySceneSettings(const Scene& scene) noexcept;

@@ -67,6 +67,9 @@
 #include "Engine/Renderer/Passes/ShadowPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
 #include "Engine/Renderer/Passes/SsgiPass.h"
+#include "Engine/Renderer/Passes/SsrPass.h"
+#include "Engine/Renderer/Passes/VolumetricFogPass.h"
+#include "Engine/Renderer/Passes/RainPass.h"
 #include "Engine/Renderer/Passes/DdgiPass.h"
 #include "Engine/Renderer/RayTracing/ClusterRayTracingScene.h"
 #include "Engine/Renderer/Passes/TemporalAaPass.h"
@@ -226,7 +229,8 @@ class Renderer::Backend {
                      const PbrDebugView& pbrDebugView, const IblQuality& iblQuality,
                      const ShadowDebugView& shadowDebugView, const GrassRenderSettings& grassSettings,
                      const SsgiSettings& ssgiSettings, const DdgiSettings& ddgiSettings,
-                     const PostProcessSettings& postProcessSettings,
+                     const PostProcessSettings& postProcessSettings, const SurfaceSettings& surfaceSettings,
+                     const FogSettings& fogSettings,
                      std::filesystem::path projectRoot, Assets::AssetManager& assetManager, ForwardPass& forwardPass,
                      SkyPass& skyPass, TonemapPass& tonemapPass, TemporalAaPass& temporalAaPass, BloomPass& bloomPass,
                      GtaoPass& gtaoPass, GraphicsPipeline& particlePipeline, UI::CanvasRenderer& canvasRenderer,
@@ -239,7 +243,8 @@ class Renderer::Backend {
           rtContactShadowSettings(rtContactShadowSettings), gtaoQuality(gtaoQuality), gtaoDebugView(gtaoDebugView),
           pbrDebugView(pbrDebugView), iblQuality(iblQuality), shadowDebugView(shadowDebugView),
           configuredGtaoQuality(gtaoQuality), grassSettings(grassSettings), ssgiSettings(ssgiSettings),
-          ddgiSettings(ddgiSettings), postProcessSettings(postProcessSettings),
+          ddgiSettings(ddgiSettings), postProcessSettings(postProcessSettings), surfaceSettings(surfaceSettings),
+          fogSettings(fogSettings),
           assetManager(assetManager),
           renderables(sceneGpu.renderables), instanceBatches(sceneGpu.instanceBatches),
           instanceModels(sceneGpu.instanceModels), previousInstanceTransforms(sceneGpu.previousInstanceTransforms),
@@ -682,6 +687,8 @@ class Renderer::Backend {
             sceneSkyPass.destroy();
             destroySceneViewportForwardPass();
             forwardPass.destroy();
+            // Its resolve layout embeds shadowPass's set layout.
+            visibilityBuffer.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();
@@ -766,6 +773,9 @@ class Renderer::Backend {
         localLightShadowPass.destroy();
         tileLightCulling.destroy();
         deferredLocalLighting.destroy();
+        // The resolve pipeline layout embeds shadowPass's set layout; the
+        // frame recreates the visibility buffer lazily against the new one.
+        visibilityBuffer.destroy();
         directionalVisibilityPass.destroy();
         shadowPass.destroy();
         sceneDescriptorPass.destroy();

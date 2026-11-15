@@ -33,8 +33,8 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
     const float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
-    float4 viewPosition = mul(float4(uv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
-    viewPosition /= viewPosition.w;
+    const float4 homogeneousView = mul(float4(uv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
+    const float4 viewPosition = homogeneousView / homogeneousView.w;
     // Reconstruct the actual surface footprint. Reusing the centre depth
     // assumes a camera-facing plane and underestimates grazing receivers,
     // selecting fine levels that the depth-driven marker never requested.
@@ -43,17 +43,20 @@ void main(uint3 id : SV_DispatchThreadID)
     const uint2 downPixel = uint2(id.x, min(id.y ^ 1u, height - 1u));
     const float rightDepth = depthTexture.Load(int3(rightPixel, 0)).r;
     const float downDepth = depthTexture.Load(int3(downPixel, 0)).r;
-    const float2 rightUv = (float2(rightPixel) + 0.5) / float2(width, height);
-    const float2 downUv = (float2(downPixel) + 0.5) / float2(width, height);
-    float4 viewRight = mul(float4(rightUv * 2.0 - 1.0,
-        rightDepth < 0.999999 ? rightDepth : depth, 1.0), frame.inverseProjection);
-    float4 viewDown = mul(float4(downUv * 2.0 - 1.0,
-        downDepth < 0.999999 ? downDepth : depth, 1.0), frame.inverseProjection);
-    viewRight /= viewRight.w;
-    viewDown /= viewDown.w;
+    // The unprojection is linear before the divide: a partner differs from
+    // this pixel by one NDC axis step and its depth. Likewise the view to
+    // world transform is affine, so only the view-space offset is rotated.
+    const float4 viewRight = homogeneousView +
+        frame.inverseProjection[0] * (2.0 * (float(rightPixel.x) - float(id.x)) / float(width)) +
+        frame.inverseProjection[2] * ((rightDepth < 0.999999 ? rightDepth : depth) - depth);
+    const float4 viewDown = homogeneousView +
+        frame.inverseProjection[1] * (2.0 * (float(downPixel.y) - float(id.y)) / float(height)) +
+        frame.inverseProjection[2] * ((downDepth < 0.999999 ? downDepth : depth) - depth);
+    const float3x3 viewToWorld = float3x3(frame.inverseView[0].xyz, frame.inverseView[1].xyz,
+                                          frame.inverseView[2].xyz);
     const float3 worldPosition = mul(viewPosition, frame.inverseView).xyz;
-    const float3 worldRight = mul(viewRight, frame.inverseView).xyz;
-    const float3 worldDown = mul(viewDown, frame.inverseView).xyz;
+    const float3 worldRight = worldPosition + mul(viewRight.xyz / viewRight.w - viewPosition.xyz, viewToWorld);
+    const float3 worldDown = worldPosition + mul(viewDown.xyz / viewDown.w - viewPosition.xyz, viewToWorld);
     const float3 viewNormal = decodeOct(viewNormalTexture.Load(int3(pixel, 0)).xy);
     const float3 worldNormal = normalize(mul(float4(viewNormal, 0.0), frame.inverseView).xyz);
     const float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);

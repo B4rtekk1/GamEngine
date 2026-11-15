@@ -1,8 +1,7 @@
-// Seeds GlassPass's private depth with the opaque scene depth (mip 0 of the
-// closest-depth pyramid is an exact copy). The glass draws then reject
+// Seeds GlassPass's private depth with the opaque scene depth. The glass draws then reject
 // panes behind opaque geometry in hardware (early depth), instead of
 // launching the full glass shader only to discard the fragment.
-[[vk::binding(1, 1)]] Sampler2D closestDepth;
+[[vk::binding(2, 1)]] Sampler2D opaqueDepth;
 
 struct SeedVertexOutput
 {
@@ -27,6 +26,6 @@ struct SeedFragmentOutput
 SeedFragmentOutput fragmentMain(SeedVertexOutput input)
 {
     SeedFragmentOutput output;
-    output.depth = closestDepth.Load(int3(int2(input.position.xy), 0)).r;
+    output.depth = opaqueDepth.Load(int3(int2(input.position.xy), 0)).r;
     return output;
 }

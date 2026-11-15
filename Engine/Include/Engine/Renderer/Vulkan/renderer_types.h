@@ -141,6 +141,12 @@ struct RendererUniformBufferObject {
     // x: logarithmic cluster Z scale, y: bias, z: prefiltered environment mip count, w: RT contact shadows enabled.
     glm::vec4 clusterZScaleBiasEnvironmentMipRtContact{};
     std::array<LocalLightGPU, MaxLocalLights> localLights{};
+    // x: wetness, y: puddle coverage, z: 1 / puddle scale (m), w: rain ripple strength.
+    glm::vec4 wetnessParams{};
+    // x: SSR intensity, y: max roughness, z: Hi-Z steps, w: hit thickness (m).
+    glm::vec4 ssrParams{};
+    // x: rain intensity (0..1), y: ripple frequency, z: ripple size (m), w: unused.
+    glm::vec4 rainParams{};
 };
 
 /**

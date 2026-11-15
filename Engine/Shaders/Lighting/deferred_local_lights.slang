@@ -69,6 +69,14 @@ void main(uint3 id : SV_DispatchThreadID)
     const int2 pixel = int2(id.xy);
     if (pixel.x >= int(width) || pixel.y >= int(height))
         return;
+    // A tile no light reaches reads nothing else: the surface, depth and
+    // shadow texels are most of this pass's memory traffic.
+    const uint tilesX = (width + TileLightPixelSize - 1u) / TileLightPixelSize;
+    const uint2 tile = uint2(pixel) / TileLightPixelSize;
+    const uint tileBase = (tile.y * tilesX + tile.x) * TileLightStride;
+    const uint lightCount = tileLightIndices[tileBase];
+    if (lightCount == 0u)
+        return;
     DeferredLocalSurface surface;
     if (!unpackDeferredLocalSurface(surfaceData[pixel], surface))
         return;
@@ -86,10 +94,6 @@ void main(uint3 id : SV_DispatchThreadID)
     if ((frame.screenSpaceEffects & SCREEN_SPACE_EFFECTS_LOCAL_SHADOWS) != 0u)
         shadows = localShadowsAt(pixel, -viewPosition.z);
 
-    const uint tilesX = (width + TileLightPixelSize - 1u) / TileLightPixelSize;
-    const uint2 tile = uint2(pixel) / TileLightPixelSize;
-    const uint tileBase = (tile.y * tilesX + tile.x) * TileLightStride;
-    const uint lightCount = tileLightIndices[tileBase];
     float3 lighting = 0.0;
     for (uint entry = 0u; entry < lightCount; ++entry)
     {
@@ -116,16 +120,20 @@ void main(uint3 id : SV_DispatchThreadID)
         const float3 lightDirection = toLight * inverseDistance;
         const float rangeFactor = saturate(1.0 - distanceToLight / radius);
         float attenuation = rangeFactor * rangeFactor / max(distanceSquared, LocalLightSourceRadiusSquared);
+        const float nDotL = localNDotL(surface.nDotLMode, normal, lightDirection);
+        // As in forward shading: lights near the end of their range or
+        // outside their cone add almost nothing, so skip their GGX. The
+        // profile (an acos and two table reads) and the cone only lower the
+        // product, so most of those lights are rejected before them.
+        const float reach = local.colorIntensity.w * nDotL * shadowVisibility;
+        if (reach * attenuation < LocalLightCutoff) continue;
         attenuation *= localLightProfile(local, -lightDirection);
         if (local.parameters.y > 1.5) // Spot
         {
             const float cone = dot(normalize(-local.directionOuterCos.xyz), lightDirection);
             attenuation *= smoothstep(local.directionOuterCos.w, local.parameters.x, cone);
         }
-        const float nDotL = localNDotL(surface.nDotLMode, normal, lightDirection);
-        // As in forward shading: lights near the end of their range or
-        // outside their cone add almost nothing, so skip their GGX.
-        if (local.colorIntensity.w * attenuation * nDotL * shadowVisibility < LocalLightCutoff) continue;
+        if (reach * attenuation < LocalLightCutoff) continue;
         const float3 halfway = normalize(viewDirection + lightDirection);
         const float3 fresnel = fresnelSchlick(max(dot(halfway, viewDirection), 0.0), surface.f0);
         const float geometry = geometryView * geometrySchlickGGX(nDotL, roughness);

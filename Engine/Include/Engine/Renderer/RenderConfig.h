@@ -84,6 +84,10 @@ enum class PbrDebugView : std::uint8_t {
     Roughness,
     Metallic,
     AmbientOcclusion,
+    /** The specular reflection each pixel resolves (SSR -> probe -> sky), before Fresnel. */
+    Reflections,
+    /** SSR coverage: green hit confidence, red traced but missed, blue not traced. */
+    SsrConfidence,
 };
 
 /** Tunables are deliberately data, so automated GPU benchmarks can sweep them. */
@@ -272,6 +276,100 @@ struct PostProcessSettings final {
     bool operator==(const PostProcessSettings&) const noexcept = default;
 };
 
+/**
+ * Glossy reflections of on-screen surfaces and rain-soaked materials.
+ *
+ * SSR walks each pixel's reflection ray through a min-depth pyramid built
+ * from the opaque prepass (the Hi-Z trace GlassPass uses) and reflects the
+ * previous frame's lit colour, blurred by roughness. It replaces the probe/sky reflection
+ * where the ray finds a surface and fades back to it elsewhere. It needs
+ * the prepass view normals, so it is inactive under MSAA.
+ *
+ * Wetness darkens porous albedo and smooths every surface; puddles collect
+ * on upward-facing ground (cavities first) and become flat water mirrors.
+ * Both are world-space and apply to every view.
+ */
+struct SurfaceSettings final {
+    bool screenSpaceReflections = false;
+    float ssrIntensity = 1.0F;
+    /** Materials rougher than this keep the probe/sky reflection. */
+    float ssrMaxRoughness = 0.6F;
+    /** Assumed depth of every surface, in metres (plus 3% of view depth), when deciding a hit. */
+    float ssrThickness = 0.15F;
+    /** Hi-Z traversal steps per pixel for mirror-like surfaces; rough ones get half. */
+    std::uint32_t ssrMaxSteps = 48;
+    /** 0: dry, 1: soaked. */
+    float wetness = 0.0F;
+    /** Fraction of upward-facing ground covered by standing water. */
+    float puddleCoverage = 0.0F;
+    /** Size of a puddle, in metres. */
+    float puddleScale = 2.5F;
+    /** Strength of the raindrop ripples on standing water; 0 disables them. */
+    float rainRipples = 0.0F;
+    /**
+     * Falling rain, 0 (none) to 1 (downpour): the number of lit rain streaks
+     * around the Game View camera and how many drops ripple the puddles.
+     */
+    float rainIntensity = 0.0F;
+    /** How often drops land: scales both the drop rate and the share of drop sites hit. */
+    float rippleFrequency = 1.0F;
+    /** Spacing of the drop sites, in metres; rings grow to about this radius. */
+    float rippleSize = 0.3F;
+    bool operator==(const SurfaceSettings&) const noexcept = default;
+};
+
+enum class VolumetricFogQuality : std::uint8_t { Low, Medium, High };
+
+/** Froxel grid of the volumetric fog: screen pixels per cell edge and depth slices. */
+struct VolumetricFogQualitySettings final {
+    std::uint32_t tilePixels;
+    std::uint32_t slices;
+};
+constexpr VolumetricFogQualitySettings volumetricFogQualitySettings(const VolumetricFogQuality quality) noexcept {
+    switch (quality) {
+    case VolumetricFogQuality::Low:
+        return {16, 48};
+    case VolumetricFogQuality::Medium:
+        return {16, 64};
+    case VolumetricFogQuality::High:
+        return {8, 96};
+    }
+    return {16, 64};
+}
+
+/**
+ * Volumetric (froxel) fog: participating media in a camera-aligned grid,
+ * lit by the sun with its virtual shadow map, by every local light through
+ * the clustered light lists, and by the sky irradiance. Accumulated over
+ * frames with reprojection, integrated front to back and composited over the
+ * lit scene before TAA (Game View only).
+ */
+struct FogSettings final {
+    bool enabled = false;
+    VolumetricFogQuality quality = VolumetricFogQuality::Medium;
+    /** Extinction at and below baseHeight, per metre. */
+    float density = 0.02F;
+    /** Exponential falloff of density above baseHeight, per metre. */
+    float heightFalloff = 0.15F;
+    float baseHeight = 0.0F;
+    /** Scattering colour (single-scattering albedo). */
+    float albedoR = 0.9F;
+    float albedoG = 0.92F;
+    float albedoB = 1.0F;
+    /** Henyey-Greenstein g: 0 isotropic, towards 1 strong glow around lights. */
+    float anisotropy = 0.55F;
+    float localLightScattering = 1.0F;
+    float directionalScattering = 1.0F;
+    float ambientScattering = 1.0F;
+    /** Animated density variation; 0 keeps the fog uniform. */
+    float noise = 0.4F;
+    /** Depth the froxel grid covers, in metres; the fog stops beyond it. */
+    float distance = 64.0F;
+    /** Share of the reprojected history kept per frame. */
+    float temporalBlend = 0.9F;
+    bool operator==(const FogSettings&) const noexcept = default;
+};
+
 enum class IblQuality : std::uint8_t { Low, Medium, High, Ultra };
 struct IblQualitySettings final {
     std::uint32_t environmentResolution;
@@ -351,6 +449,8 @@ struct RenderConfig final {
     SsgiSettings ssgi{};
     DdgiSettings ddgi{};
     PostProcessSettings postProcess{};
+    SurfaceSettings surface{};
+    FogSettings fog{};
 };
 
 /** Opaque viewport texture handle used by editor integrations. */

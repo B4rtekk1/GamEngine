@@ -31,6 +31,15 @@ import Common.MeshletDraw;
 #ifndef DEPTH_VISIBILITY_ID
 #define DEPTH_VISIBILITY_ID 0
 #endif
+// 0 in the `_opaque` mesh-shader variants, which draw a slot's one-sided
+// meshlets (never masked or blended, ForwardPass::drawMeshShaderMaterial):
+// no alpha test, so the depth test runs before the fragment stage. A
+// `discard` anywhere in the shader otherwise moves every fragment of the
+// draw to late depth testing, and occluded fragments pay for the material
+// fetch and three colour writes.
+#ifndef DEPTH_ALPHA_TEST
+#define DEPTH_ALPHA_TEST 1
+#endif
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
@@ -60,7 +69,8 @@ struct VertexOutput {
     [[vk::location(7)]] float3 worldDisplacementDirection;
 #endif
 #if DEPTH_OUTPUT_VELOCITY
-    [[vk::location(3)]] noperspective float2 currentNdc;
+    // The current NDC position is SV_Position: interpolating it as well cost
+    // two of the mesh stage's per-vertex outputs.
     [[vk::location(4)]] float4 previousClip;
 #endif
 };
@@ -106,7 +116,6 @@ VertexOutput shadeVertex(VertexInput input, uint visibleIndex) {
 #if DEPTH_OUTPUT_VELOCITY
     RendererPreviousTransformData previous = previousTransforms[visibleIndex];
     float3 previousWorld = mul(localPosition * previous.previousScale.xyz, rotation(previous.previousRotation)) + previous.previousPosition.xyz;
-    output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = mul(mul(float4(previousWorld, 1.0), frame.previousView), frame.previousProjection);
 #endif
     return output;
@@ -129,7 +138,11 @@ void meshMain(uint3 groupId : SV_GroupID, uint threadId : SV_GroupThreadID,
               out primitives MeshPrimitive primitives[MeshletMaxTriangles]) {
     MeshletDrawEntry entry;
     uint listIndex;
-    const bool valid = meshletDrawEntryFor(groupId, entry, listIndex);
+    bool valid = meshletDrawEntryFor(groupId, entry, listIndex);
+    // The draws already cover one group each; this only catches a two-sided
+    // entry written over a one-sided one when the slot's range overflowed.
+    if (valid && (meshletDraw.flags & (entry.twoSided ? MeshletDrawSkipTwoSided : MeshletDrawSkipOneSided)) != 0u)
+        valid = false;
     MeshletRecord meshlet = (MeshletRecord)0;
     if (valid) meshlet = meshletRecords[entry.meshlet];
     SetMeshOutputCounts(meshlet.range.y, meshlet.range.w);
@@ -156,7 +169,7 @@ void meshMain(uint3 groupId : SV_GroupID, uint threadId : SV_GroupThreadID,
             frame.clusteredViewportNearFar.xy, entry.twoSided);
 #if DEPTH_VISIBILITY_ID
         primitives[tri].visibility = (meshletDraw.flags & MeshletDrawVisibility) != 0u
-                                         ? (listIndex << VisibilityTriangleBits) | tri
+                                         ? packVisibility(meshletDraw.slot, listIndex, tri)
                                          : VisibilityNone;
 #endif
     }
@@ -175,6 +188,9 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
 #endif
 
 void alphaTest(VertexOutput input) {
+#if !DEPTH_ALPHA_TEST
+    return;
+#endif
     MaterialData material = materials[input.materialIndex];
     const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
     // Opaque materials never touch textures in this pass.
@@ -200,6 +216,9 @@ struct FragmentOutput {
     [[vk::location(2)]] float2 viewNormal : SV_Target2;
 };
 [shader("fragment")]
+#if !DEPTH_ALPHA_TEST
+[earlydepthstencil]
+#endif
 FragmentOutput fragmentMain(VertexOutput input, bool frontFace : SV_IsFrontFace
 #if DEPTH_VISIBILITY_ID
                             , uint primitiveVisibility : SV_PrimitiveID
@@ -215,7 +234,9 @@ FragmentOutput fragmentMain(VertexOutput input, bool frontFace : SV_IsFrontFace
 #endif
     alphaTest(input);
     FragmentOutput output;
-    output.velocity = (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
+    // Positive-height viewport over the whole target: NDC from the pixel position.
+    const float2 currentNdc = input.position.xy * (2.0 / frame.clusteredViewportNearFar.xy) - 1.0;
+    output.velocity = (currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
     float3 viewNormal = normalize(mul(float4(worldNormal, 0.0), frame.view).xyz);
     if ((material.textureIndices.w & 1) != 0 && !frontFace) viewNormal = -viewNormal;
     output.viewNormal = encodeOct(viewNormal);
@@ -226,5 +247,8 @@ FragmentOutput fragmentMain(VertexOutput input, bool frontFace : SV_IsFrontFace
 }
 #else
 [shader("fragment")]
+#if !DEPTH_ALPHA_TEST
+[earlydepthstencil]
+#endif
 void fragmentMain(VertexOutput input) { alphaTest(input); }
 #endif

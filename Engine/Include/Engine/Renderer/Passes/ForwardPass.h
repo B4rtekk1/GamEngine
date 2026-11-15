@@ -107,12 +107,12 @@ class ForwardPass final {
     }
 
     /**
-     * Built-in program slots the visibility-buffer resolve shades (standard,
-     * normal-mapped and extended PBR: one uber program covers all three).
+     * Built-in program slots the visibility-buffer resolve shades, each with
+     * its own program (visibilityClassOfSlot in MeshletDraw.slang).
      */
     [[nodiscard]] static constexpr bool isVisibilityResolvedSlot(std::size_t slot) noexcept {
         return slot == materialShaderIndex(MaterialShader::StandardPBR) || slot == PbrNormalProgramSlot ||
-               slot == PbrExtendedProgramSlot;
+               slot == PbrExtendedProgramSlot || slot == PbrFoliageProgramSlot;
     }
 
     /** True for a depth prepass created with an R32_UINT colour target (visibility ids). */
@@ -136,11 +136,21 @@ class ForwardPass final {
     std::array<GraphicsPipeline, MaterialShaderCount> flatMeshShaderMaterialPipelines_;
     std::array<GraphicsPipeline, MaterialShaderCount> flatReducedMeshShaderMaterialPipelines_;
     bool useFlatMeshShaders_ = false;
+    // Depth prepass `_opaque` twins of the regular and reduced mesh-shader
+    // pipelines: no alpha test, early depth testing. drawMeshShaderMaterial
+    // draws a slot's one-sided meshlets with them and only its two-sided
+    // (foliage, masked, blended or double-sided) meshlets with the
+    // alpha-tested pipeline.
+    std::array<GraphicsPipeline, MaterialShaderCount> opaqueMeshShaderMaterialPipelines_;
+    std::array<GraphicsPipeline, MaterialShaderCount> opaqueReducedMeshShaderMaterialPipelines_;
     // `_deferred` twins of the four mesh-shader sets above, indexed by
     // (reduced ? 1 : 0) | (flat ? 2 : 0) (see useDeferredLocalShaders).
     std::array<std::array<GraphicsPipeline, MaterialShaderCount>, 4> deferredMeshShaderMaterialPipelines_;
     bool useDeferredLocal_ = false;
     bool visibilityIds_ = false;
+    // MeshletDrawSkipOneSided / MeshletDrawSkipTwoSided (MeshletDraw.slang).
+    static constexpr std::uint32_t MeshShaderSkipOneSidedFlag = 8U;
+    static constexpr std::uint32_t MeshShaderSkipTwoSidedFlag = 16U;
     // MeshletDrawConstants::flags per slot (MeshletDraw.slang).
     std::array<std::uint32_t, MaterialShaderCount> meshShaderDrawFlags_{};
     std::uint32_t meshShaderSmallPrimitiveFlag_ = 0;

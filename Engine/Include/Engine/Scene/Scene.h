@@ -78,6 +78,20 @@ class Scene {
     void setPostProcess(std::optional<PostProcessSettings> settings) noexcept {
         postProcess_ = settings;
     }
+    /** Screen-space reflections and rain wetness, saved next to the scene file. */
+    [[nodiscard]] const std::optional<SurfaceSettings>& surface() const noexcept {
+        return surface_;
+    }
+    void setSurface(std::optional<SurfaceSettings> settings) noexcept {
+        surface_ = settings;
+    }
+    /** Volumetric fog, saved next to the scene file. */
+    [[nodiscard]] const std::optional<FogSettings>& fog() const noexcept {
+        return fog_;
+    }
+    void setFog(std::optional<FogSettings> settings) noexcept {
+        fog_ = settings;
+    }
     void setEnvironmentEquirectangular(std::filesystem::path path) {
         environmentEquirectangular_ = std::move(path).lexically_normal();
     }
@@ -603,6 +617,8 @@ class Scene {
     std::filesystem::path environmentEquirectangular_;
     std::optional<GlobalIlluminationSettings> globalIllumination_;
     std::optional<PostProcessSettings> postProcess_;
+    std::optional<SurfaceSettings> surface_;
+    std::optional<FogSettings> fog_;
     friend class ScriptModuleManager;
     friend class Application;
     friend class Actor;

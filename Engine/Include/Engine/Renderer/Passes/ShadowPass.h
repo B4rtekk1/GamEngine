@@ -81,6 +81,9 @@ class ShadowPass final {
     void setGtaoTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
     void setContactShadowTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
     void setSsgiTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
+    /** Binds the SSR closest-depth pyramid and the reflected radiance mip chain Forward traces against. */
+    void setSsrTextures(std::uint32_t frameIndex, const VkDescriptorImageInfo& depthPyramid,
+                        const VkDescriptorImageInfo& radiance) const;
     /** Binds the frame slot's buffer of every point and spot light (LocalLightGPU records). */
     void setLocalLights(std::uint32_t frameIndex, VkBuffer lights) const;
     /** Game View's depth-bounded tile light lists (TileLightCullingPass). */
@@ -227,6 +230,8 @@ class ShadowPass final {
     static constexpr std::uint32_t LocalLightBinding = 24;
     static constexpr std::uint32_t LocalShadowMaskBinding = 25;
     static constexpr std::uint32_t TileLightBinding = 26;
+    static constexpr std::uint32_t SsrDepthBinding = 27;
+    static constexpr std::uint32_t SsrRadianceBinding = 28;
 
   private:
     struct PhysicalPage {
