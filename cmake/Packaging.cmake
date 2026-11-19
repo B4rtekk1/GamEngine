@@ -56,6 +56,10 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR AND TARGET Editor)
             install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
                 DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY} COMPONENT GamEngineEditor)
         endif()
+        # The renderer loads Assets/BRDF beside the executable; a distribution
+        # Player has no source-tree fallback, so exported games need it too.
+        install(FILES "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin"
+            DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY}/Assets/BRDF COMPONENT GamEngineEditor)
         install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY}/shaders
             COMPONENT GamEngineEditor)
         install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY}/Licenses
@@ -64,7 +68,14 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR AND TARGET Editor)
     # A project-side C++ script module links to this import library, not to a
     # GamEngine source/build tree.
     install(FILES "$<TARGET_LINKER_FILE:Engine>" DESTINATION SDK/Lib COMPONENT GamEngineEditor)
-    install(DIRECTORY "${PROJECT_SOURCE_DIR}/Engine/Include/" DESTINATION SDK/Include COMPONENT GamEngineEditor)
+    # Public headers only (cmake/CopySdkPublicHeaders.cmake): the scripting
+    # entry headers and every engine header they include, not the renderer's
+    # Vulkan internals. Evaluated at install time so the set follows includes.
+    install(CODE "
+        set(GE_SDK_HEADER_SOURCE \"${PROJECT_SOURCE_DIR}/Engine/Include\")
+        set(GE_SDK_HEADER_DESTINATION \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/SDK/Include\")
+        include(\"${PROJECT_SOURCE_DIR}/cmake/CopySdkPublicHeaders.cmake\")
+        " COMPONENT GamEngineEditor)
     # GLM_INCLUDE_DIR already contains the glm/ directory.  Preserve that
     # layout so <glm/...> resolves from SDK/ThirdParty.
     install(DIRECTORY "${GLM_INCLUDE_DIR}/glm" DESTINATION SDK/ThirdParty COMPONENT GamEngineEditor)
@@ -73,6 +84,10 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR AND TARGET Editor)
         DESTINATION SDK/Tools COMPONENT GamEngineEditor)
     install(FILES "${PROJECT_SOURCE_DIR}/cmake/GameScriptsStandalone/CMakeLists.txt"
         DESTINATION SDK/GameScripts COMPONENT GamEngineEditor)
+    # Plugin build template; engine-wide plugins go in Plugins/ beside the Editor.
+    install(FILES "${PROJECT_SOURCE_DIR}/cmake/PluginStandalone/CMakeLists.txt"
+        DESTINATION SDK/Plugin COMPONENT GamEngineEditor)
+    install(DIRECTORY DESTINATION Plugins COMPONENT GamEngineEditor)
     install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION .)
     if(MSVC)
         install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}

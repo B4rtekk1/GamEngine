@@ -119,6 +119,13 @@ class Renderer final {
     void setRtContactShadowSettings(const RtContactShadowSettings& settings) noexcept;
     [[nodiscard]] const RtContactShadowSettings& rtContactShadowSettings() const noexcept;
 
+    void setLocalShadowBackend(LocalShadowBackend backend) noexcept;
+    [[nodiscard]] LocalShadowBackend localShadowBackend() const noexcept;
+    /** True when this GPU supports the NVIDIA cluster scene for local light shadows. */
+    [[nodiscard]] bool nvidiaLocalShadowsSupported() const noexcept;
+    /** True when the last traced local light shadows used the NVIDIA cluster scene. */
+    [[nodiscard]] bool nvidiaLocalShadowsActive() const noexcept;
+
     void applyRenderQualityPreset(RenderQualityPreset preset) noexcept;
 
     void setGtaoQuality(GtaoQuality quality) noexcept;
@@ -274,6 +281,7 @@ class Renderer final {
     AntialiasingLevel antialiasingLevel_ = AntialiasingLevel::Off;
     ShadowQuality shadowQuality_ = ShadowQuality::High;
     RtContactShadowSettings rtContactShadowSettings_{};
+    LocalShadowBackend localShadowBackend_ = LocalShadowBackend::Auto;
     GtaoQuality gtaoQuality_ = GtaoQuality::High;
     GtaoDebugView gtaoDebugView_ = GtaoDebugView::Off;
     PbrDebugView pbrDebugView_ = PbrDebugView::FinalLighting;

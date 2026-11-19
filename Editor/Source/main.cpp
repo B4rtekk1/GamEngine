@@ -3,7 +3,6 @@
 #include "Editor/Build/GameBuildPipeline.h"
 #include "Editor/EditorConstants.h"
 #include "Editor/EditorPreferences.h"
-#include "ScreenshotWriter.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorUi.h"
 #include "Editor/Panels/AssetDragDrop.h"
@@ -43,6 +42,7 @@
 #include "Engine/Input/Input.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/Physics/PhysicsSystem.h"
+#include "Engine/Plugins/PluginManager.h"
 #include "Engine/Project.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/MeshRenderer.h"
@@ -60,6 +60,7 @@
 #include "Platform/DefaultFonts.h"
 #include "Platform/RuntimePaths.h"
 #include "Platform/UserPaths.h"
+#include "ScreenshotWriter.h"
 #include "ScriptHotReload.h"
 #include "ShaderHotReload.h"
 #include "imgui.h"
@@ -70,6 +71,17 @@
 
 using Editor::EntityClipboard;
 using Editor::SceneHistory;
+
+#include "EditorActivity.h"
+#include "PluginBuilder.h"
+#include "PluginsPanel.h"
+
+// EditorActivity keys of the editor's own synchronous and background work.
+constexpr std::string_view PlayStopActivity = "play-stop";
+constexpr std::string_view RendererReloadActivity = "renderer-reload";
+constexpr std::string_view ShaderReloadActivity = "shader-reload";
+constexpr std::string_view ScriptBuildActivity = "script-build";
+constexpr std::string_view PluginBuildActivity = "plugin-build";
 
 #include "EditorShell.inl"
 #include "EditorViewport.inl"
@@ -219,6 +231,9 @@ findEngineShaderDirectory(const std::filesystem::path& buildDirectory) {
     const auto build = projectRoot / "Library" / "ScriptBuild";
     if (!std::filesystem::is_regular_file(source / "CMakeLists.txt") ||
         !std::filesystem::is_regular_file(sdk / "Lib" / Platform::EngineLinkLibraryFilename))
+        return false;
+    // Another Editor (a package, another build) made this tree with its SDK.
+    if (!Editor::resetBuildTreeForSource(build, source))
         return false;
     std::error_code error;
     std::filesystem::create_directories(build, error);
@@ -421,9 +436,43 @@ int main(int argc, char** argv) {
         shaderGraphPanel->open(shaderGraph);
 
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
+        // Declared before the scene for the same reason as scriptModules:
+        // plugin scripts in the scene run plugin code while being destroyed.
+        Engine::PluginManager plugins{Engine::ScriptRegistry::instance()};
+        // Engine-wide plugins beside the Editor, then the project's own.
+        const auto loadPlugins = [&] {
+            const auto& disabled = project.disabledPlugins();
+            plugins.loadAll({editorRoot / "Plugins", project.rootPath() / "Plugins"},
+                            std::unordered_set<std::string>{disabled.begin(), disabled.end()});
+        };
         // Scene components can call into GameScripts.dll while being destroyed.
         // Destroy the scene before unloading the module during exception unwinding.
         Engine::ScenePreset scene;
+        // Project plugins with a Source/ folder are compiled in the
+        // background like the game's scripts, then reloaded (after Play Mode).
+        std::future<Editor::PluginBuilder::Result> pluginBuild;
+        bool pluginReloadPending = false;
+        const auto reloadPlugins = [&] {
+            plugins.unloadAll(scene);
+            loadPlugins();
+            Editor::ConsolePanel::info("Reloaded plugins: " + std::to_string(plugins.loadedCount()) + " loaded.");
+        };
+        // Returns false when every project plugin is already up to date.
+        const auto startPluginBuild = [&] {
+            if (pluginBuild.valid())
+                return true;
+            auto outdated = Editor::PluginBuilder::outdated(project.rootPath());
+            if (outdated.empty())
+                return false;
+            std::string names;
+            for (const auto& plugin : outdated)
+                names += (names.empty() ? "" : ", ") + plugin.name;
+            Editor::ConsolePanel::info("Building plugins: " + names);
+            pluginBuild = std::async(std::launch::async, [editorRoot, root = project.rootPath(), outdated] {
+                return Editor::PluginBuilder::build(editorRoot, root, outdated);
+            });
+            return true;
+        };
         std::optional<Editor::ScriptHotReload> scriptHotReload;
         std::optional<Editor::ShaderHotReload> shaderHotReload;
         std::future<Editor::GameBuildResult> gameBuild;
@@ -435,6 +484,8 @@ int main(int argc, char** argv) {
         if (!scriptModules.loadInitialModule(modulePath, Engine::ScriptModuleLoadMode::HotReload)) {
             Editor::ConsolePanel::info("No compiled game scripts module yet; it will be built for this project.");
         }
+        loadPlugins();
+        static_cast<void>(startPluginBuild());
         // Shader hot reload still uses the source build. C++ script hot reload
         // above is deliberately independent of whether this is a package.
         const bool portableEditor = std::filesystem::is_regular_file(editorRoot / "Tools" / "Slang" /
@@ -601,6 +652,7 @@ int main(int argc, char** argv) {
         bool showShaderGraph = false;
         bool showTerminal = true;
         bool showProfiler = true;
+        bool showPlugins = false;
         Editor::TerminalPanel terminal{project.rootPath(), terminalFont};
         double physicsAccumulator = 0.0;
         bool showGameView = false;
@@ -626,8 +678,17 @@ int main(int argc, char** argv) {
             Engine::Renderer::beginFrame();
             // A scene opened from the menu replaces the edited scene, never
             // the Play Mode copy: adopt it once Play Mode has ended.
-            if (initialSceneLoad && !(playing && !pendingSceneIsStartup) &&
-                initialSceneLoad->wait_for(std::chrono::seconds::zero()) == std::future_status::ready) {
+            const bool loadedSceneReady =
+                initialSceneLoad && !(playing && !pendingSceneIsStartup) &&
+                initialSceneLoad->wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
+            // Adopting runs renderer.reloadScene() below, which can freeze the
+            // editor for seconds (textures, geometry, pipeline compilation).
+            // Present one frame that says so first, then adopt.
+            const bool gpuPreparationAnnounced = Editor::EditorActivity::running(Editor::EditorActivity::GpuPrepareKey);
+            if (loadedSceneReady && !gpuPreparationAnnounced)
+                Editor::EditorActivity::begin(Editor::EditorActivity::GpuPrepareKey,
+                                              "Preparing " + pendingScenePath.filename().string() + " on GPU");
+            if (loadedSceneReady && gpuPreparationAnnounced) {
                 try {
                     auto loaded = initialSceneLoad->get();
                     auto& loadedScene = loaded.scene;
@@ -671,6 +732,8 @@ int main(int argc, char** argv) {
                     Editor::ConsolePanel::error(std::string{pendingSceneIsStartup ? "Could not load startup scene: "
                                                                                  : "Could not load scene: "} +
                                                 error.what());
+                    // No renderer reload follows a failed load.
+                    Editor::EditorActivity::finish(Editor::EditorActivity::GpuPrepareKey);
                 }
                 initialSceneLoad.reset();
             }
@@ -695,10 +758,17 @@ int main(int argc, char** argv) {
             // later in this frame then uses this exact same camera transform.
             renderer.updateEditorSceneCameraInput();
             if (events.togglePlay) {
+                if (playing) {
+                    Editor::EditorActivity::begin(PlayStopActivity, "Restoring editor scene");
+                    // Plugin systems still see the game's scene.
+                    plugins.playStop(scene);
+                }
                 if (EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
                                                     EditorSceneSession::antialiasingLevel(renderer))) {
                     physicsSystem.reset();
                     playing = !playing;
+                    if (playing)
+                        plugins.playStart(scene);
                     if (!playing)
                         static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Normal));
                     if (!playing)
@@ -709,8 +779,12 @@ int main(int argc, char** argv) {
                     if (!playing)
                         requestFullSceneReload();
                     Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
-                } else
+                } else {
                     Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
+                    Editor::EditorActivity::finish(PlayStopActivity);
+                    if (playing)
+                        plugins.playStart(scene);
+                }
             }
             if (events.togglePause && playing) {
                 paused = !paused;
@@ -724,8 +798,45 @@ int main(int argc, char** argv) {
             // scene edits are synchronized below without rebuilding the UI or
             // swapchain.
             if (rendererReloadPending) {
+                // Name the rebuild unless a scene load or Play Mode exit
+                // already describes it (antialiasing changes, undo/redo).
+                if (!Editor::EditorActivity::running(Editor::EditorActivity::GpuPrepareKey) &&
+                    !Editor::EditorActivity::running(PlayStopActivity))
+                    Editor::EditorActivity::begin(RendererReloadActivity, "Rebuilding renderer resources");
                 renderer.reloadScene(scene, window);
                 rendererReloadPending = false;
+                // The scene load's ECS adoption above requested this reload.
+                if (!initialSceneLoad)
+                    Editor::EditorActivity::finish(Editor::EditorActivity::GpuPrepareKey);
+                Editor::EditorActivity::finish(PlayStopActivity);
+                Editor::EditorActivity::finish(RendererReloadActivity);
+            }
+
+            Editor::EditorActivity::track(Editor::EditorActivity::SceneLoadKey,
+                                          initialSceneLoad.has_value() || startInitialSceneLoad,
+                                          "Loading " + pendingScenePath.filename().string());
+            Editor::EditorActivity::track(ScriptBuildActivity, scriptHotReload && scriptHotReload->building(),
+                                          "Compiling C++ scripts");
+            if (pluginBuild.valid() &&
+                pluginBuild.wait_for(std::chrono::seconds::zero()) == std::future_status::ready) {
+                const auto result = pluginBuild.get();
+                for (const auto& name : result.built)
+                    Editor::ConsolePanel::info("Built plugin " + name + ".");
+                for (const auto& failure : result.failures) {
+                    // The tail of the CMake output holds the compiler errors.
+                    constexpr std::size_t MaximumOutput = 4000;
+                    const std::string& output = failure.output;
+                    Editor::ConsolePanel::error("Could not build plugin " + failure.plugin + ":\n" +
+                                                (output.size() > MaximumOutput
+                                                     ? "..." + output.substr(output.size() - MaximumOutput)
+                                                     : output));
+                }
+                pluginReloadPending = true;
+            }
+            Editor::EditorActivity::track(PluginBuildActivity, pluginBuild.valid(), "Building plugins");
+            if (pluginReloadPending && !playing) {
+                pluginReloadPending = false;
+                reloadPlugins();
             }
 
             const std::uint64_t sceneStructureBeforeUi = scene.editor().structuralRevision();
@@ -747,6 +858,7 @@ int main(int argc, char** argv) {
             EditorMenuActions menuActions;
             menuActions.currentGizmo = static_cast<int>(gizmoMode);
             menuActions.currentSelectionTool = static_cast<int>(selectionTool);
+            menuActions.showPlugins = &showPlugins;
             if (const Engine::Entity created = drawEditorMenuBar(
                     scene, renderer, content, project, editorRoot, titleBar, antialiasingChanged, sceneLoaded,
                     sceneSaved, sceneDeleted, playing, paused, playToggleRequested, pauseToggleRequested,
@@ -859,9 +971,11 @@ int main(int argc, char** argv) {
                     const Engine::Project buildProject = project;
                     const std::filesystem::path buildEditorRoot = editorRoot;
                     gameBuildRunning = true;
-                    gameBuild = std::async(std::launch::async, [buildEditorRoot, buildProject] {
+                    const Editor::GameBuildSettings buildSettings{
+                        .startupSceneOnly = menuActions.gameBuildStartupSceneOnly};
+                    gameBuild = std::async(std::launch::async, [buildEditorRoot, buildProject, buildSettings] {
                         const Editor::GameBuildPipeline pipeline{buildEditorRoot};
-                        return pipeline.build(buildProject, {});
+                        return pipeline.build(buildProject, buildSettings);
                     });
                 } catch (const std::exception& error) {
                     Editor::ConsolePanel::error("Game build failed: " + std::string{error.what()});
@@ -921,11 +1035,20 @@ int main(int argc, char** argv) {
                 }
             }
             const auto setPlayMode = [&](const bool enabled) {
+                if (!enabled && playing) {
+                    Editor::EditorActivity::begin(PlayStopActivity, "Restoring editor scene");
+                    plugins.playStop(scene);
+                }
                 if (!EditorSceneSession::setPlayMode(enabled, scene, playSceneSnapshot, playModeError,
                                                      EditorSceneSession::antialiasingLevel(renderer))) {
                     Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
+                    Editor::EditorActivity::finish(PlayStopActivity);
+                    if (playing)
+                        plugins.playStart(scene);
                     return false;
                 }
+                if (enabled)
+                    plugins.playStart(scene);
                 physicsSystem.reset();
                 playing = enabled;
                 if (!playing)
@@ -1128,6 +1251,14 @@ int main(int argc, char** argv) {
             if (showShaderGraph)
                 shaderGraphPanel->draw(showShaderGraph);
             Editor::drawProfilerPanel(renderer, showProfiler);
+            Editor::drawPluginsPanel(
+                showPlugins, plugins, project, editorRoot / "Plugins", playing, pluginBuild.valid(),
+                [&] {
+                    // Rebuild changed project plugins first; they reload when done.
+                    if (!startPluginBuild())
+                        reloadPlugins();
+                },
+                [](const std::string& message) { Editor::ConsolePanel::error(message); });
             drawStatusBar(scene, selectedEntity,
                           {.selectionCount = selectedEntities.size(),
                            .playing = playing,
@@ -1246,6 +1377,7 @@ int main(int argc, char** argv) {
                     try {
                         GE_PROFILE_SCOPE("Physics");
                         physicsSystem.update(scene, static_cast<float>(EditorConstants::physicsStep));
+                        plugins.fixedUpdate(scene, static_cast<float>(EditorConstants::physicsStep));
                     } catch (const std::exception& error) {
                         Editor::ConsolePanel::error("Physics simulation stopped: " + std::string{error.what()});
                         static_cast<void>(setPlayMode(false));
@@ -1262,10 +1394,14 @@ int main(int argc, char** argv) {
                 if (playing) {
                     GE_PROFILE_SCOPE("Scripts");
                     scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
+                    plugins.update(scene, static_cast<float>(Engine::Time::deltaTime()));
                 }
             }
             if (scriptProjectRoot != project.rootPath()) {
                 renderer.setProjectRoot(project.rootPath());
+                plugins.unloadAll(scene);
+                loadPlugins();
+                static_cast<void>(startPluginBuild());
                 scriptModules.unload(scene);
                 if (scriptConfigure.valid())
                     static_cast<void>(scriptConfigure.get());
@@ -1293,9 +1429,15 @@ int main(int argc, char** argv) {
                     [](const std::string& message) { Editor::ConsolePanel::warning(message); });
             }
             if (shaderHotReload) {
-                shaderHotReload->poll([&renderer] { return renderer.reloadShaders(); },
-                                      [](const std::string& message) { Editor::ConsolePanel::info(message); },
-                                      [](const std::string& message) { Editor::ConsolePanel::warning(message); });
+                shaderHotReload->poll(
+                    [&renderer] {
+                        Editor::EditorActivity::begin(ShaderReloadActivity, "Recompiling shaders");
+                        const bool reloaded = renderer.reloadShaders();
+                        Editor::EditorActivity::finish(ShaderReloadActivity);
+                        return reloaded;
+                    },
+                    [](const std::string& message) { Editor::ConsolePanel::info(message); },
+                    [](const std::string& message) { Editor::ConsolePanel::warning(message); });
             }
             ImGui::Render();
             const bool deferSceneGpuWork = skipRendererFrameAfterSceneRestore;
@@ -1398,6 +1540,7 @@ int main(int argc, char** argv) {
         Editor::addRecentProject(project.manifestPath());
         Editor::saveSession({.projectManifest = project.manifestPath(), .scenePath = EditorSceneSession::scenePath()});
         terminal.shutdown();
+        plugins.unloadAll(scene);
         scriptModules.unload(scene);
         renderer.shutdown();
         shaderGraphPanel.reset();

@@ -10,10 +10,16 @@ void GPUInstanceCullingPass::create(const VkPipeline pipeline, const VkPipelineL
     m_visibleInstances = visibleInstances;
 }
 
-void GPUInstanceCullingPass::record(const VkCommandBuffer commandBuffer, const std::uint32_t instanceCount) const {
+void GPUInstanceCullingPass::recordClear(const VkCommandBuffer commandBuffer, const std::uint32_t instanceCount) const {
     if (instanceCount == 0 || m_pipeline == VK_NULL_HANDLE)
         return;
     vkCmdFillBuffer(commandBuffer, m_visibleCount, 0, sizeof(std::uint32_t), 0);
+}
+
+void GPUInstanceCullingPass::record(const VkCommandBuffer commandBuffer, const std::uint32_t instanceCount) const {
+    if (instanceCount == 0 || m_pipeline == VK_NULL_HANDLE)
+        return;
+    recordClear(commandBuffer, instanceCount);
     const VkBufferMemoryBarrier2 clearBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                                               .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                               .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -27,6 +33,12 @@ void GPUInstanceCullingPass::record(const VkCommandBuffer commandBuffer, const s
                                            .bufferMemoryBarrierCount = 1,
                                            .pBufferMemoryBarriers = &clearBarrier};
     vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+    recordCull(commandBuffer, instanceCount);
+}
+
+void GPUInstanceCullingPass::recordCull(const VkCommandBuffer commandBuffer, const std::uint32_t instanceCount) const {
+    if (instanceCount == 0 || m_pipeline == VK_NULL_HANDLE)
+        return;
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_layout, 0, 1, &m_set, 0, nullptr);
     vkCmdDispatch(commandBuffer, (instanceCount + 63U) / 64U, 1, 1);

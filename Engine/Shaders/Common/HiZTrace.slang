@@ -36,6 +36,12 @@ float hizLoadClosestDepth(Sampler2D levelZero, Sampler2D pyramid, int2 texel, in
     return mip == 0 ? levelZero.Load(int3(clamped, 0)).r : pyramid.Load(int3(clamped, mip)).r;
 }
 
+// As hizLoadClosestDepth, for a texel the caller has already clamped.
+float hizLoadClosestDepthTexel(Sampler2D levelZero, Sampler2D pyramid, int2 texel, int mip)
+{
+    return mip == 0 ? levelZero.Load(int3(texel, 0)).r : pyramid.Load(int3(texel, mip)).r;
+}
+
 float hizSceneDepthAt(Sampler2D levelZero, float2 size, float2 uv)
 {
     const int2 texel = clamp(int2(uv * size), int2(0, 0), int2(size) - 1);
@@ -77,10 +83,12 @@ bool hizTrace(Sampler2D levelZero, Sampler2D pyramid, float2 size, int maxMip, f
     const float2 floorOffset = float2(direction.x < 0.0 ? 0.0 : 1.0, direction.y < 0.0 ? 0.0 : 1.0);
 
     int mip = 0;
-    // 2^-mip: halving and doubling a power of two is exact, so the level's
-    // extent floor(size * levelScale) matches hizMipResolution without an
-    // exp2 and an int-to-float conversion per step.
-    float levelScale = 1.0;
+    // The level's extent in integers: max(size >> mip, 1) is
+    // hizMipResolution for the integral sizes callers pass, and the shift
+    // runs on the ALU pipe where floor and float-to-int conversions would
+    // queue on the narrow XU pipe, the SSR trace's limiter.
+    const int2 baseSize = int2(size);
+    int2 lastTexel = baseSize - 1;
     float2 mipSize = size;
     float2 inverseMipSize = 1.0 / size;
     // Leave the origin texel first: a surface never reflects itself.
@@ -99,7 +107,8 @@ bool hizTrace(Sampler2D levelZero, Sampler2D pyramid, float2 size, int maxMip, f
         }
         // In bounds, so truncation is the floor.
         const int2 cell = int2(position.xy * mipSize);
-        const float surface = hizLoadClosestDepth(levelZero, pyramid, cell, mip, mipSize);
+        // In bounds, cell is at most the extent itself (position 1.0).
+        const float surface = hizLoadClosestDepthTexel(levelZero, pyramid, min(cell, lastTexel), mip);
         boundary = (float2(cell) + floorOffset) * inverseMipSize + crossOffset;
         float3 planeT = (float3(boundary, surface) - origin) * inverseDirection;
         // Only a ray moving away from the camera can meet the surface plane.
@@ -115,8 +124,9 @@ bool hizTrace(Sampler2D levelZero, Sampler2D pyramid, float2 size, int maxMip, f
         if (climb || !skippedCell)
         {
             mip += climb ? 1 : -1;
-            levelScale *= climb ? 0.5 : 2.0;
-            mipSize = max(floor(size * levelScale), float2(1.0, 1.0));
+            const int2 mipExtent = max(baseSize >> max(mip, 0), int2(1, 1));
+            lastTexel = mipExtent - 1;
+            mipSize = float2(mipExtent);
             inverseMipSize = 1.0 / mipSize;
         }
         ++iteration;

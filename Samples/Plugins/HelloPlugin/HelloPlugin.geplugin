@@ -1,0 +1,6 @@
+# A minimal GamEngine plugin: one script and one game-wide system.
+name = HelloPlugin
+version = 1.0.0
+description = Sample plugin: a HelloSpinner script and a frame-counting system.
+api_version = 1
+type = runtime

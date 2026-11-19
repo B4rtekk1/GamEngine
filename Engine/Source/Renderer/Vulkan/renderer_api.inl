@@ -6,6 +6,7 @@ Renderer::~Renderer() {
 Renderer::Renderer(RenderConfig config)
     : optimizationFeatures_(config.features), renderPath_(config.renderPath), antialiasingLevel_(config.antialiasing),
       shadowQuality_(config.shadowQuality), rtContactShadowSettings_(config.rtContactShadows),
+      localShadowBackend_(config.localShadowBackend),
       gtaoQuality_(config.gtaoQuality), gtaoDebugView_(config.gtaoDebugView), pbrDebugView_(config.pbrDebugView),
       iblQuality_(config.iblQuality), shadowDebugView_(config.shadowDebugView), grassSettings_(config.grass),
       ssgiSettings_(config.ssgi), ddgiSettings_(config.ddgi), postProcessSettings_(config.postProcess),
@@ -79,6 +80,26 @@ void Renderer::setContactShadowMode(const ContactShadowMode mode) noexcept {
 
 ContactShadowMode Renderer::contactShadowMode() const noexcept {
     return rtContactShadowSettings_.mode;
+}
+
+void Renderer::setLocalShadowBackend(const LocalShadowBackend backend) noexcept {
+    if (localShadowBackend_ == backend)
+        return;
+    localShadowBackend_ = backend;
+    if (backend_)
+        backend_->setLocalShadowBackend(backend);
+}
+
+LocalShadowBackend Renderer::localShadowBackend() const noexcept {
+    return localShadowBackend_;
+}
+
+bool Renderer::nvidiaLocalShadowsSupported() const noexcept {
+    return backend_ && backend_->localLightShadowPass.clusterTracing();
+}
+
+bool Renderer::nvidiaLocalShadowsActive() const noexcept {
+    return backend_ && std::ranges::any_of(backend_->shadowTraceUsedCluster, [](const bool used) { return used; });
 }
 
 bool Renderer::contactShadowsActive() const noexcept {
@@ -330,6 +351,8 @@ void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
         ddgiSettings_, postProcessSettings_, surfaceSettings_, fogSettings_, state_->projectRoot,
         state_->assetManager, state_->forwardPass, state_->skyPass, state_->tonemapPass, state_->temporalAaPass,
         state_->bloomPass, state_->gtaoPass, state_->particlePipeline, state_->canvasRenderer, editorUiBackend_);
+    // Before initializeCore(), which loads the cached Auto decision.
+    backend_->setLocalShadowBackend(localShadowBackend_);
     backend_->initializeCore();
 }
 

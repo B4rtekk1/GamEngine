@@ -173,6 +173,13 @@ class ScriptRegistry final {
     }
 
     void removeGeneration(std::uint64_t generation);
+
+    /**
+     * Returns a module generation no other module of this process has used.
+     * Game script modules and plugins share it, so removing one module's
+     * classes (removeGeneration) never removes another's.
+     */
+    [[nodiscard]] static std::uint64_t allocateModuleGeneration() noexcept;
     void setActiveRegistrationGeneration(std::uint64_t generation) noexcept {
         activeRegistrationGeneration_ = generation;
     }

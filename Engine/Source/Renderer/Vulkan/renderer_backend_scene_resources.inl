@@ -496,6 +496,7 @@ void createMeshBuffers() {
     // too. Ordinary topology deltas keep both heaps intact.
     if (geometryHeapAllocations.empty() && vertexBuffer.handle() == VK_NULL_HANDLE) {
         geometryHeapMeshIds.clear();
+        geometryHeapIdentities.clear();
         geometryHeapFreeVertices.clear();
         geometryHeapFreeIndices.clear();
         retiredGeometryHeapAllocations.clear();
@@ -657,6 +658,29 @@ void createMeshBuffers() {
         static_cast<void>(mesh);
         liveGeometryResources.insert(resource);
     }
+    // A MeshRenderer resource whose address now belongs to a different
+    // identity is a new mesh: retire the released one's ranges below and
+    // give the address a fresh MeshId.
+    registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
+        const MeshGpuResource* const resource = renderer.mesh.resource().get();
+        if (resource == nullptr || !liveGeometryResources.contains(resource))
+            return;
+        const auto [identity, inserted] = geometryHeapIdentities.try_emplace(resource, resource->textureIdentity);
+        if (inserted || identity->second == resource->textureIdentity)
+            return;
+        identity->second = resource->textureIdentity;
+        if (const auto stale = geometryHeapAllocations.find(resource); stale != geometryHeapAllocations.end()) {
+            retiredGeometryHeapAllocations.push_back({stale->second, submittedFrameValue});
+            geometryHeapAllocations.erase(stale);
+        }
+        if (const auto stale = meshletHeapAllocations.find(resource); stale != meshletHeapAllocations.end()) {
+            retiredMeshletHeapAllocations.push_back({stale->second, submittedFrameValue});
+            meshletHeapAllocations.erase(stale);
+        }
+        geometryHeapMeshIds.erase(resource);
+    });
+    std::erase_if(geometryHeapIdentities,
+                  [&](const auto& entry) { return !liveGeometryResources.contains(entry.first); });
     for (auto allocation = geometryHeapAllocations.begin(); allocation != geometryHeapAllocations.end();) {
         if (liveGeometryResources.contains(allocation->first)) {
             ++allocation;

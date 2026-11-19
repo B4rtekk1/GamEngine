@@ -2,6 +2,7 @@
 
 #include <Engine/Core/Diagnostics.h>
 #include <Engine/Engine.h>
+#include <Engine/Plugins/PluginManager.h>
 #include <Engine/Scripting/ScriptModuleManager.h>
 #include <Engine/Scripting/ScriptRegistry.h>
 #include <Platform/UserPaths.h>
@@ -15,6 +16,29 @@
 #include <string_view>
 
 // NOLINTBEGIN(readability-magic-numbers)
+
+namespace {
+// Runs the plugins' systems for the whole life of the game.
+class PluginSystems final : public Engine::Game {
+  public:
+    explicit PluginSystems(Engine::PluginManager& plugins) noexcept : plugins_(plugins) {}
+    void onStart(Engine::Scene& scene) override {
+        plugins_.playStart(scene);
+    }
+    void onUpdate(Engine::Scene& scene, const float deltaTime) override {
+        plugins_.update(scene, deltaTime);
+    }
+    void onFixedUpdate(Engine::Scene& scene, const float deltaTime) override {
+        plugins_.fixedUpdate(scene, deltaTime);
+    }
+    void onShutdown(Engine::Scene& scene) override {
+        plugins_.playStop(scene);
+    }
+
+  private:
+    Engine::PluginManager& plugins_;
+};
+} // namespace
 
 int main(int argc, char** argv) {
     struct DiagnosticsGuard final {
@@ -56,6 +80,9 @@ int main(int argc, char** argv) {
         // --no-mesh-shaders draws GPU-culled meshlets as indexed draws, for
         // A/B measurements against the mesh-shader path.
         bool meshShaders = true;
+        // --local-shadows auto|nvidia|generic picks the ray tracing scene of
+        // local light shadows; nvidia falls back to generic on other GPUs.
+        Engine::LocalShadowBackend localShadowBackend = Engine::LocalShadowBackend::Auto;
         for (int index = 1; index < argc; ++index) {
             const std::string_view argument{argv[index]};
             if (argument == "--no-pipelined-physics") {
@@ -64,6 +91,20 @@ int main(int argc, char** argv) {
             }
             if (argument == "--sequential-compute") {
                 asyncCompute = false;
+                continue;
+            }
+            if (argument == "--local-shadows") {
+                if (++index == argc)
+                    throw std::runtime_error("--local-shadows requires auto, nvidia or generic");
+                const std::string_view value{argv[index]};
+                if (value == "auto")
+                    localShadowBackend = Engine::LocalShadowBackend::Auto;
+                else if (value == "nvidia")
+                    localShadowBackend = Engine::LocalShadowBackend::Nvidia;
+                else if (value == "generic")
+                    localShadowBackend = Engine::LocalShadowBackend::Generic;
+                else
+                    throw std::runtime_error("--local-shadows requires auto, nvidia or generic");
                 continue;
             }
             if (argument == "--no-mesh-shaders") {
@@ -113,6 +154,9 @@ int main(int argc, char** argv) {
         const std::filesystem::path scenePath =
             sceneOverride ? project.resolve(*sceneOverride) : project.startupScene();
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
+        // Outlives the Application below: plugin scripts in its scene run
+        // plugin code while being destroyed.
+        Engine::PluginManager plugins{Engine::ScriptRegistry::instance()};
         const auto scriptModule = executableRoot / Platform::ScriptModuleFilename;
         if (!std::filesystem::is_regular_file(scriptModule)) {
             throw std::runtime_error("Missing game script module: " + scriptModule.string());
@@ -120,6 +164,8 @@ int main(int argc, char** argv) {
         if (!scriptModules.loadInitialModule(scriptModule, Engine::ScriptModuleLoadMode::Direct)) {
             throw std::runtime_error("Could not load game script module");
         }
+        // A built game ships only the plugins its project enabled.
+        plugins.loadAll({executableRoot / "Plugins"});
         const Engine::RenderConfig renderConfig{
             // Hi-Z culling rides on the shadow hierarchy that High VSM builds
             // anyway; keep the explicit flag so a game can opt out per title.
@@ -127,6 +173,7 @@ int main(int argc, char** argv) {
             .renderPath = asyncCompute ? Engine::RenderPath::AsyncCompute : Engine::RenderPath::Sequential,
             .antialiasing = Engine::AntialiasingLevel::TAA,
             .shadowQuality = Engine::ShadowQuality::High,
+            .localShadowBackend = localShadowBackend,
             .gtaoQuality = Engine::GtaoQuality::High,
             .iblQuality = Engine::IblQuality::High,
         };
@@ -145,8 +192,11 @@ int main(int argc, char** argv) {
         if (!std::filesystem::is_regular_file(scenePath)) {
             throw std::runtime_error("Scene file does not exist: " + scenePath.string());
         }
+        PluginSystems pluginSystems{plugins};
+        app.setGame(pluginSystems);
         app.loadScene(scenePath);
         app.run();
+        plugins.unloadAll(app.scene());
         scriptModules.unload(app.scene());
     } catch (const std::exception& exception) {
         auto& diagnostics = Engine::Diagnostics::instance();

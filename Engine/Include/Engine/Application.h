@@ -28,6 +28,13 @@ struct ApplicationConfig final {
     std::int32_t width = 1280; // NOLINT
     std::int32_t height = 720; // NOLINT
     bool closeOnEscape = true;
+    /**
+     * Captures the mouse (CursorMode::Locked) on a left click in the window,
+     * as the Editor's Play Mode does; Escape releases it. The capturing click
+     * is not passed to the game. Turn off for games that drive the cursor
+     * themselves (menus, strategy cameras).
+     */
+    bool lockCursorOnClick = true;
     float fixedDeltaTime = 1.0F / 60.0F; // NOLINT
     std::uint32_t maxFixedStepsPerFrame = 5;
     float maxFrameDeltaTime = 0.25F; // NOLINT

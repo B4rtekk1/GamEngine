@@ -32,7 +32,7 @@ std::filesystem::path ScriptModuleManager::makeVersionedCopy(const std::filesyst
 
 bool ScriptModuleManager::loadCandidate(const std::filesystem::path& path, LoadedModule& out,
                                         const ScriptModuleLoadMode mode) {
-    const std::uint64_t generation = nextGeneration_;
+    const std::uint64_t generation = ScriptRegistry::allocateModuleGeneration();
     const auto modulePath = mode == ScriptModuleLoadMode::HotReload ? makeVersionedCopy(path, generation) : path;
     if (modulePath.empty() || !out.library.load(modulePath)) {
         return false;
@@ -63,7 +63,6 @@ bool ScriptModuleManager::loadCandidate(const std::filesystem::path& path, Loade
     out.generation = generation;
     out.path = modulePath;
     out.descriptors = registrar.descriptors();
-    ++nextGeneration_;
     return true;
 }
 
@@ -83,6 +82,11 @@ bool ScriptModuleManager::loadInitialModule(const std::filesystem::path& path, c
 }
 
 void ScriptModuleManager::destroyGeneration(Registry& scene, const std::uint64_t generation) const {
+    releaseGeneration(registry_, scene, generation);
+}
+
+void ScriptModuleManager::releaseGeneration(const ScriptRegistry& registry, Registry& scene,
+                                            const std::uint64_t generation) {
     // Generation zero denotes components without a dynamically loaded module.
     // It must never be treated as a real module generation, as those
     // components can have an empty RuntimeScriptInstance.
@@ -90,7 +94,7 @@ void ScriptModuleManager::destroyGeneration(Registry& scene, const std::uint64_t
         return;
     }
 
-    scene.view<ScriptComponent>([this, generation](const Entity, ScriptComponent& component) {
+    scene.view<ScriptComponent>([&registry, generation](const Entity, ScriptComponent& component) {
         if (component.runtime.moduleGeneration != generation) {
             return;
         }
@@ -101,7 +105,7 @@ void ScriptModuleManager::destroyGeneration(Registry& scene, const std::uint64_t
         }
 
         try {
-            registry_.captureFields(component.className, *component.runtime.instance, component.fields);
+            registry.captureFields(component.className, *component.runtime.instance, component.fields);
             component.hotReloadState = component.runtime->saveHotReloadState();
             component.hasHotReloadState = true;
         } catch (...) {

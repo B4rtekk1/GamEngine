@@ -46,6 +46,7 @@ namespace Engine {
 class Renderer;
 class ScriptSystem;
 class ScriptModuleManager;
+class PluginManager;
 class PhysicsSystem;
 class SceneEditor;
 class SceneView;
@@ -620,6 +621,7 @@ class Scene {
     std::optional<SurfaceSettings> surface_;
     std::optional<FogSettings> fog_;
     friend class ScriptModuleManager;
+    friend class PluginManager;
     friend class Application;
     friend class Actor;
     friend class SceneSerializer;

@@ -42,12 +42,18 @@ add_custom_command(TARGET Editor POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/SDK/ThirdParty"
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/SDK/Tools"
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/SDK/GameScripts"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/Engine/Include" "$<TARGET_FILE_DIR:Editor>/SDK/Include"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/SDK/Plugin"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Plugins"
+        # Public headers only: the scripting entry headers and their includes.
+        COMMAND ${CMAKE_COMMAND} "-DGE_SDK_HEADER_SOURCE=${PROJECT_SOURCE_DIR}/Engine/Include"
+                "-DGE_SDK_HEADER_DESTINATION=$<TARGET_FILE_DIR:Editor>/SDK/Include"
+                -P "${PROJECT_SOURCE_DIR}/cmake/CopySdkPublicHeaders.cmake"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${GLM_INCLUDE_DIR}/glm" "$<TARGET_FILE_DIR:Editor>/SDK/ThirdParty/glm"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_LINKER_FILE:Engine>" "$<TARGET_FILE_DIR:Editor>/SDK/Lib/$<TARGET_LINKER_FILE_NAME:Engine>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/Player/GameScriptsPCH.h" "$<TARGET_FILE_DIR:Editor>/SDK/GameScriptsPCH.h"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/Tools/GenerateGameScriptsModule.cmake" "$<TARGET_FILE_DIR:Editor>/SDK/Tools/GenerateGameScriptsModule.cmake"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/cmake/GameScriptsStandalone/CMakeLists.txt" "$<TARGET_FILE_DIR:Editor>/SDK/GameScripts/CMakeLists.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/cmake/PluginStandalone/CMakeLists.txt" "$<TARGET_FILE_DIR:Editor>/SDK/Plugin/CMakeLists.txt"
         COMMENT "Copying C++ scripting SDK for Editor")
 
 # A build export consumes this fixed runtime template.  Keeping it beside the
@@ -61,6 +67,9 @@ if (TARGET Player)
             COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAMEENGINE_SHADER_OUTPUT_DIR}" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/shaders"
             COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:Player>/Fonts" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/Fonts"
             COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:Player>/Licenses" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/Licenses"
+            # Exported games load the BRDF LUT beside their executable.
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/Assets/BRDF"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/Assets/BRDF/brdf_lut.bin"
             COMMENT "Copying runtime template for game builds")
     add_dependencies(Editor Player)
 endif ()

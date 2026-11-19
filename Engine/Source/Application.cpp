@@ -5,6 +5,7 @@
 
 #include "Engine/Core/Profiler.h"
 #include "Engine/Core/Time.h"
+#include "Engine/Input/Input.h"
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Scripting/ScriptSystem.h"
@@ -201,6 +202,9 @@ void Application::loadScene(const std::filesystem::path& path) {
 }
 
 void Application::run() {
+    // The primary camera follows the mouse while it is captured, exactly as
+    // in the Editor's Play Mode (which enables this for its game view).
+    impl_->renderer.setGameCameraInput(true);
     if (game_ != nullptr) {
         game_->onStart(scene_);
     }
@@ -307,11 +311,21 @@ void Application::initializeRuntime() {
 void Application::processEvents() const {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        const bool locked = Input::cursorMode() == CursorMode::Locked;
+        if (config_.lockCursorOnClick && !locked && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+            event.button.button == SDL_BUTTON_LEFT && Input::setCursorMode(CursorMode::Locked)) {
+            // The capturing click is not gameplay input (no shot fired on
+            // the click that grabs the mouse).
+            continue;
+        }
         impl_->renderer.processEvent(&event);
-        const bool closeRequested =
-            event.type == SDL_EVENT_QUIT ||
-            (config_.closeOnEscape && event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE);
-        if (closeRequested) {
+        const bool escape = event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !event.key.repeat;
+        // Escape first releases a captured mouse; only a free one closes.
+        if (escape && locked) {
+            static_cast<void>(Input::setCursorMode(CursorMode::Normal));
+            continue;
+        }
+        if (event.type == SDL_EVENT_QUIT || (config_.closeOnEscape && escape)) {
             impl_->running = false;
         }
     }

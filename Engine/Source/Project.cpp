@@ -39,6 +39,12 @@ void Project::save() const {
     output << "# GamEngine project\nname = " << name_
            << "\nasset_root = " << assetRoot_.lexically_relative(rootPath_).generic_string()
            << "\nstartup_scene = " << startupScene_.lexically_relative(rootPath_).generic_string() << '\n';
+    if (!disabledPlugins_.empty()) {
+        output << "disabled_plugins = ";
+        for (std::size_t index = 0; index < disabledPlugins_.size(); ++index)
+            output << (index == 0 ? "" : ", ") << disabledPlugins_[index];
+        output << '\n';
+    }
     if (!output) {
         throw std::runtime_error("Could not write project manifest: " + manifestPath_.string());
     }
@@ -83,7 +89,29 @@ Project Project::load(const std::filesystem::path& manifestPath) {
     project.name_ = values.contains("name") ? values.at("name") : project.rootPath_.filename().string();
     project.assetRoot_ = project.resolve(requireRelativePath(assetRoot->second, "asset_root"));
     project.startupScene_ = project.resolve(requireRelativePath(startupScene->second, "startup_scene"));
+    if (const auto disabled = values.find("disabled_plugins"); disabled != values.end()) {
+        std::string_view remaining{disabled->second};
+        while (!remaining.empty()) {
+            const auto comma = remaining.find(',');
+            std::string name = trim(std::string{remaining.substr(0, comma)});
+            if (!name.empty() && std::ranges::find(project.disabledPlugins_, name) == project.disabledPlugins_.end())
+                project.disabledPlugins_.push_back(std::move(name));
+            remaining = comma == std::string_view::npos ? std::string_view{} : remaining.substr(comma + 1);
+        }
+    }
     return project;
+}
+
+bool Project::pluginEnabled(const std::string_view name) const {
+    return std::ranges::find(disabledPlugins_, name) == disabledPlugins_.end();
+}
+
+void Project::setPluginEnabled(const std::string_view name, const bool enabled) {
+    const auto found = std::ranges::find(disabledPlugins_, name);
+    if (enabled && found != disabledPlugins_.end())
+        disabledPlugins_.erase(found);
+    else if (!enabled && found == disabledPlugins_.end())
+        disabledPlugins_.emplace_back(name);
 }
 
 Project Project::discover(const std::filesystem::path& startDirectory) {

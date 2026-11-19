@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <string>
 #include <gtest/gtest.h>
 
 namespace {
@@ -97,5 +99,109 @@ TEST(GameBuildPipeline, ExportsScriptsAndRuntimeFromSdkInUnicodeProjectPath) {
     EXPECT_EQ(exitCode, EXIT_FAILURE) << message;
     EXPECT_NE(message.find("Could not open project manifest"), std::string::npos) << message;
 #endif
+}
+
+// The export leaves out sources the game only uses cooked (.gmesh points at
+// .gtex), keeps sources a scene loads by path, and rewrites old absolute mesh
+// paths so the game runs on another machine.
+TEST(GameBuildPipeline, ShipsCookedAssetsAndPortableScenePaths) {
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("ge-portable-export-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{root};
+    const auto project = Engine::Project::create(root / "Project", "PortableGame");
+    const auto assets = project.assetRoot();
+    std::filesystem::create_directories(assets / "Bistro" / "Textures");
+    const auto write = [](const std::filesystem::path& path, const std::string& text) {
+        std::ofstream{path, std::ios::binary} << text;
+    };
+    write(assets / "Bistro/Bistro.fbx", "source model");
+    write(assets / "Bistro/Bistro.gmesh", "cooked model");
+    write(assets / "Bistro/Textures/Brick.dds", "source texture");
+    write(assets / "Bistro/Textures/Brick.bc5.gtex", "cooked texture");
+    write(assets / "Bistro/Sky.png", "environment source");
+    write(assets / "Bistro/Sky.gtex", "cooked environment");
+    write(assets / "Loose.png", "uncooked texture");
+    const auto scene = project.startupScene();
+    std::ifstream original{scene};
+    std::string text{std::istreambuf_iterator<char>{original}, {}};
+    original.close();
+    // An old scene: absolute mesh path into this project's assets, and a
+    // sidecar naming a source texture.
+    const std::string absoluteMesh = (assets / "Bistro/Bistro.gmesh").generic_string();
+    const auto meshes = text.find("MESHES ");
+    ASSERT_NE(meshes, std::string::npos);
+    const auto lineEnd = text.find('\n', meshes);
+    text.replace(meshes, lineEnd - meshes, "MESHES 1\nMESH_ASSET 0 \"" + absoluteMesh + "\"");
+    write(scene, text);
+    write(std::filesystem::path{scene.string() + ".environment"}, "\"Bistro/Sky.png\"");
+
+    const auto output = root / "Export";
+    const char* overrideRoot = std::getenv("GE_TEST_EDITOR_ROOT_OVERRIDE");
+    const Editor::GameBuildPipeline pipeline{overrideRoot ? overrideRoot : GE_TEST_EDITOR_ROOT};
+    const auto result = pipeline.build(project, {.outputDirectory = output});
+    ASSERT_TRUE(result.success) << (result.errors.empty() ? "" : result.errors.front());
+    const auto content = output / "Content";
+    EXPECT_TRUE(std::filesystem::exists(content / "Bistro/Bistro.gmesh"));
+    EXPECT_FALSE(std::filesystem::exists(content / "Bistro/Bistro.fbx"));
+    EXPECT_TRUE(std::filesystem::exists(content / "Bistro/Textures/Brick.bc5.gtex"));
+    EXPECT_FALSE(std::filesystem::exists(content / "Bistro/Textures/Brick.dds"));
+    EXPECT_TRUE(std::filesystem::exists(content / "Bistro/Sky.png")) << "named by the scene's environment";
+    EXPECT_TRUE(std::filesystem::exists(content / "Loose.png")) << "no cooked version";
+    const auto exportedScene = content / scene.lexically_relative(assets);
+    std::ifstream exported{exportedScene};
+    const std::string exportedText{std::istreambuf_iterator<char>{exported}, {}};
+    EXPECT_NE(exportedText.find("MESH_ASSET 0 \"Bistro/Bistro.gmesh\""), std::string::npos) << exportedText;
+    EXPECT_EQ(exportedText.find(root.generic_string()), std::string::npos);
+}
+
+TEST(GameBuildPipeline, StartupSceneOnlyShipsWhatTheSceneUses) {
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("ge-startup-only-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{root};
+    const auto project = Engine::Project::create(root / "Project", "StartupOnly");
+    const auto assets = project.assetRoot();
+    const auto write = [](const std::filesystem::path& path, const std::string& text) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream{path, std::ios::binary} << text;
+    };
+    write(assets / "City/City.gmesh", "used mesh");
+    write(assets / "City/Textures/Road.gtex", "its texture");
+    write(assets / "City/Sky.hdr", "used environment");
+    write(assets / "Unused/Forest.gmesh", "another scene's mesh");
+    write(assets / "Scenes/Other.scene", "another scene");
+    const auto scene = project.startupScene();
+    std::ifstream original{scene};
+    std::string text{std::istreambuf_iterator<char>{original}, {}};
+    original.close();
+    const auto meshes = text.find("MESHES ");
+    ASSERT_NE(meshes, std::string::npos);
+    text.replace(meshes, text.find('\n', meshes) - meshes, "MESHES 1\nMESH_ASSET 0 \"City/City.gmesh\"");
+    write(scene, text);
+    write(std::filesystem::path{scene.string() + ".environment"}, "\"City/Sky.hdr\"");
+
+    const auto output = root / "Export";
+    const char* overrideRoot = std::getenv("GE_TEST_EDITOR_ROOT_OVERRIDE");
+    const Editor::GameBuildPipeline pipeline{overrideRoot ? overrideRoot : GE_TEST_EDITOR_ROOT};
+    const auto result = pipeline.build(project, {.outputDirectory = output, .startupSceneOnly = true});
+    ASSERT_TRUE(result.success) << (result.errors.empty() ? "" : result.errors.front());
+    const auto content = output / "Content";
+    EXPECT_TRUE(std::filesystem::exists(content / scene.lexically_relative(assets)));
+    EXPECT_TRUE(std::filesystem::exists(content / "City/City.gmesh"));
+    EXPECT_TRUE(std::filesystem::exists(content / "City/Textures/Road.gtex")) << "the mesh's asset folder";
+    EXPECT_TRUE(std::filesystem::exists(content / "City/Sky.hdr"));
+    EXPECT_FALSE(std::filesystem::exists(content / "Unused"));
+    EXPECT_FALSE(std::filesystem::exists(content / "Scenes/Other.scene"));
 }
 } // namespace

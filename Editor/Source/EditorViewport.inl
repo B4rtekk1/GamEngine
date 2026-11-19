@@ -2140,9 +2140,17 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, Engine::Assets::Con
         drawList->AddCircle(center, radius, ImGui::GetColorU32(EditorUI::colors().border), 32, 3.0F);
         drawList->PathArcTo(center, radius, time * 5.0F, time * 5.0F + 1.8F, 16);
         drawList->PathStroke(ImGui::GetColorU32(EditorUI::colors().accent), ImDrawFlags_None, 3.0F);
-        const char* text = "Loading scene...";
-        drawList->AddText({center.x - ImGui::CalcTextSize(text).x * 0.5F, center.y + radius + 12.0F},
-                          ImGui::GetColorU32(EditorUI::colors().textSecondary), text);
+        // Name the stage: decoding runs in the background, GPU preparation
+        // freezes the editor right after this frame is shown.
+        const std::string text = Editor::EditorActivity::viewportLabel().value_or("Loading scene...");
+        drawList->AddText({center.x - ImGui::CalcTextSize(text.c_str()).x * 0.5F, center.y + radius + 12.0F},
+                          ImGui::GetColorU32(EditorUI::colors().textSecondary), text.c_str());
+        if (Editor::EditorActivity::running(Editor::EditorActivity::GpuPrepareKey)) {
+            const char* hint = "Uploading textures and geometry, compiling pipelines. The editor pauses until done.";
+            drawList->AddText({center.x - ImGui::CalcTextSize(hint).x * 0.5F,
+                               center.y + radius + 16.0F + ImGui::GetTextLineHeightWithSpacing()},
+                              ImGui::GetColorU32(EditorUI::withAlpha(EditorUI::colors().textSecondary, 0.7F)), hint);
+        }
     }
     ImGui::End();
     // Do not enable camera navigation just because a mouse button is held

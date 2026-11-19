@@ -7,6 +7,7 @@
 #include <fstream>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -14,7 +15,9 @@ namespace Engine {
 namespace {
 std::mutex cacheMutex;
 std::unordered_map<VkDevice, VkPipelineCache> caches;
-constexpr std::size_t MaxCacheBytes = 64 * 1024 * 1024;
+// The editor's pipeline set filled 64 MiB within a few shader revisions;
+// leave room for several before the cache is reset (see save()).
+constexpr std::size_t MaxCacheBytes = 256 * 1024 * 1024;
 } // namespace
 
 PipelineCache::~PipelineCache() {
@@ -91,8 +94,23 @@ void PipelineCache::save() const noexcept {
         return;
     try {
         std::size_t size = 0;
-        if (vkGetPipelineCacheData(device_, cache_, &size, nullptr) != VK_SUCCESS || size == 0 || size > MaxCacheBytes)
+        if (vkGetPipelineCacheData(device_, cache_, &size, nullptr) != VK_SUCCESS || size == 0)
             return;
+        if (size > MaxCacheBytes) {
+            // Every shader rebuild adds a full set of entries and Vulkan
+            // cannot evict the stale ones. Skipping the save here used to
+            // freeze the file at the limit, so no pipeline compiled after
+            // that was ever persisted and each start recompiled them all.
+            // Drop the file instead: the next run starts empty and writes a
+            // compact cache of the pipelines it actually builds.
+            std::error_code ignored;
+            std::filesystem::remove(path_, ignored);
+            Diagnostics::instance().report(DiagnosticSeverity::Info,
+                                           "[PipelineCache] " + std::to_string(size >> 20U) +
+                                               " MiB exceeds the cache limit; reset: " + path_.string(),
+                                           {.subsystem = "Vulkan"});
+            return;
+        }
         std::vector<char> bytes(size);
         if (vkGetPipelineCacheData(device_, cache_, &size, bytes.data()) != VK_SUCCESS)
             return;

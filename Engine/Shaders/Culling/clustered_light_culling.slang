@@ -1,7 +1,7 @@
 import Common.SceneData;
 
-// One invocation owns one 3D view cluster.  The list has a fixed, bounded
-// stride; overflow is deliberately clamped so malformed content cannot write
+// Builds the light and reflection-probe list of every 3D view cluster.  The
+// list has a fixed, bounded stride; overflow is deliberately clamped so malformed content cannot write
 // beyond its SSBO.  A production scene should expose this overflow count in
 // renderer diagnostics rather than silently increasing fragment work.
 
@@ -36,20 +36,69 @@ static const uint MaxProbesPerCluster = MaxLightsPerCluster - MaxLocalLightsPerC
 static const uint Probe_Enabled = 1u << 2u;
 static const float ClusterTilePixels = float(ClusterTilePixelSize);
 
-// Conservative sphere-vs-cluster test in view space.  Every local light is
+// One workgroup per screen tile walks every depth slice of that tile.
+// The lateral (xy) part of the sphere test depends only on the light and the
+// tile, and only the depth interval and the spot cone depend on the slice.
+// A group per cluster re-read every light and redid the lateral test for each
+// of the 24 slices: with ~160 lights at 1080p that was ~190 MB of L1/L2
+// traffic per frame and bound the pass on memory, not on ALU.
+static const uint ClusterCullThreads = 64u;
+// Slice hit masks are 32 bits wide; ClusterDepthSlices is 24.
+static const uint MaxClusterSlices = 32u;
+
+// Depth of every slice plane of the grid: slice s spans [planes[s], planes[s + 1]].
+groupshared float slicePlanes[MaxClusterSlices + 1u];
+// View-space bounding sphere of every cluster of this tile, for the spot test.
+groupshared float4 sliceSpheres[MaxClusterSlices];
+// Per slice, which threads of the current batch hit it (two 32-bit words).
+groupshared uint sliceHits[MaxClusterSlices][ClusterCullThreads / 32u];
+
+struct TileBounds
+{
+    float2 minNdc;
+    float2 maxNdc;
+    float2 focal;
+};
+
+TileBounds makeTileBounds(uint2 tile)
+{
+    TileBounds bounds;
+    // Fragments pick tiles of ClusterTilePixels from the top-left, so the
+    // last row and column extend past the viewport; map through pixels
+    // rather than dividing the viewport evenly by the grid size.
+    const float2 viewport = uniforms.viewportNearFar.xy;
+    bounds.minNdc = float2(tile) * ClusterTilePixels / viewport * 2.0 - 1.0;
+    bounds.maxNdc = float2(tile + 1u) * ClusterTilePixels / viewport * 2.0 - 1.0;
+    bounds.focal = float2(uniforms.projection[0][0], uniforms.projection[1][1]);
+    return bounds;
+}
+
+float slicePlaneDepth(uint plane)
+{
+    const float nearPlane = uniforms.viewportNearFar.z;
+    const float farPlane = uniforms.viewportNearFar.w;
+    return nearPlane * pow(farPlane / nearPlane, float(plane) / float(uniforms.gridAndLightCount.z));
+}
+
+// View-space bounding sphere of one cluster: the frustum slab between its
+// two depth planes, spanned by the pixel tile it covers.
+float4 clusterBoundingSphere(TileBounds bounds, float z0, float z1)
+{
+    // A view-space xy is ndc / focal * depth; take the extremes over both planes.
+    const float2 a = bounds.minNdc / bounds.focal, b = bounds.maxNdc / bounds.focal;
+    const float2 tangentMin = min(a, b), tangentMax = max(a, b);
+    const float3 boxMin = float3(min(tangentMin * z0, tangentMin * z1), -z1);
+    const float3 boxMax = float3(max(tangentMax * z0, tangentMax * z1), -z0);
+    return float4((boxMin + boxMax) * 0.5, length(boxMax - boxMin) * 0.5);
+}
+
+// Conservative sphere-vs-tile test in view space.  Every local light is
 // represented by its influence sphere; spot lights can safely use the same
 // broad phase and retain their cone test in the forward shader.
-bool affectsCluster(LocalLightData light, uint3 cluster)
+bool overlapsTile(float3 viewPosition, float radius, TileBounds bounds)
 {
-    float3 viewPosition = mul(float4(light.positionRange.xyz, 1.0), uniforms.view).xyz;
-    float radius = light.positionRange.w;
-    float nearPlane = uniforms.viewportNearFar.z;
-    float farPlane = uniforms.viewportNearFar.w;
-    float z0 = nearPlane * pow(farPlane / nearPlane, float(cluster.z) / float(uniforms.gridAndLightCount.z));
-    float z1 = nearPlane * pow(farPlane / nearPlane, float(cluster.z + 1u) / float(uniforms.gridAndLightCount.z));
-    float depth = -viewPosition.z;
-    if (depth + radius < z0 || depth - radius > z1) return false;
-
+    const float nearPlane = uniforms.viewportNearFar.z;
+    const float depth = -viewPosition.z;
     // Bound the sphere by its view-space box. Each lateral extreme is taken
     // at the box's near or far face, whichever maximises it, so the result
     // stays conservative off-axis (center +- f*r/(d-r) does not).
@@ -59,143 +108,146 @@ bool affectsCluster(LocalLightData light, uint3 cluster)
     const float2 high = viewPosition.xy + radius;
     const float2 tangentLow = low / select(low < 0.0, nearDepth, farDepth);
     const float2 tangentHigh = high / select(high > 0.0, nearDepth, farDepth);
-    const float2 focal = float2(uniforms.projection[0][0], uniforms.projection[1][1]);
-    const float2 ndcA = tangentLow * focal;
-    const float2 ndcB = tangentHigh * focal;
+    const float2 ndcA = tangentLow * bounds.focal;
+    const float2 ndcB = tangentHigh * bounds.focal;
     const float2 sphereMin = min(ndcA, ndcB);
     const float2 sphereMax = max(ndcA, ndcB);
-    // Fragments pick tiles of ClusterTilePixels from the top-left, so the
-    // last row and column extend past the viewport; map through pixels
-    // rather than dividing the viewport evenly by the grid size.
-    const float2 viewport = uniforms.viewportNearFar.xy;
-    const float2 minNdc = float2(cluster.xy) * ClusterTilePixels / viewport * 2.0 - 1.0;
-    const float2 maxNdc = float2(cluster.xy + 1u) * ClusterTilePixels / viewport * 2.0 - 1.0;
-    return all(sphereMax >= minNdc) && all(sphereMin <= maxNdc);
+    return all(sphereMax >= bounds.minNdc) && all(sphereMin <= bounds.maxNdc);
 }
 
-// View-space bounding sphere of one cluster: the frustum slab between its
-// two depth planes, spanned by the pixel tile it covers.
-float4 clusterBoundingSphere(uint3 cluster)
+// Slices of this tile whose depth interval the sphere overlaps, as a bit mask.
+uint sliceMask(float3 viewPosition, float radius, uint sliceCount)
 {
-    const float nearPlane = uniforms.viewportNearFar.z;
-    const float farPlane = uniforms.viewportNearFar.w;
-    const float z0 = nearPlane * pow(farPlane / nearPlane, float(cluster.z) / float(uniforms.gridAndLightCount.z));
-    const float z1 = nearPlane * pow(farPlane / nearPlane, float(cluster.z + 1u) / float(uniforms.gridAndLightCount.z));
-    const float2 viewport = uniforms.viewportNearFar.xy;
-    const float2 focal = float2(uniforms.projection[0][0], uniforms.projection[1][1]);
-    const float2 ndcMin = float2(cluster.xy) * ClusterTilePixels / viewport * 2.0 - 1.0;
-    const float2 ndcMax = float2(cluster.xy + 1u) * ClusterTilePixels / viewport * 2.0 - 1.0;
-    // A view-space xy is ndc / focal * depth; take the extremes over both planes.
-    const float2 a = ndcMin / focal, b = ndcMax / focal;
-    const float2 tangentMin = min(a, b), tangentMax = max(a, b);
-    const float3 boxMin = float3(min(tangentMin * z0, tangentMin * z1), -z1);
-    const float3 boxMax = float3(max(tangentMax * z0, tangentMax * z1), -z0);
-    return float4((boxMin + boxMax) * 0.5, length(boxMax - boxMin) * 0.5);
+    const float depth = -viewPosition.z;
+    uint mask = 0u;
+    for (uint slice = 0u; slice < sliceCount; ++slice)
+        if (!(depth + radius < slicePlanes[slice] || depth - radius > slicePlanes[slice + 1u]))
+            mask |= 1u << slice;
+    return mask;
 }
 
 // Spot lights pass the sphere test for every cluster within their range,
 // including those behind or beside the beam. Reject a cluster whose bounding
 // sphere lies wholly outside the outer cone (Wronski, "Cull that cone").
-bool spotMissesCluster(LocalLightData light, float4 clusterSphere)
+bool spotMissesCluster(float3 origin, float3 axis, float cosAngle, float sinAngle, float range,
+                       float4 clusterSphere)
 {
-    const float3 origin = mul(float4(light.positionRange.xyz, 1.0), uniforms.view).xyz;
-    const float3 axis = normalize(mul(float4(light.directionOuterCos.xyz, 0.0), uniforms.view).xyz);
-    const float cosAngle = light.directionOuterCos.w;
-    const float sinAngle = sqrt(saturate(1.0 - cosAngle * cosAngle));
     const float3 toCenter = clusterSphere.xyz - origin;
     const float alongAxis = dot(toCenter, axis);
     const float lengthSquared = dot(toCenter, toCenter);
     const float closest = cosAngle * sqrt(max(lengthSquared - alongAxis * alongAxis, 0.0)) - alongAxis * sinAngle;
-    return closest > clusterSphere.w || alongAxis > clusterSphere.w + light.positionRange.w ||
-           alongAxis < -clusterSphere.w;
+    return closest > clusterSphere.w || alongAxis > clusterSphere.w + range || alongAxis < -clusterSphere.w;
+}
+
+uint lightSlices(LocalLightData light, TileBounds bounds, uint sliceCount)
+{
+    const float3 viewPosition = mul(float4(light.positionRange.xyz, 1.0), uniforms.view).xyz;
+    const float radius = light.positionRange.w;
+    uint mask = sliceMask(viewPosition, radius, sliceCount);
+    if (mask == 0u || !overlapsTile(viewPosition, radius, bounds))
+        return 0u;
+    if (light.parameters.y > 1.5) // Spot
+    {
+        const float3 axis = normalize(mul(float4(light.directionOuterCos.xyz, 0.0), uniforms.view).xyz);
+        const float cosAngle = light.directionOuterCos.w;
+        const float sinAngle = sqrt(saturate(1.0 - cosAngle * cosAngle));
+        for (uint remaining = mask; remaining != 0u; remaining &= remaining - 1u)
+        {
+            const uint slice = firstbitlow(remaining);
+            if (spotMissesCluster(viewPosition, axis, cosAngle, sinAngle, radius, sliceSpheres[slice]))
+                mask &= ~(1u << slice);
+        }
+    }
+    return mask;
 }
 
 // A box is conservatively assigned through its bounding sphere.  The forward
 // shader still evaluates the exact box/sphere volume and blend distance.
-bool affectsCluster(ReflectionProbeData probe, uint3 cluster)
+uint probeSlices(ReflectionProbeData probe, TileBounds bounds, uint sliceCount)
 {
-    if ((probe.flags & Probe_Enabled) == 0u) return false;
-    LocalLightData bound;
-    bound.positionRange = float4(probe.positionAndBlendDistance.xyz,
-        max(length(probe.extentsAndShape.xyz), 1e-4));
-    return affectsCluster(bound, cluster);
+    if ((probe.flags & Probe_Enabled) == 0u) return 0u;
+    const float3 viewPosition = mul(float4(probe.positionAndBlendDistance.xyz, 1.0), uniforms.view).xyz;
+    const float radius = max(length(probe.extentsAndShape.xyz), 1e-4);
+    const uint mask = sliceMask(viewPosition, radius, sliceCount);
+    return mask != 0u && overlapsTile(viewPosition, radius, bounds) ? mask : 0u;
 }
 
-// One workgroup per cluster: its threads test a batch of lights side by
-// side instead of one thread walking every light in turn (a 1080p grid is
-// only ~12k clusters, too few threads to hide that serial chain of loads).
-// The batch's hits are ranked through a shared bit mask, so the list keeps
-// ascending light order and the same first-48 overflow cut as a serial walk.
-static const uint ClusterCullThreads = 64u;
-groupshared uint batchHits[ClusterCullThreads / 32u];
-
-// Rank of `hit` among this batch's hits, and the batch's hit total.
-uint rankBatchHit(uint thread, bool hit, out uint total)
+// Publishes this thread's batch hits, then lets thread `slice` append the
+// hits of its slice in thread order. Lists therefore keep ascending light
+// order and the same first-N overflow cut as a serial walk. Returns the
+// slice's new count (only meaningful on threads below sliceCount).
+uint appendBatch(uint thread, uint mask, uint sliceCount, uint batch, uint listStart, uint listCapacity,
+                 uint count, uint3 grid, uint2 tile)
 {
-    if (thread < ClusterCullThreads / 32u)
-        batchHits[thread] = 0u;
+    // Thread `slice` both clears and later reads sliceHits[slice]; the two
+    // barriers below order its clear against every thread's OR.
+    if (thread < sliceCount)
+    {
+        sliceHits[thread][0] = 0u;
+        sliceHits[thread][1] = 0u;
+    }
     GroupMemoryBarrierWithGroupSync();
-    if (hit)
-        InterlockedOr(batchHits[thread / 32u], 1u << (thread & 31u));
+    for (uint remaining = mask; remaining != 0u; remaining &= remaining - 1u)
+        InterlockedOr(sliceHits[firstbitlow(remaining)][thread / 32u], 1u << (thread & 31u));
     GroupMemoryBarrierWithGroupSync();
-    const uint low = batchHits[0];
-    const uint high = batchHits[1];
-    total = countbits(low) + countbits(high);
-    const uint below = thread < 32u ? countbits(low & ((1u << thread) - 1u))
-                                    : countbits(low) + countbits(high & ((1u << (thread - 32u)) - 1u));
-    // Every thread has read the mask before the next batch clears it.
-    GroupMemoryBarrierWithGroupSync();
-    return below;
+    if (thread < sliceCount)
+    {
+        const uint offset = ((thread * grid.y + tile.y) * grid.x + tile.x) * MaxLightsPerCluster + listStart;
+        [unroll]
+        for (uint word = 0u; word < ClusterCullThreads / 32u; ++word)
+        {
+            for (uint bits = sliceHits[thread][word]; bits != 0u && count < listCapacity; bits &= bits - 1u)
+            {
+                clusterLightIndices[offset + count] = batch + word * 32u + firstbitlow(bits);
+                ++count;
+            }
+        }
+    }
+    return count;
 }
 
 [numthreads(ClusterCullThreads, 1, 1)]
 [shader("compute")]
 void main(uint3 groupId : SV_GroupID, uint thread : SV_GroupThreadID)
 {
-    const uint3 id = groupId;
-    if (any(id >= uniforms.gridAndLightCount.xyz)) return;
-    const uint clusterIndex = (id.z * uniforms.gridAndLightCount.y + id.y) * uniforms.gridAndLightCount.x + id.x;
-    const uint offset = clusterIndex * MaxLightsPerCluster;
-    const float4 clusterSphere = clusterBoundingSphere(id);
+    const uint3 grid = uniforms.gridAndLightCount.xyz;
+    const uint2 tile = groupId.xy;
+    if (any(tile >= grid.xy)) return;
+    const uint sliceCount = min(grid.z, MaxClusterSlices);
+    const TileBounds bounds = makeTileBounds(tile);
+    if (thread <= sliceCount)
+        slicePlanes[thread] = slicePlaneDepth(thread);
+    GroupMemoryBarrierWithGroupSync();
+    if (thread < sliceCount)
+        sliceSpheres[thread] = clusterBoundingSphere(bounds, slicePlanes[thread], slicePlanes[thread + 1u]);
+    GroupMemoryBarrierWithGroupSync();
+
+    // Thread `slice` owns that cluster's counts.
     const uint localLightCount = uniforms.gridAndLightCount.w;
     uint lightCount = 0u;
-    // Stop once the list is full; lightCount is uniform across the group.
-    for (uint batch = 0u; batch < localLightCount && lightCount < MaxLocalLightsPerCluster;
-         batch += ClusterCullThreads)
+    for (uint batch = 0u; batch < localLightCount; batch += ClusterCullThreads)
     {
         const uint lightIndex = batch + thread;
-        bool hit = false;
-        if (lightIndex < localLightCount)
-        {
-            const LocalLightData light = localLights[lightIndex];
-            hit = affectsCluster(light, id) &&
-                  !(light.parameters.y > 1.5 && spotMissesCluster(light, clusterSphere)); // Spot
-        }
-        uint total;
-        const uint slot = lightCount + rankBatchHit(thread, hit, total);
-        if (hit && slot < MaxLocalLightsPerCluster)
-            clusterLightIndices[offset + slot] = lightIndex;
-        lightCount = min(lightCount + total, MaxLocalLightsPerCluster);
+        const uint mask = lightIndex < localLightCount ? lightSlices(localLights[lightIndex], bounds, sliceCount) : 0u;
+        lightCount = appendBatch(thread, mask, sliceCount, batch, 0u, MaxLocalLightsPerCluster, lightCount, grid, tile);
     }
-    const uint probeOffset = offset + MaxLocalLightsPerCluster;
     uint probeCount = 0u;
-    for (uint batch = 0u; batch < frame.reflectionProbeCount && probeCount < MaxProbesPerCluster;
-         batch += ClusterCullThreads)
+    for (uint batch = 0u; batch < frame.reflectionProbeCount; batch += ClusterCullThreads)
     {
         const uint probeIndex = batch + thread;
-        const bool hit = probeIndex < frame.reflectionProbeCount && affectsCluster(reflectionProbes[probeIndex], id);
-        uint total;
-        const uint slot = probeCount + rankBatchHit(thread, hit, total);
-        if (hit && slot < MaxProbesPerCluster)
-            clusterLightIndices[probeOffset + slot] = probeIndex;
-        probeCount = min(probeCount + total, MaxProbesPerCluster);
+        const uint mask =
+            probeIndex < frame.reflectionProbeCount ? probeSlices(reflectionProbes[probeIndex], bounds, sliceCount) : 0u;
+        probeCount = appendBatch(thread, mask, sliceCount, batch, MaxLocalLightsPerCluster, MaxProbesPerCluster,
+                                 probeCount, grid, tile);
     }
-    if (thread == 0u)
+    if (thread < sliceCount)
     {
+        const uint clusterIndex = (thread * grid.y + tile.y) * grid.x + tile.x;
+        const uint offset = clusterIndex * MaxLightsPerCluster;
         ClusterLightRange range;
         range.lightOffset = offset;
         range.lightCount = lightCount;
-        range.probeOffset = probeOffset;
+        range.probeOffset = offset + MaxLocalLightsPerCluster;
         range.probeCount = probeCount;
         clusterRanges[clusterIndex] = range;
     }

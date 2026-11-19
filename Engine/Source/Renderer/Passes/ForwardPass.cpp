@@ -1,13 +1,17 @@
 #include "Engine/Renderer/Passes/ForwardPass.h"
 
 #include "Engine/Core/Diagnostics.h"
+#include "Engine/Core/TaskScheduler.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <exception>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace Engine {
 void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFormat depthFormat,
@@ -159,6 +163,20 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     const auto reducedShader = [reducedSuffix](const std::filesystem::path& path, const char* tail = "") {
         return path.parent_path() / (path.stem().string() + reducedSuffix + tail + path.extension().string());
     };
+    // Every variant below is independent, and a cold pipeline cache (any
+    // shader rebuild) compiles each one from scratch: one at a time that took
+    // over 20 s for the full set. Collect them, then compile in parallel.
+    // vkCreateGraphicsPipelines and the internally synchronized pipeline
+    // cache are thread-safe; the asset manager guards its own cache.
+    struct PendingPipeline final {
+        GraphicsPipeline* pipeline;
+        GraphicsPipelineOptions options;
+    };
+    std::vector<PendingPipeline> pendingPipelines;
+    const auto queuePipeline = [&pendingPipelines](GraphicsPipeline& pipeline,
+                                                   GraphicsPipelineOptions pipelineOptions) {
+        pendingPipelines.push_back({&pipeline, std::move(pipelineOptions)});
+    };
     for (std::size_t index = 0; index < shaderPaths.size(); ++index) {
         // Water and glass have their own passes and a second descriptor set
         // for the immutable opaque scene.  Building a forward-compatible pipeline
@@ -181,61 +199,62 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
         }
         if (index == PbrFoliageProgramSlot)
             materialOptions.cullMode = VK_CULL_MODE_NONE;
-        materialPipelines_[index].create(device, materialOptions);
+        queuePipeline(materialPipelines_[index], materialOptions);
         GraphicsPipelineOptions twoSidedOptions = materialOptions;
         twoSidedOptions.cullMode = VK_CULL_MODE_NONE;
-        twoSidedMaterialPipelines_[index].create(device, twoSidedOptions);
+        queuePipeline(twoSidedMaterialPipelines_[index], twoSidedOptions);
         if (enableMeshletPipelines) {
             GraphicsPipelineOptions meshletOptions = materialOptions;
             const auto& path = materialOptions.shader;
             meshletOptions.shader =
                 path.parent_path() / (path.stem().string() + "_meshlet" + path.extension().string());
-            meshletMaterialPipelines_[index].create(device, meshletOptions);
+            queuePipeline(meshletMaterialPipelines_[index], meshletOptions);
         }
         if (drawMeshTasksIndirect_ != nullptr) {
             const auto& path = materialOptions.shader;
-            meshShaderMaterialPipelines_[index].create(
-                device, meshShaderOptions(materialOptions, path.parent_path() / (path.stem().string() + "_meshshader" +
-                                                                                 path.extension().string())));
+            queuePipeline(meshShaderMaterialPipelines_[index],
+                          meshShaderOptions(materialOptions,
+                                            path.parent_path() /
+                                                (path.stem().string() + "_meshshader" + path.extension().string())));
             if (depthOnly)
-                opaqueMeshShaderMaterialPipelines_[index].create(
-                    device, meshShaderOptions(materialOptions,
-                                              path.parent_path() / (path.stem().string() + "_meshshader_opaque" +
-                                                                    path.extension().string())));
+                queuePipeline(opaqueMeshShaderMaterialPipelines_[index],
+                              meshShaderOptions(materialOptions,
+                                                path.parent_path() / (path.stem().string() + "_meshshader_opaque" +
+                                                                      path.extension().string())));
             meshShaderDrawFlags_[index] =
                 (materialOptions.cullMode == VK_CULL_MODE_BACK_BIT ? 1U : 0U) | meshShaderSmallPrimitiveFlag_;
             // MeshletDrawVisibility: the slots the visibility resolve shades.
             if (visibilityIds_ && isVisibilityResolvedSlot(index))
                 meshShaderDrawFlags_[index] |= 4U;
             if (!depthOnly)
-                flatMeshShaderMaterialPipelines_[index].create(
-                    device, meshShaderOptions(materialOptions,
-                                              path.parent_path() / (path.stem().string() + "_flat_meshshader" +
-                                                                    path.extension().string())));
+                queuePipeline(
+                    flatMeshShaderMaterialPipelines_[index],
+                    meshShaderOptions(materialOptions, path.parent_path() / (path.stem().string() + "_flat_meshshader" +
+                                                                             path.extension().string())));
         }
         const bool resolvedProgram =
             index == materialShaderIndex(MaterialShader::StandardPBR) || index >= PbrNormalProgramSlot;
         if (depthOnly || (resolvedLighting && resolvedProgram)) {
             GraphicsPipelineOptions reducedOptions = materialOptions;
             reducedOptions.shader = reducedShader(materialOptions.shader);
-            reducedMaterialPipelines_[index].create(device, reducedOptions);
+            queuePipeline(reducedMaterialPipelines_[index], reducedOptions);
             reducedOptions.cullMode = VK_CULL_MODE_NONE;
-            reducedTwoSidedMaterialPipelines_[index].create(device, reducedOptions);
+            queuePipeline(reducedTwoSidedMaterialPipelines_[index], reducedOptions);
             if (enableMeshletPipelines) {
                 GraphicsPipelineOptions reducedMeshletOptions = materialOptions;
                 reducedMeshletOptions.shader = reducedShader(materialOptions.shader, "_meshlet");
-                reducedMeshletMaterialPipelines_[index].create(device, reducedMeshletOptions);
+                queuePipeline(reducedMeshletMaterialPipelines_[index], reducedMeshletOptions);
             }
             if (drawMeshTasksIndirect_ != nullptr) {
-                reducedMeshShaderMaterialPipelines_[index].create(
-                    device, meshShaderOptions(materialOptions, reducedShader(materialOptions.shader, "_meshshader")));
+                queuePipeline(reducedMeshShaderMaterialPipelines_[index],
+                              meshShaderOptions(materialOptions, reducedShader(materialOptions.shader, "_meshshader")));
                 if (depthOnly)
-                    opaqueReducedMeshShaderMaterialPipelines_[index].create(
-                        device, meshShaderOptions(materialOptions,
-                                                  reducedShader(materialOptions.shader, "_meshshader_opaque")));
+                    queuePipeline(opaqueReducedMeshShaderMaterialPipelines_[index],
+                                  meshShaderOptions(materialOptions,
+                                                    reducedShader(materialOptions.shader, "_meshshader_opaque")));
                 if (!depthOnly)
-                    flatReducedMeshShaderMaterialPipelines_[index].create(
-                        device,
+                    queuePipeline(
+                        flatReducedMeshShaderMaterialPipelines_[index],
                         meshShaderOptions(materialOptions, reducedShader(materialOptions.shader, "_flat_meshshader")));
             }
         }
@@ -248,9 +267,9 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
                                                        "_deferred_flat_meshshader",
                                                        "_noddgi_deferred_flat_meshshader"};
             for (std::size_t set = 0; set < tails.size(); ++set)
-                deferredMeshShaderMaterialPipelines_[set][index].create(
-                    device, meshShaderOptions(materialOptions,
-                                              path.parent_path() / (stem + tails[set] + path.extension().string())));
+                queuePipeline(deferredMeshShaderMaterialPipelines_[set][index],
+                              meshShaderOptions(materialOptions,
+                                                path.parent_path() / (stem + tails[set] + path.extension().string())));
         }
     }
     shaderGraphPipelineOptions_ = options;
@@ -276,11 +295,11 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     // while the regular forward pass writes depth.
     GraphicsPipelineOptions depthFoliageOptions = foliageOptions;
     stripDepthOnlyAttributes(depthFoliageOptions);
-    foliagePipeline_.create(device, depthFoliageOptions);
+    queuePipeline(foliagePipeline_, depthFoliageOptions);
     if (depthOnly || resolvedLighting) {
         GraphicsPipelineOptions reducedFoliageOptions = depthFoliageOptions;
         reducedFoliageOptions.shader = reducedShader(depthFoliageOptions.shader);
-        reducedFoliagePipeline_.create(device, reducedFoliageOptions);
+        queuePipeline(reducedFoliagePipeline_, reducedFoliageOptions);
     }
     GraphicsPipelineOptions grassOptions = foliageOptions;
     grassOptions.shader =
@@ -292,8 +311,24 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat, const VkFo
     });
     if (hasLocalLightDataAttachment_)
         grassOptions.additionalColorWriteMask = 0;
-    grassPipeline_.create(device, grassOptions);
+    queuePipeline(grassPipeline_, grassOptions);
 
+    // Wait for every task before reporting a failure: they reference the
+    // options and pipelines above.
+    auto tasks = TaskScheduler::global().parallelFor(pendingPipelines.size(), [&](const std::size_t index) {
+        pendingPipelines[index].pipeline->create(device, pendingPipelines[index].options);
+    });
+    std::exception_ptr failure;
+    for (const TaskHandle& task : tasks) {
+        try {
+            task.wait();
+        } catch (...) {
+            if (!failure)
+                failure = std::current_exception();
+        }
+    }
+    if (failure)
+        std::rethrow_exception(failure);
 }
 
 void ForwardPass::destroy() noexcept {

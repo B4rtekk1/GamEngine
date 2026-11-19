@@ -1,3 +1,4 @@
+#include "Engine/Assets/Gmesh.h"
 #include "Engine/Core/SceneCamera.h"
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/RigidbodyRuntime.h"
@@ -10,6 +11,7 @@
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Scene/SceneSerializer.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -387,6 +389,104 @@ TEST(Scene, RetainsTheLastPrimaryCameraWhenDestroyed) {
     EXPECT_FALSE(retainedFirst.valid());
     EXPECT_TRUE(second.valid());
     EXPECT_FALSE(scene.findActor("Main camera").valid());
+}
+
+// Leaving Play Mode reloads the editor snapshot. While a live scene still
+// holds a mesh asset, the snapshot must share its renderer resource, so the
+// GPU geometry and textures keyed to it survive; a re-cooked file must not.
+TEST(SceneSerializer, SnapshotReloadSharesLiveMeshAssetResourceUntilFileChanges) {
+    const auto meshPath = std::filesystem::temp_directory_path() / "gameengine-live-mesh-asset-test.gmesh";
+    std::error_code error;
+    std::filesystem::remove(meshPath, error);
+
+    Engine::Scene authoring;
+    const auto cube = authoring.createCube("Cube", Engine::PBRMaterial{});
+    const auto cubeEntity = authoring.findEntity(cube.id());
+    const auto cubeSource = authoring.editor().read<Engine::MeshRendererComponent>(cubeEntity).mesh.source();
+    ASSERT_NE(cubeSource, nullptr);
+    ASSERT_TRUE(Engine::Assets::save_gmesh(meshPath, *cubeSource));
+    const auto asset = Engine::Assets::load_gmesh(meshPath);
+    ASSERT_NE(asset, nullptr);
+
+    Engine::Scene editor;
+    const auto actor = editor.createCube("Asset cube", Engine::PBRMaterial{});
+    const auto entity = editor.findEntity(actor.id());
+    editor.editor().patch<Engine::MeshRendererComponent>(entity, [&](auto& renderer) { renderer.mesh = asset; });
+    std::ostringstream saved;
+    Engine::SceneSerializer::save(editor, saved);
+    const std::string snapshot = saved.str();
+    ASSERT_NE(snapshot.find("MESH_ASSET"), std::string::npos);
+
+    const auto loadResource = [&](Engine::Scene& scene) {
+        std::istringstream input{snapshot};
+        Engine::SceneSerializer::load(scene, input);
+        const auto restored = scene.findEntity(scene.findActor("Asset cube").id());
+        return scene.editor().read<Engine::MeshRendererComponent>(restored).mesh.resource();
+    };
+    Engine::Scene first;
+    const auto firstResource = loadResource(first);
+    ASSERT_NE(firstResource, nullptr);
+    EXPECT_EQ(firstResource->sourcePath, meshPath);
+
+    Engine::Scene second;
+    EXPECT_EQ(loadResource(second), firstResource);
+
+    // Re-cooking the asset changes its stamp: decode a new resource.
+    std::filesystem::last_write_time(meshPath,
+                                     std::filesystem::last_write_time(meshPath) + std::chrono::seconds{5});
+    Engine::Scene third;
+    const auto thirdResource = loadResource(third);
+    ASSERT_NE(thirdResource, nullptr);
+    EXPECT_NE(thirdResource, firstResource);
+    EXPECT_NE(thirdResource->textureIdentity, firstResource->textureIdentity);
+    std::filesystem::remove(meshPath, error);
+}
+
+// Mesh assets inside the project are stored relative to its asset root, so
+// a moved project folder or an exported game (another machine) still finds
+// them; the root comes from the GamEngine.project above the scene file.
+TEST(SceneSerializer, StoresProjectMeshAssetsRelativeToTheAssetRoot) {
+    const auto base = std::filesystem::temp_directory_path() / "gameengine-relative-mesh-test";
+    std::error_code error;
+    std::filesystem::remove_all(base, error);
+    const auto project = base / "Original";
+    std::filesystem::create_directories(project / "Assets" / "Models");
+    std::filesystem::create_directories(project / "Assets" / "Scenes");
+    std::ofstream{project / "GamEngine.project"}
+        << "name = Relative\nasset_root = Assets\nstartup_scene = Assets/Scenes/Main.scene\n";
+
+    Engine::Scene authoring;
+    const auto cube = authoring.createCube("Cube", Engine::PBRMaterial{});
+    const auto source =
+        authoring.editor().read<Engine::MeshRendererComponent>(authoring.findEntity(cube.id())).mesh.source();
+    ASSERT_NE(source, nullptr);
+    const auto meshPath = project / "Assets" / "Models" / "Cube.gmesh";
+    ASSERT_TRUE(Engine::Assets::save_gmesh(meshPath, *source));
+
+    Engine::Scene scene;
+    const auto actor = scene.createCube("Asset cube", Engine::PBRMaterial{});
+    const auto asset = Engine::Assets::load_gmesh(meshPath);
+    ASSERT_NE(asset, nullptr);
+    scene.editor().patch<Engine::MeshRendererComponent>(scene.findEntity(actor.id()),
+                                                        [&](auto& renderer) { renderer.mesh = asset; });
+    const auto scenePath = project / "Assets" / "Scenes" / "Main.scene";
+    ASSERT_NO_THROW(scene.save(scenePath));
+    std::ifstream written{scenePath};
+    const std::string text{std::istreambuf_iterator<char>{written}, {}};
+    EXPECT_NE(text.find("MESH_ASSET 0 \"Models/Cube.gmesh\""), std::string::npos) << text;
+    EXPECT_EQ(text.find(base.generic_string()), std::string::npos);
+
+    // Move the whole project: the scene still resolves its mesh.
+    const auto moved = base / "Moved";
+    std::filesystem::rename(project, moved);
+    Engine::Scene loaded;
+    ASSERT_NO_THROW(loaded.load(moved / "Assets" / "Scenes" / "Main.scene"));
+    const auto restored = loaded.findEntity(loaded.findActor("Asset cube").id());
+    const auto resource = loaded.editor().read<Engine::MeshRendererComponent>(restored).mesh.resource();
+    ASSERT_NE(resource, nullptr);
+    EXPECT_EQ(resource->sourcePath, (moved / "Assets" / "Models" / "Cube.gmesh").lexically_normal());
+    EXPECT_GT(resource->metadata.vertexCount, 0U);
+    std::filesystem::remove_all(base, error);
 }
 
 TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {

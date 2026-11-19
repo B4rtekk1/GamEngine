@@ -484,8 +484,10 @@ float2 wetRippleLayer(float2 p, float time, float seed, float density, float rat
             const float cycle = time * rate + phase;
             // A new random landing spot and a new chance to fall every cycle.
             const float2 cycleSeed = neighbour + seed + floor(cycle) * 7.31;
-            if (wetHash(cycleSeed + 19.3) > density)
-                continue;
+            // Branch-free on purpose: a `continue` here (or any branch around
+            // the ripple sum) made the NVIDIA compiler schedule the whole
+            // visibility resolve worse, +0.2 to +1.2 ms at 1080p on Bistro.
+            const float falls = wetHash(cycleSeed + 19.3) > density ? 0.0 : 1.0;
             const float age = frac(cycle);
             const float2 centre = float2(x, y) + 0.15 + 0.7 * float2(wetHash(cycleSeed + 3.1), wetHash(cycleSeed + 7.7));
             const float2 delta = local - centre;
@@ -494,9 +496,8 @@ float2 wetRippleLayer(float2 p, float time, float seed, float density, float rat
             // A train of two crests behind the front, fading as the ring grows.
             const float offset = radius - front;
             const float envelope = saturate(1.0 - abs(offset + 0.06) * 9.0) * (1.0 - age) * (1.0 - age);
-            const float wave = cos(offset * 55.0) * envelope;
-            if (radius > 1.0e-4)
-                slope += delta / radius * wave;
+            const float wave = cos(offset * 55.0) * envelope * falls;
+            slope += delta * (radius > 1.0e-4 ? wave / radius : 0.0);
         }
     }
     return slope;

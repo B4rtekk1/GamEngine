@@ -89,3 +89,20 @@ TEST(Project, RejectsPathOutsideProject) {
 }
 
 } // namespace
+
+TEST_F(ProjectTest, RoundTripsDisabledPlugins) {
+    Engine::Project project = Engine::Project::load(directory_ / "GamEngine.project");
+    EXPECT_TRUE(project.pluginEnabled("Weather"));
+    project.setPluginEnabled("Weather", false);
+    project.setPluginEnabled("Wind", false);
+    project.setPluginEnabled("Wind", false);
+    project.save();
+
+    Engine::Project reloaded = Engine::Project::load(directory_ / "GamEngine.project");
+    EXPECT_EQ(reloaded.disabledPlugins(), (std::vector<std::string>{"Weather", "Wind"}));
+    EXPECT_FALSE(reloaded.pluginEnabled("Wind"));
+    reloaded.setPluginEnabled("Weather", true);
+    reloaded.save();
+    EXPECT_EQ(Engine::Project::load(directory_ / "GamEngine.project").disabledPlugins(),
+              (std::vector<std::string>{"Wind"}));
+}

@@ -16,6 +16,7 @@
 #include "Engine/ECS/Components/WaterShapeComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
 #include "Engine/ECS/Registry.h"
+#include "Engine/Project.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
@@ -32,7 +33,9 @@
 #include <limits>
 #include <type_traits>
 #include <locale>
+#include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -1416,6 +1419,109 @@ void SceneSerializer::removeSidecars(const std::filesystem::path& scenePath) noe
 #endif
 
 #ifndef SCENE_SERIALIZER_SCENE_ONLY
+namespace {
+// Mesh assets that a live scene still references, by source path. Loading
+// a scene that names the same unchanged .gmesh again (leaving Play Mode
+// restores the editor snapshot, for instance) shares that resource instead
+// of decoding the file into a new one: the renderer keys its geometry heap
+// and material textures to the resource, so they stay resident on the GPU.
+// Only weak references are held; a resource no scene uses expires.
+// Scene files store MESH_ASSET paths inside the project's asset root
+// relative to it, so a project folder can move and an exported game (whose
+// GamEngine.project names Content/ as asset root) finds its meshes on any
+// machine. The root is found from the scene file's location.
+[[nodiscard]] int assetRootStreamSlot() {
+    static const int slot = std::ios_base::xalloc();
+    return slot;
+}
+
+[[nodiscard]] std::filesystem::path assetRootForScene(const std::filesystem::path& scenePath) {
+    try {
+        return Project::discover(std::filesystem::absolute(scenePath)).assetRoot().lexically_normal();
+    } catch (...) {
+        // A scene outside any project keeps absolute paths.
+        return {};
+    }
+}
+
+// The path written for a mesh asset: relative when it lies in @p assetRoot.
+[[nodiscard]] std::string storedMeshPath(const std::filesystem::path& source, const std::filesystem::path* assetRoot) {
+    const auto normalized = source.lexically_normal();
+    if (assetRoot != nullptr && !assetRoot->empty() && normalized.is_absolute()) {
+        const auto relative = normalized.lexically_relative(*assetRoot);
+        if (!relative.empty() && *relative.begin() != ".." && !relative.is_absolute())
+            return relative.generic_string();
+    }
+    return normalized.generic_string();
+}
+
+class LiveMeshAssets final {
+  public:
+    [[nodiscard]] static std::shared_ptr<MeshGpuResource> find(const std::filesystem::path& path) {
+        const std::string key = normalizedKey(path);
+        const auto stamp = fileStamp(path);
+        std::scoped_lock lock(mutex());
+        auto& entries = table();
+        const auto found = entries.find(key);
+        if (found == entries.end())
+            return {};
+        auto resource = found->second.resource.lock();
+        // A re-cooked file must be decoded again, even while the old
+        // resource is still alive.
+        if (!resource || !stamp || *stamp != found->second.stamp) {
+            entries.erase(found);
+            return {};
+        }
+        return resource;
+    }
+
+    static void remember(const std::filesystem::path& path, const std::shared_ptr<MeshGpuResource>& resource) {
+        const auto stamp = fileStamp(path);
+        if (!resource || !stamp)
+            return;
+        std::scoped_lock lock(mutex());
+        auto& entries = table();
+        std::erase_if(entries, [](const auto& entry) { return entry.second.resource.expired(); });
+        entries[normalizedKey(path)] = {resource, *stamp};
+    }
+
+  private:
+    struct Stamp final {
+        std::uintmax_t size{};
+        std::filesystem::file_time_type modified{};
+        bool operator==(const Stamp&) const = default;
+    };
+    struct Entry final {
+        std::weak_ptr<MeshGpuResource> resource;
+        Stamp stamp;
+    };
+
+    [[nodiscard]] static std::optional<Stamp> fileStamp(const std::filesystem::path& path) {
+        std::error_code error;
+        const auto size = std::filesystem::file_size(path, error);
+        if (error)
+            return std::nullopt;
+        const auto modified = std::filesystem::last_write_time(path, error);
+        if (error)
+            return std::nullopt;
+        return Stamp{size, modified};
+    }
+    [[nodiscard]] static std::string normalizedKey(const std::filesystem::path& path) {
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(path, error);
+        return (error ? path : absolute).lexically_normal().string();
+    }
+    [[nodiscard]] static std::mutex& mutex() {
+        static std::mutex instance;
+        return instance;
+    }
+    [[nodiscard]] static std::unordered_map<std::string, Entry>& table() {
+        static std::unordered_map<std::string, Entry> instance;
+        return instance;
+    }
+};
+} // namespace
+
 void SceneSerializer::save(const Registry& registry, const std::filesystem::path& path) {
     save(registry, path, AntialiasingLevel::TAA);
 }
@@ -1433,8 +1539,11 @@ void SceneSerializer::save(const Registry& registry, const std::filesystem::path
     terrainData.write(TerrainDataMagic.data(), static_cast<std::streamsize>(TerrainDataMagic.size()));
     writeLittleEndianU32(terrainData, TerrainDataVersion);
     output.pword(terrainDataStreamSlot()) = &terrainData;
+    const std::filesystem::path assetRoot = assetRootForScene(path);
+    output.pword(assetRootStreamSlot()) = assetRoot.empty() ? nullptr : const_cast<std::filesystem::path*>(&assetRoot);
     save(registry, output, antialiasing);
     output.pword(terrainDataStreamSlot()) = nullptr;
+    output.pword(assetRootStreamSlot()) = nullptr;
     if (!output) {
         throw std::runtime_error("Could not finish writing scene: " + path.string());
     }
@@ -1559,7 +1668,10 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output, const
         const SerializedMesh& saved = meshes[meshId];
         if (!saved.sourcePath.empty()) {
             serialized << "MESH_ASSET " << meshId << ' '
-                       << std::quoted(saved.sourcePath.lexically_normal().generic_string()) << '\n';
+                       << std::quoted(storedMeshPath(
+                              saved.sourcePath,
+                              static_cast<const std::filesystem::path*>(output.pword(assetRootStreamSlot()))))
+                       << '\n';
             continue;
         }
         if (!saved.source) {
@@ -1876,8 +1988,11 @@ void SceneSerializer::load(Registry& registry, const std::filesystem::path& path
         }
         input.pword(terrainDataStreamSlot()) = &terrainData;
     }
+    const std::filesystem::path assetRoot = assetRootForScene(path);
+    input.pword(assetRootStreamSlot()) = assetRoot.empty() ? nullptr : const_cast<std::filesystem::path*>(&assetRoot);
     load(registry, input, antialiasing);
     input.pword(terrainDataStreamSlot()) = nullptr;
+    input.pword(assetRootStreamSlot()) = nullptr;
 }
 
 void SceneSerializer::load(Registry& registry, const std::filesystem::path& path,
@@ -1947,7 +2062,22 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
     const std::size_t meshCount = readCount(input, "mesh count", MaxMeshes);
     std::vector<std::shared_ptr<const Mesh>> meshes;
     meshes.reserve(meshCount);
+    // One render handle per mesh asset record, shared by every MeshRenderer
+    // that references it. A record reusing a live resource has no decoded
+    // source (meshes[i] stays null) until grass or a collider asks for it.
+    std::vector<MeshHandle> assetHandles;
+    std::vector<std::filesystem::path> assetPaths;
+    assetHandles.reserve(meshCount);
+    assetPaths.reserve(meshCount);
+    std::unordered_set<const MeshGpuResource*> sharedLiveResources;
     Assets::AssetManager assetManager;
+    const auto meshSource = [&](const std::size_t meshId) -> const std::shared_ptr<const Mesh>& {
+        if (!meshes[meshId] && !assetPaths[meshId].empty()) {
+            auto decoded = assetManager.loadMesh(assetPaths[meshId]).shared();
+            meshes[meshId] = decoded ? std::move(decoded) : std::make_shared<Mesh>();
+        }
+        return meshes[meshId];
+    };
     for (std::size_t meshIndex = 0; meshIndex < meshCount; ++meshIndex) {
         const auto recordType = read<std::string>(input, "mesh record type");
         if (recordType != "MESH" && recordType != "MESH_ASSET") {
@@ -1963,14 +2093,34 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
             if (!input || sourcePath.empty()) {
                 invalidScene("could not read mesh asset path");
             }
-            auto mesh = assetManager.loadMesh(std::filesystem::path{sourcePath}).shared();
+            std::filesystem::path assetPath{sourcePath};
+            if (assetPath.is_relative()) {
+                // Relative to the asset root of the scene file's project.
+                if (const auto* assetRoot = static_cast<const std::filesystem::path*>(input.pword(assetRootStreamSlot())))
+                    assetPath = (*assetRoot / assetPath).lexically_normal();
+            }
+            if (auto live = LiveMeshAssets::find(assetPath)) {
+                sharedLiveResources.insert(live.get());
+                meshes.emplace_back();
+                assetHandles.push_back(MeshHandle::fromResource(std::move(live)));
+                assetPaths.push_back(assetPath);
+                continue;
+            }
+            auto mesh = assetManager.loadMesh(assetPath).shared();
             if (!mesh) {
                 // Keep the scene loadable when an imported source asset was
                 // removed. The entity remains in the scene without render
                 // geometry and can be repaired by assigning another mesh.
-                mesh = std::make_shared<Mesh>();
+                meshes.push_back(std::make_shared<Mesh>());
+                assetHandles.emplace_back();
+                assetPaths.emplace_back();
+                continue;
             }
+            MeshHandle handle{mesh};
+            LiveMeshAssets::remember(assetPath, handle.resource());
             meshes.push_back(std::move(mesh));
+            assetHandles.push_back(std::move(handle));
+            assetPaths.push_back(assetPath);
             continue;
         }
         const std::size_t vertexCount = readCount(input, "vertex count", MaxVertices);
@@ -2048,6 +2198,9 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
         }
         mesh->recalculateLocalBounds();
         meshes.push_back(std::move(mesh));
+        // Inline geometry keeps one render handle per MeshRenderer.
+        assetHandles.emplace_back();
+        assetPaths.emplace_back();
     }
 
     expect(input, "ENTITIES");
@@ -2186,7 +2339,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
                 if (meshId >= meshes.size())
                     invalidScene("grass references an unknown mesh");
                 TerrainGrassComponent grass;
-                grass.mesh = meshes[meshId];
+                grass.mesh = meshSource(meshId);
                 grass.material = readMaterial(input, version);
                 grass.castShadow = readBool(input, "grass cast-shadow flag");
                 const std::size_t count =
@@ -2223,7 +2376,11 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
                 }
                 MeshRenderer renderer;
                 if (meshId >= 0) {
-                    renderer.mesh = meshes[static_cast<std::size_t>(meshId)];
+                    const auto index = static_cast<std::size_t>(meshId);
+                    if (assetHandles[index])
+                        renderer.mesh = assetHandles[index];
+                    else
+                        renderer.mesh = meshes[index];
                 }
                 if (version >= MaterialShaderFormatVersion) {
                     const auto shader = read<unsigned>(input, "material shader");
@@ -2618,8 +2775,17 @@ void SceneSerializer::load(Registry& registry, std::istream& input, std::optiona
     TransformSystem::updateDirty(loaded);
     loaded.view<ColliderComponent, MeshRenderer>(
         [&](const Entity, ColliderComponent& collider, const MeshRenderer& renderer) {
-            if (auto* meshCollider = std::get_if<MeshCollider>(&collider.shape))
-                meshCollider->mesh = renderer.mesh.source();
+            if (auto* meshCollider = std::get_if<MeshCollider>(&collider.shape)) {
+                // A shared live resource belongs to a scene the renderer may
+                // be using on another thread, which releases its decoded
+                // geometry after upload. Do not read its source; decode a
+                // private copy for PhysX to cook instead.
+                const auto& resource = renderer.mesh.resource();
+                if (resource && sharedLiveResources.contains(resource.get()))
+                    meshCollider->mesh = assetManager.loadMesh(resource->sourcePath).shared();
+                else
+                    meshCollider->mesh = renderer.mesh.source();
+            }
         });
     registry = std::move(loaded);
     // Registry replacement preserves its address, but invalidates all

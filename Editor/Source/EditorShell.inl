@@ -69,25 +69,14 @@ void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity select
     std::snprintf(timing, sizeof(timing), "%.0f FPS  %.2f ms", io.Framerate,
                   io.Framerate > 0.0F ? 1000.0F / io.Framerate : 0.0F);
     const float timingWidth = ImGui::CalcTextSize(timing).x;
-    const char* buildText = "Building game...";
-    const float buildWidth = state.gameBuildRunning ? ImGui::CalcTextSize(buildText).x + 40.0F : 0.0F;
-    const float rightX = ImGui::GetWindowContentRegionMax().x - timingWidth - buildWidth;
+    // Scene loading, script and game builds, GPU preparation (EditorActivity).
+    Editor::EditorActivity::track("game-build", state.gameBuildRunning, "Building game");
+    const float activityWidth = Editor::EditorActivity::drawStatus(barHeight, true);
+    const float rightX = ImGui::GetWindowContentRegionMax().x - timingWidth - activityWidth;
     ImGui::SameLine();
     if (rightX > ImGui::GetCursorPosX() + 16.0F) {
         ImGui::SetCursorPosX(rightX);
-        if (state.gameBuildRunning) {
-            const ImVec2 position = ImGui::GetCursorScreenPos();
-            const ImVec2 center{position.x + 7.0F, windowPos.y + barHeight * 0.5F};
-            const float time = static_cast<float>(ImGui::GetTime());
-            drawList->PathArcTo(center, 6.0F, time * 6.0F, time * 6.0F + 4.2F, 14);
-            drawList->PathStroke(ImGui::GetColorU32(palette.accent), ImDrawFlags_None, 2.0F);
-            ImGui::Dummy({18.0F, 1.0F});
-            ImGui::SameLine(0.0F, 4.0F);
-            ImGui::SetCursorPosY(textY);
-            ImGui::TextColored(palette.accent, "%s", buildText);
-            ImGui::SameLine(0.0F, 18.0F);
-            ImGui::SetCursorPosY(textY);
-        }
+        static_cast<void>(Editor::EditorActivity::drawStatus(barHeight, false));
         ImGui::TextDisabled("%s", timing);
     }
     ImGui::End();
@@ -457,6 +446,10 @@ struct EditorMenuActions final {
     /// can decode and cook large models; on the UI thread that froze the
     /// window until the OS reported it as not responding.
     std::filesystem::path backgroundSceneLoad;
+    /// File > Build Game (Startup Scene Only): ship only what that scene uses.
+    bool gameBuildStartupSceneOnly = false;
+    /// The Plugins window's visibility (main.cpp), toggled from Window > Panels.
+    bool* showPlugins = nullptr;
 };
 
 /**
@@ -768,6 +761,13 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         }
         if (menuItem("Build Game", nullptr, EditorUI::Icon::Archive, false, !project.manifestPath().empty()))
             gameBuildRequested = true;
+        if (menuItem("Build Game (Startup Scene Only)", nullptr, EditorUI::Icon::Archive, false,
+                     !project.manifestPath().empty())) {
+            gameBuildRequested = true;
+            actions.gameBuildStartupSceneOnly = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Ships only the startup scene and the assets it uses: a smaller game to send.");
         ImGui::EndDisabled();
         ImGui::Separator();
         if (menuItem("Exit", "Alt+F4", EditorUI::Icon::Stop))
@@ -876,6 +876,8 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
         menuToggle("Terminal", EditorUI::Icon::Code, showTerminal);
         menuToggle("Shader Graph", EditorUI::Icon::Layers, showShaderGraph);
         menuToggle("Profiler", EditorUI::Icon::Gear, showGpuProfile);
+        if (actions.showPlugins != nullptr)
+            menuToggle("Plugins", EditorUI::Icon::Archive, *actions.showPlugins);
         ImGui::Separator();
         if (menuItem("Reset Layout", nullptr, EditorUI::Icon::Refresh)) {
             showHierarchy = showViewport = showInspector = showAssetManager = true;
@@ -1036,6 +1038,22 @@ drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer, Engine
             if (settingsChanged)
                 renderer.setRtContactShadowSettings(settings);
             ImGui::Unindent(ImGui::GetFontSize() * 1.6F);
+        }
+        if (beginSubMenu("RT Local Light Shadows", EditorUI::Icon::Light)) {
+            const Engine::LocalShadowBackend currentBackend = renderer.localShadowBackend();
+            const auto selectBackend = [&](const char* label, const Engine::LocalShadowBackend backend) {
+                if (menuItem(label, nullptr, std::nullopt, currentBackend == backend))
+                    renderer.setLocalShadowBackend(backend);
+            };
+            selectBackend("Auto (fastest on this GPU)", Engine::LocalShadowBackend::Auto);
+            selectBackend("NVIDIA cluster (fallback: generic)", Engine::LocalShadowBackend::Nvidia);
+            selectBackend("Generic (ray query)", Engine::LocalShadowBackend::Generic);
+            if (!renderer.nvidiaLocalShadowsSupported())
+                ImGui::TextDisabled("This GPU has no NVIDIA cluster ray tracing: shadows use the generic path.");
+            else
+                ImGui::TextDisabled(renderer.nvidiaLocalShadowsActive() ? "Tracing: NVIDIA cluster scene"
+                                                                        : "Tracing: generic triangle TLAS");
+            ImGui::EndMenu();
         }
         menuSection("Global illumination");
         {

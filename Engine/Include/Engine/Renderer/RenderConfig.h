@@ -37,6 +37,19 @@ enum class GtaoQuality : std::uint8_t { Low, Medium, High, Ultra, PerformanceHal
 /** Optional short-range hardware ray queried visibility refinement. */
 enum class ContactShadowMode : std::uint8_t { Off, RayTraced };
 
+/** Which ray tracing scene the ray traced local light shadows trace. */
+enum class LocalShadowBackend : std::uint8_t {
+    /** Time both scenes on this GPU once and keep the faster one (cached per GPU and driver). */
+    Auto,
+    /**
+     * NVIDIA cluster scene (VK_NV_cluster / partitioned acceleration structures).
+     * GPUs without those extensions fall back to Generic.
+     */
+    Nvidia,
+    /** Vendor-neutral triangle TLAS traced with VK_KHR_ray_query. */
+    Generic,
+};
+
 struct RtContactShadowSettings final {
     ContactShadowMode mode = ContactShadowMode::Off;
     float maxDistance = 2.0F;
@@ -441,6 +454,7 @@ struct RenderConfig final {
     GrassRenderSettings grass{};
     ShadowQuality shadowQuality = ShadowQuality::High;
     RtContactShadowSettings rtContactShadows{};
+    LocalShadowBackend localShadowBackend = LocalShadowBackend::Auto;
     GtaoQuality gtaoQuality = GtaoQuality::High;
     GtaoDebugView gtaoDebugView = GtaoDebugView::Off;
     PbrDebugView pbrDebugView = PbrDebugView::FinalLighting;

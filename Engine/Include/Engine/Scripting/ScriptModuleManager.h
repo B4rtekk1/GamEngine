@@ -35,6 +35,14 @@ class ScriptModuleManager final {
     void unload(Scene& scene);
     [[nodiscard]] std::uint64_t activeGeneration() const noexcept;
 
+    /**
+     * Destroys every script instance of @p scene created by module
+     * @p generation, keeping its fields and hot-reload state on the component
+     * so a later module can restore it. Call before that module's code is
+     * unloaded; ScriptRegistry::removeGeneration then drops its classes.
+     */
+    static void releaseGeneration(const ScriptRegistry& registry, Registry& scene, std::uint64_t generation);
+
   private:
     struct LoadedModule {
         DynamicLibrary library;
@@ -50,6 +58,5 @@ class ScriptModuleManager final {
 
     ScriptRegistry& registry_;
     LoadedModule active_;
-    std::uint64_t nextGeneration_ = 1;
 };
 } // namespace Engine

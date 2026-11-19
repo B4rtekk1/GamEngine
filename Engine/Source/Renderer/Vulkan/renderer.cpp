@@ -779,11 +779,13 @@ class Renderer::Backend {
         directionalVisibilityPass.destroy();
         shadowPass.destroy();
         sceneDescriptorPass.destroy();
-        indexBuffer.destroy();
-        vertexBuffer.destroy();
-        geometryHeapAllocations.clear();
-        geometryHeapVertexHighWater = 0;
-        geometryHeapIndexHighWater = 0;
+        // The Geometry Heap, the meshlet heaps and the material textures
+        // are keyed by mesh resource identity, not by the registry. A
+        // snapshot that references the same assets again (leaving Play
+        // Mode) shares those resources (SceneSerializer), so their GPU
+        // copies stay valid: createMeshBuffers() and createMaterialTextures()
+        // reuse what is still live and retire the rest, exactly as for an
+        // ordinary topology change. The device is idle at this point.
         sceneGpu.database.clear();
         for (Buffer& buffer : instanceBuffers) {
             buffer.destroy();
@@ -812,20 +814,9 @@ class Renderer::Backend {
         for (Buffer& buffer : uniformBuffers) {
             buffer.destroy();
         }
-        for (auto& [id, resource] : textureGpuResources) {
-            (void)id;
-            resource.texture.destroy();
-        }
-        textureGpuResources.clear();
-        meshTextureIds.clear();
+        // Keyed by mesh pointer, which a reload may change; rebuilt by
+        // createMaterialTextures() from the retained per-resource textures.
         meshTextureSlots.clear();
-        decodedMeshSources.clear();
-        decodedMeshSourceBytes = 0;
-        decodedMeshSourceClock = 0;
-        nextMaterialTextureSlot = 1;
-        freeMaterialTextureSlots.clear();
-        materialTextureDescriptors.clear();
-        fallbackMaterialTexture.destroy();
         // The IBL maps depend on the environment, not on the registry;
         // createImageBasedLighting() keeps them when that is unchanged.
         renderables.clear();

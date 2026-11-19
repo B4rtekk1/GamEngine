@@ -3,17 +3,18 @@
 #include "Editor/AssetImporter.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/Panels/ConsolePanel.h"
+#include "Editor/Panels/EditorSceneSession.h"
 #include "Editor/UI/EditorIcons.h"
 #include "Editor/UI/EditorTheme.h"
 #include "Editor/UI/EditorWidgets.h"
 #include "Elements/NumericControl.h"
-#include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Assets/TextureCooker.h"
 #include "Engine/Core/TaskScheduler.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
 #include "Engine/Scene/SceneEditor.h"
+#include "Engine/Scene/SceneSerializer.h"
 #include "imgui.h"
 
 #include <SDL3/SDL.h>
@@ -22,7 +23,9 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -324,6 +327,140 @@ bool delete_asset_file(const Engine::ScenePreset& scene, const std::filesystem::
     return true;
 }
 
+// Relative to the asset root, non-empty, and never escaping it.
+bool valid_relative_asset_path(const std::filesystem::path& relative, std::string& error) {
+    if (relative.empty() || relative.is_absolute()) {
+        error = "Invalid asset path";
+        return false;
+    }
+    if (std::ranges::any_of(relative, [](const std::filesystem::path& part) { return part == ".."; })) {
+        error = "Asset path escapes the asset directory";
+        return false;
+    }
+    return true;
+}
+
+// A single file or folder name: no separators, not "." or "..".
+bool valid_asset_name(const std::string& name) {
+    const std::filesystem::path path{name};
+    return !name.empty() && path.filename() == path && name != "." && name != ".." &&
+           name.find_first_of("/\\") == std::string::npos;
+}
+
+// True when a mesh of the scene comes from @p relative or from inside it.
+bool scene_uses_asset_or_folder(const Engine::ScenePreset& scene, const std::filesystem::path& root,
+                                const std::filesystem::path& relative) {
+    const auto target = (root / relative).lexically_normal();
+    bool used = false;
+    scene.view().view<Engine::MeshRenderer>([&](const Engine::Entity, const Engine::MeshRenderer& renderer) {
+        const auto resource = renderer.mesh.resource();
+        if (!resource || resource->sourcePath.empty())
+            return;
+        const auto source = resource->sourcePath.lexically_normal();
+        const auto [end, unused] = std::mismatch(target.begin(), target.end(), source.begin(), source.end());
+        static_cast<void>(unused);
+        if (end == target.end())
+            used = true;
+    });
+    return used;
+}
+
+// Sidecars written next to a .scene (SceneSerializer::removeSidecars).
+constexpr std::array<const char*, 6> SceneSidecarSuffixes{".terrain", ".environment", ".gi",
+                                                          ".post",    ".surface",     ".fog"};
+
+bool delete_asset_folder(const Engine::ScenePreset& scene, const std::filesystem::path& root,
+                         const std::filesystem::path& relative, std::vector<std::filesystem::path>& deletedScenes,
+                         std::string& error) {
+    if (!valid_relative_asset_path(relative, error))
+        return false;
+    if (scene_uses_asset_or_folder(scene, root, relative)) {
+        error = "The current scene uses assets in this folder; remove them from the scene first";
+        return false;
+    }
+    const auto path = (root / relative).lexically_normal();
+    std::error_code filesystemError;
+    if (!std::filesystem::is_directory(path, filesystemError)) {
+        error = "Folder does not exist: " + relative.generic_string();
+        return false;
+    }
+    for (std::filesystem::recursive_directory_iterator it{path, filesystemError}, end; !filesystemError && it != end;
+         it.increment(filesystemError))
+        if (it->is_regular_file() && it->path().extension() == ".scene")
+            deletedScenes.push_back(it->path().lexically_normal());
+    std::filesystem::remove_all(path, filesystemError);
+    if (filesystemError) {
+        error = "Could not delete folder: " + relative.generic_string() + " (" + filesystemError.message() + ")";
+        return false;
+    }
+    return true;
+}
+
+bool rename_asset(const Engine::ScenePreset& scene, const std::filesystem::path& root,
+                  const std::filesystem::path& relative, const std::string& newName, std::filesystem::path& renamed,
+                  std::string& error) {
+    if (!valid_relative_asset_path(relative, error))
+        return false;
+    if (!valid_asset_name(newName)) {
+        error = "Enter a valid name";
+        return false;
+    }
+    // Scene files reference mesh assets by absolute path.
+    if (scene_uses_asset_or_folder(scene, root, relative)) {
+        error = "The current scene uses this asset; remove it from the scene before renaming";
+        return false;
+    }
+    const auto from = (root / relative).lexically_normal();
+    renamed = relative.parent_path() / newName;
+    const auto to = (root / renamed).lexically_normal();
+    std::error_code filesystemError;
+    if (std::filesystem::exists(to, filesystemError)) {
+        error = "'" + newName + "' already exists";
+        return false;
+    }
+    std::filesystem::rename(from, to, filesystemError);
+    if (filesystemError) {
+        error = "Could not rename '" + relative.generic_string() + "': " + filesystemError.message();
+        return false;
+    }
+    if (from.extension() == ".scene" && to.extension() == ".scene")
+        for (const char* suffix : SceneSidecarSuffixes) {
+            const std::filesystem::path sidecar{from.string() + suffix};
+            if (std::filesystem::exists(sidecar, filesystemError))
+                std::filesystem::rename(sidecar, std::filesystem::path{to.string() + suffix}, filesystemError);
+        }
+    return true;
+}
+
+bool duplicate_asset(const std::filesystem::path& root, const std::filesystem::path& relative,
+                     std::filesystem::path& copy, std::string& error) {
+    if (!valid_relative_asset_path(relative, error))
+        return false;
+    const auto source = (root / relative).lexically_normal();
+    const bool folder = std::filesystem::is_directory(source);
+    const std::string stem = folder ? relative.filename().string() : relative.stem().string();
+    const std::string extension = folder ? std::string{} : relative.extension().string();
+    copy = relative.parent_path() / (stem + " Copy" + extension);
+    for (unsigned int index = 2; std::filesystem::exists(root / copy); ++index)
+        copy = relative.parent_path() / (stem + " Copy " + std::to_string(index) + extension);
+    std::error_code filesystemError;
+    std::filesystem::copy(source, root / copy,
+                          folder ? std::filesystem::copy_options::recursive : std::filesystem::copy_options::none,
+                          filesystemError);
+    if (!filesystemError && source.extension() == ".scene")
+        for (const char* suffix : SceneSidecarSuffixes) {
+            const std::filesystem::path sidecar{source.string() + suffix};
+            if (std::filesystem::exists(sidecar))
+                std::filesystem::copy_file(sidecar, std::filesystem::path{(root / copy).string() + suffix},
+                                           filesystemError);
+        }
+    if (filesystemError) {
+        error = "Could not duplicate '" + relative.generic_string() + "': " + filesystemError.message();
+        return false;
+    }
+    return true;
+}
+
 void draw_folder_icon(const ImVec2 min, const float size, const bool selected) {
     auto* draw = ImGui::GetWindowDrawList();
     const ImVec4 base = selected ? EditorUI::colors().accent : EditorUI::colors().warning;
@@ -375,7 +512,8 @@ bool matches_filter(const AssetEntry& asset, const std::string& filter) {
 }
 
 void draw_folder_tree(const std::filesystem::path& parent, const std::vector<std::filesystem::path>& folders,
-                      std::filesystem::path& selectedFolder, std::filesystem::path& selectedAsset) {
+                      std::filesystem::path& selectedFolder, std::filesystem::path& selectedAsset,
+                      const std::function<void(const std::filesystem::path&)>& contextMenu) {
     for (const auto& folder : folders) {
         if (folder.parent_path() != parent)
             continue;
@@ -409,8 +547,12 @@ void draw_folder_tree(const std::filesystem::path& parent, const std::vector<std
                 iconSize,
                 ImGui::GetColorU32(selectedFolder == folder ? EditorUI::colors().accent : EditorUI::colors().warning));
         }
+        if (ImGui::BeginPopupContextItem("##folder-tree-context")) {
+            contextMenu(folder);
+            ImGui::EndPopup();
+        }
         if (open) {
-            draw_folder_tree(folder, folders, selectedFolder, selectedAsset);
+            draw_folder_tree(folder, folders, selectedFolder, selectedAsset, contextMenu);
             ImGui::TreePop();
         }
         ImGui::PopID();
@@ -467,7 +609,18 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     static TextureCookJob cookJob;
     static std::shared_ptr<ImportDialogState> importDialog;
     static std::optional<std::future<ImportResult>> importJob;
+    static int createKind = 0; // 1 = folder, 2 = file
+    static std::string createName;
+    static bool focusCreateName = false;
+    // Folder the create dialog writes into: the one right-clicked, or the
+    // open folder for the toolbar's + button.
+    static std::filesystem::path createParent;
+    static std::filesystem::path renameSource;
+    static std::string renameName;
+    static bool focusRenameName = false;
     bool openDeletePopup = false;
+    bool openCreatePopup = false;
+    bool openRenamePopup = false;
     Engine::Entity created = Engine::NullEntity;
 
     const auto root = content.assetRoot();
@@ -554,10 +707,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         deleteCandidate = asset;
         openDeletePopup = true;
     };
-    const auto createShaderGraph = [&] {
-        std::filesystem::path relative = selectedFolder / "New Shader Graph.shadergraph";
+    const auto createShaderGraph = [&](const std::filesystem::path& parent) {
+        std::filesystem::path relative = parent / "New Shader Graph.shadergraph";
         for (unsigned int index = 2; std::filesystem::exists(root / relative); ++index)
-            relative = selectedFolder / ("New Shader Graph " + std::to_string(index) + ".shadergraph");
+            relative = parent / ("New Shader Graph " + std::to_string(index) + ".shadergraph");
         try {
             Engine::ShaderGraphAsset graph{.id = Engine::createUUID(), .name = relative.stem().string()};
             Engine::ShaderPinId nextPin = 1;
@@ -569,6 +722,124 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         } catch (const std::exception& exception) {
             error = exception.what();
         }
+    };
+    // Dialogs open at panel level after the context menu that asked for them
+    // has closed (OpenPopup must match BeginPopup's ID stack).
+    const auto requestCreate = [&](const int kind, const std::filesystem::path& parent) {
+        createKind = kind;
+        createParent = parent;
+        createName = kind == 1 ? "New Folder" : "NewFile.txt";
+        openCreatePopup = true;
+    };
+    const auto requestRename = [&](const std::filesystem::path& relative) {
+        renameSource = relative;
+        renameName = relative.filename().string();
+        openRenamePopup = true;
+    };
+    const auto requestImport = [&](const std::filesystem::path& folder, const bool importFolder,
+                                   const bool archiveOnly) {
+        if (importDialog || importJob)
+            return;
+        importDialog = std::make_shared<ImportDialogState>();
+        importDialog->destination = root / folder;
+        importDialog->assetRoot = root;
+        showImportDialog(importDialog, importFolder, archiveOnly);
+    };
+    const auto duplicate = [&](const std::filesystem::path& relative) {
+        std::filesystem::path copy;
+        if (duplicate_asset(root, relative, copy, error)) {
+            Editor::ConsolePanel::info("Duplicated " + relative.generic_string() + " as " + copy.generic_string());
+            error.clear();
+            refresh();
+            if (std::filesystem::is_regular_file(root / copy))
+                selected = copy;
+        } else {
+            Editor::ConsolePanel::error(error);
+        }
+    };
+    const auto showInFileManager = [&](const std::filesystem::path& relative) {
+        const auto path = (root / relative).lexically_normal();
+        const auto folder = std::filesystem::is_directory(path) ? path : path.parent_path();
+        if (!SDL_OpenURL(("file://" + folder.string()).c_str()))
+            Editor::ConsolePanel::error(std::string{"Could not open the file manager: "} + SDL_GetError());
+    };
+    const auto copyPath = [&](const std::filesystem::path& relative) {
+        ImGui::SetClipboardText((root / relative).lexically_normal().string().c_str());
+    };
+    // Create / Import entries shared by every context menu.
+    const auto drawCreateItems = [&](const std::filesystem::path& parent) {
+        if (ImGui::BeginMenu("Create")) {
+            if (ImGui::MenuItem("Folder"))
+                requestCreate(1, parent);
+            if (ImGui::MenuItem("File"))
+                requestCreate(2, parent);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Shader Graph"))
+                createShaderGraph(parent);
+            ImGui::EndMenu();
+        }
+        ImGui::BeginDisabled(importDialog || importJob);
+        if (ImGui::BeginMenu("Import")) {
+            if (ImGui::MenuItem("File..."))
+                requestImport(parent, false, false);
+            if (ImGui::MenuItem("Folder..."))
+                requestImport(parent, true, false);
+            if (ImGui::MenuItem("ZIP archive..."))
+                requestImport(parent, false, true);
+            ImGui::EndMenu();
+        }
+        ImGui::EndDisabled();
+    };
+    const auto drawPathItems = [&](const std::filesystem::path& relative) {
+        if (ImGui::MenuItem("Show in file manager"))
+            showInFileManager(relative);
+        if (ImGui::MenuItem("Copy path"))
+            copyPath(relative);
+    };
+    // Right-click on a folder (tree, grid or list).
+    const auto drawFolderMenu = [&](const std::filesystem::path& folder) {
+        ImGui::TextDisabled("%s", folder.filename().string().c_str());
+        ImGui::Separator();
+        if (ImGui::MenuItem("Open")) {
+            selectedFolder = folder;
+            selected.clear();
+        }
+        drawCreateItems(folder);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Rename..."))
+            requestRename(folder);
+        if (ImGui::MenuItem("Duplicate"))
+            duplicate(folder);
+        if (ImGui::MenuItem("Delete folder..."))
+            requestDelete(folder);
+        ImGui::Separator();
+        drawPathItems(folder);
+    };
+    // Right-click on empty space: create and import into @p folder.
+    const auto drawBackgroundMenu = [&](const std::filesystem::path& folder) {
+        ImGui::TextDisabled("%s", folder.empty() ? "Assets" : ("Assets/" + folder.generic_string()).c_str());
+        ImGui::Separator();
+        drawCreateItems(folder);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Show in file manager"))
+            showInFileManager(folder);
+        if (ImGui::MenuItem("Refresh"))
+            refresh();
+    };
+    // Entries for a right-clicked file, after its own specific actions.
+    const auto drawFileItems = [&](const std::filesystem::path& relative) {
+        if (ImGui::MenuItem("Rename...")) {
+            selected = relative;
+            requestRename(relative);
+        }
+        if (ImGui::MenuItem("Duplicate"))
+            duplicate(relative);
+        if (ImGui::MenuItem("Delete asset...")) {
+            selected = relative;
+            requestDelete(relative);
+        }
+        ImGui::Separator();
+        drawPathItems(relative);
     };
 
     if (cookJob.task && cookJob.task.ready()) {
@@ -614,7 +885,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
 
     if (const Request queued = std::exchange(pendingRequest, Request::None); queued != Request::None && projectIsOpen) {
         if (queued == Request::CreateShaderGraph) {
-            createShaderGraph();
+            createShaderGraph(selectedFolder);
         } else if (!importDialog && !importJob) {
             importDialog = std::make_shared<ImportDialogState>();
             importDialog->destination = root / selectedFolder;
@@ -640,18 +911,12 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (EditorUI::iconButton("##asset-import", EditorUI::Icon::Import, "Import files, a folder or a ZIP archive"))
         ImGui::OpenPopup("##asset-import-menu");
     if (ImGui::BeginPopup("##asset-import-menu")) {
-        const auto requestImport = [&](const bool folder, const bool archiveOnly) {
-            importDialog = std::make_shared<ImportDialogState>();
-            importDialog->destination = root / selectedFolder;
-            importDialog->assetRoot = root;
-            showImportDialog(importDialog, folder, archiveOnly);
-        };
         if (ImGui::MenuItem("File..."))
-            requestImport(false, false);
+            requestImport(selectedFolder, false, false);
         if (ImGui::MenuItem("Folder..."))
-            requestImport(true, false);
+            requestImport(selectedFolder, true, false);
         if (ImGui::MenuItem("ZIP archive..."))
-            requestImport(false, true);
+            requestImport(selectedFolder, false, true);
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
@@ -660,8 +925,13 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (EditorUI::iconButton("##asset-create", EditorUI::Icon::Plus, "Create a new asset"))
         ImGui::OpenPopup("##asset-create-menu");
     if (ImGui::BeginPopup("##asset-create-menu")) {
+        if (ImGui::MenuItem("Folder"))
+            requestCreate(1, selectedFolder);
+        if (ImGui::MenuItem("File"))
+            requestCreate(2, selectedFolder);
+        ImGui::Separator();
         if (ImGui::MenuItem("Shader Graph"))
-            createShaderGraph();
+            createShaderGraph(selectedFolder);
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
@@ -798,7 +1068,16 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         selected.clear();
         error.clear();
     }
-    draw_folder_tree({}, catalog.folders, selectedFolder, selected);
+    if (projectIsOpen && ImGui::BeginPopupContextItem("##assets-root-context")) {
+        drawBackgroundMenu({});
+        ImGui::EndPopup();
+    }
+    draw_folder_tree({}, catalog.folders, selectedFolder, selected, drawFolderMenu);
+    if (projectIsOpen && ImGui::BeginPopupContextWindow("##asset-tree-context", ImGuiPopupFlags_MouseButtonRight |
+                                                                                    ImGuiPopupFlags_NoOpenOverItems)) {
+        drawBackgroundMenu({});
+        ImGui::EndPopup();
+    }
     ImGui::EndChild();
 
     ImGui::SameLine();
@@ -837,6 +1116,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     if (open) {
                         selectedFolder = folder;
                         selected.clear();
+                    }
+                    if (ImGui::BeginPopupContextItem("##folder-context")) {
+                        drawFolderMenu(folder);
+                        ImGui::EndPopup();
                     }
                     ImGui::PopID();
                 }
@@ -901,10 +1184,12 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                         instantiate();
                     }
                     ImGui::EndDisabled();
-                    if (ImGui::MenuItem("Delete asset...")) {
-                        selected = asset.relative;
-                        requestDelete(asset.relative);
-                    }
+                    ImGui::BeginDisabled(!is_shader_graph(asset.relative));
+                    if (ImGui::MenuItem("Open in Shader Graph"))
+                        openShaderGraph(asset.relative);
+                    ImGui::EndDisabled();
+                    ImGui::Separator();
+                    drawFileItems(asset.relative);
                     ImGui::EndPopup();
                 }
                 ImGui::PopID();
@@ -937,6 +1222,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     EditorUI::drawIcon(ImGui::GetWindowDrawList(), EditorUI::Icon::Folder,
                                        {min.x + iconSize * 0.5F + 2.0F, min.y + ImGui::GetTextLineHeight() * 0.5F},
                                        iconSize, ImGui::GetColorU32(EditorUI::colors().warning));
+                }
+                if (ImGui::BeginPopupContextItem("##folder-list-context")) {
+                    drawFolderMenu(folder);
+                    ImGui::EndPopup();
                 }
                 ImGui::PopID();
                 ImGui::TableSetColumnIndex(1);
@@ -990,10 +1279,22 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
             if (ImGui::BeginPopupContextItem("##list-context")) {
                 ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete asset...")) {
+                if (ImGui::MenuItem("Show details")) {
                     selected = asset.relative;
-                    requestDelete(asset.relative);
+                    showInspector = true;
                 }
+                ImGui::BeginDisabled(!is_model(asset.relative));
+                if (ImGui::MenuItem("Add to scene")) {
+                    selected = asset.relative;
+                    instantiate();
+                }
+                ImGui::EndDisabled();
+                ImGui::BeginDisabled(!is_shader_graph(asset.relative));
+                if (ImGui::MenuItem("Open in Shader Graph"))
+                    openShaderGraph(asset.relative);
+                ImGui::EndDisabled();
+                ImGui::Separator();
+                drawFileItems(asset.relative);
                 ImGui::EndPopup();
             }
             ImGui::PopID();
@@ -1002,6 +1303,14 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
             ImGui::TableSetColumnIndex(2);
             ImGui::TextDisabled("%s", format_size(asset.size).c_str());
         }
+        // The scrolling table is its own window: give its empty rows the
+        // open folder's menu too.
+        if (projectIsOpen &&
+            ImGui::BeginPopupContextWindow("##asset-list-empty-context",
+                                           ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+            drawBackgroundMenu(selectedFolder);
+            ImGui::EndPopup();
+        }
         ImGui::EndTable();
     }
 
@@ -1009,19 +1318,172 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         ImGui::Dummy({0.0F, std::max(8.0F, ImGui::GetContentRegionAvail().y * 0.12F)});
         if (filter.empty())
             EditorUI::emptyState(EditorUI::Icon::Folder, "This folder is empty",
-                                 "Drop files here with Import, or create a Shader Graph with the + button.");
+                                 "Right-click to create a folder, file or Shader Graph, or import assets.");
         else
             EditorUI::emptyState(EditorUI::Icon::Search, "No assets match your search",
                                  "Try a different name, file extension or asset type.");
     }
+    // Empty space of the open folder; files and folders have their own menus.
+    if (projectIsOpen &&
+        ImGui::BeginPopupContextWindow("##asset-content-context",
+                                       ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+        drawBackgroundMenu(selectedFolder);
+        ImGui::EndPopup();
+    }
     ImGui::EndChild();
+
+    if (openCreatePopup) {
+        focusCreateName = true;
+        ImGui::OpenPopup("##create-asset-entry");
+    }
+    if (EditorUI::beginDialog("##create-asset-entry", 400.0F)) {
+        const bool isFolder = createKind == 1;
+        EditorUI::dialogHeader(isFolder ? EditorUI::Icon::Folder : EditorUI::Icon::File, EditorUI::colors().accent,
+                               isFolder ? "New folder" : "New file",
+                               createParent.empty() ? "Created in Assets"
+                                                    : ("Created in Assets/" + createParent.generic_string()).c_str());
+        if (focusCreateName) {
+            ImGui::SetKeyboardFocusHere();
+            focusCreateName = false;
+        }
+        char nameBuffer[256]{};
+        std::snprintf(nameBuffer, sizeof nameBuffer, "%s", createName.c_str());
+        ImGui::SetNextItemWidth(-1.0F);
+        const bool submitted =
+            ImGui::InputText("##create-name", nameBuffer, sizeof nameBuffer, ImGuiInputTextFlags_EnterReturnsTrue);
+        createName = nameBuffer;
+        const std::filesystem::path name{createName};
+        const bool validName = valid_asset_name(createName);
+        const bool exists = validName && std::filesystem::exists(root / createParent / name);
+        if (!validName)
+            ImGui::TextColored(EditorUI::colors().warning, "Enter a valid name.");
+        else if (exists)
+            ImGui::TextColored(EditorUI::colors().warning, "'%s' already exists.", createName.c_str());
+        EditorUI::dialogFooter(2);
+        bool confirm = false;
+        if (ImGui::Button("Cancel", {104.0F, 0.0F}) || EditorUI::dialogEscapePressed()) {
+            createKind = 0;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!validName || exists);
+        if (EditorUI::primaryButton("Create", {104.0F, 0.0F}))
+            confirm = true;
+        ImGui::EndDisabled();
+        if (submitted && validName && !exists)
+            confirm = true;
+        if (confirm) {
+            const auto relative = createParent / name;
+            try {
+                if (createKind == 1) {
+                    std::filesystem::create_directories(root / relative);
+                    Editor::ConsolePanel::info("Created folder: " + relative.generic_string());
+                } else {
+                    std::filesystem::create_directories((root / relative).parent_path());
+                    std::ofstream file{root / relative, std::ios::binary};
+                    if (!file)
+                        throw std::runtime_error("Could not create file '" + relative.generic_string() + "'");
+                    Editor::ConsolePanel::info("Created file: " + relative.generic_string());
+                }
+                error.clear();
+                refresh();
+                if (createKind == 1) {
+                    selectedFolder = relative;
+                    selected.clear();
+                } else {
+                    // Show the new file where it was created.
+                    selectedFolder = createParent;
+                    selected = relative;
+                }
+            } catch (const std::exception& exception) {
+                error = exception.what();
+                Editor::ConsolePanel::error(error);
+            }
+            createKind = 0;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (openRenamePopup) {
+        focusRenameName = true;
+        ImGui::OpenPopup("##rename-asset");
+    }
+    if (EditorUI::beginDialog("##rename-asset", 400.0F)) {
+        const bool renamingFolder = std::filesystem::is_directory(root / renameSource);
+        const std::string title = "Rename '" + renameSource.filename().string() + "'";
+        EditorUI::dialogHeader(
+            renamingFolder ? EditorUI::Icon::Folder : EditorUI::Icon::File, EditorUI::colors().accent, title.c_str(),
+            renameSource.parent_path().empty() ? "In Assets"
+                                               : ("In Assets/" + renameSource.parent_path().generic_string()).c_str());
+        if (focusRenameName) {
+            ImGui::SetKeyboardFocusHere();
+            focusRenameName = false;
+        }
+        char nameBuffer[256]{};
+        std::snprintf(nameBuffer, sizeof nameBuffer, "%s", renameName.c_str());
+        ImGui::SetNextItemWidth(-1.0F);
+        const bool submitted =
+            ImGui::InputText("##rename-name", nameBuffer, sizeof nameBuffer, ImGuiInputTextFlags_EnterReturnsTrue);
+        renameName = nameBuffer;
+        const bool unchanged = renameName == renameSource.filename().string();
+        const bool validName = valid_asset_name(renameName);
+        const bool exists =
+            validName && !unchanged && std::filesystem::exists(root / renameSource.parent_path() / renameName);
+        if (!validName)
+            ImGui::TextColored(EditorUI::colors().warning, "Enter a valid name.");
+        else if (exists)
+            ImGui::TextColored(EditorUI::colors().warning, "'%s' already exists.", renameName.c_str());
+        else if (!renamingFolder && std::filesystem::path{renameName}.extension() != renameSource.extension())
+            ImGui::TextColored(EditorUI::colors().warning, "The file extension changes.");
+        EditorUI::dialogFooter(2);
+        bool confirm = false;
+        if (ImGui::Button("Cancel", {104.0F, 0.0F}) || EditorUI::dialogEscapePressed())
+            ImGui::CloseCurrentPopup();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!validName || exists || unchanged);
+        if (EditorUI::primaryButton("Rename", {104.0F, 0.0F}))
+            confirm = true;
+        ImGui::EndDisabled();
+        if (submitted && validName && !exists && !unchanged)
+            confirm = true;
+        if (confirm) {
+            std::filesystem::path renamed;
+            const auto oldPath = (root / renameSource).lexically_normal();
+            if (rename_asset(scene, root, renameSource, renameName, renamed, error)) {
+                Editor::ConsolePanel::info("Renamed " + renameSource.generic_string() + " to " +
+                                           renamed.generic_string());
+                // Keep the open scene's path, also when it sits in a renamed folder.
+                const auto openScene = EditorSceneSession::scenePath().lexically_normal();
+                const auto inside = openScene.lexically_relative(oldPath);
+                if (openScene == oldPath)
+                    EditorSceneSession::setScenePath((root / renamed).lexically_normal());
+                else if (renamingFolder && !inside.empty() && *inside.begin() != "..")
+                    EditorSceneSession::setScenePath((root / renamed / inside).lexically_normal());
+                error.clear();
+                refresh();
+                if (renamingFolder) {
+                    if (selectedFolder == renameSource)
+                        selectedFolder = renamed;
+                } else {
+                    selected = renamed;
+                }
+            } else {
+                Editor::ConsolePanel::error(error);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     if (openDeletePopup)
         ImGui::OpenPopup("##confirm-delete-asset");
     if (EditorUI::beginDialog("##confirm-delete-asset", 400.0F)) {
+        const bool deletingFolder = std::filesystem::is_directory(root / deleteCandidate);
         const std::string deleteTitle = "Delete '" + deleteCandidate.filename().string() + "'?";
         EditorUI::dialogHeader(EditorUI::Icon::Warning, EditorUI::colors().warning, deleteTitle.c_str(),
-                               "This removes the file from the project.");
+                               deletingFolder ? "This permanently removes the folder and everything in it."
+                                              : "This removes the file from the project.");
         EditorUI::dialogFooter(2);
         if (ImGui::Button("Cancel", {104.0F, 0.0F}) || EditorUI::dialogEscapePressed()) {
             deleteCandidate.clear();
@@ -1029,7 +1491,17 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         }
         ImGui::SameLine();
         if (EditorUI::dangerButton("Delete", {104.0F, 0.0F})) {
-            if (delete_asset_file(scene, root, deleteCandidate, error)) {
+            if (deletingFolder) {
+                std::vector<std::filesystem::path> deletedScenes;
+                if (delete_asset_folder(scene, root, deleteCandidate, deletedScenes, error)) {
+                    Editor::ConsolePanel::info("Deleted folder: " + deleteCandidate.generic_string());
+                    for (const auto& deletedScene : deletedScenes)
+                        sceneDeleted(deletedScene);
+                    refresh();
+                } else {
+                    Editor::ConsolePanel::error(error);
+                }
+            } else if (delete_asset_file(scene, root, deleteCandidate, error)) {
                 Editor::ConsolePanel::info("Deleted asset: " + deleteCandidate.generic_string());
                 if (deleteCandidate.extension() == ".scene")
                     sceneDeleted((root / deleteCandidate).lexically_normal());

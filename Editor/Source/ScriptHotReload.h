@@ -40,6 +40,11 @@ class ScriptHotReload final {
         requestBuild();
     }
 
+    /** True while a GameScripts build runs in the background. */
+    [[nodiscard]] bool building() const noexcept {
+        return building_;
+    }
+
     void requestBuild() {
         reloadPending_ = true;
         lastChange_ = std::chrono::steady_clock::now() - debounce_;

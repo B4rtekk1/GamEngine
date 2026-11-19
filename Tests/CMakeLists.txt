@@ -126,3 +126,16 @@ gtest_discover_tests(RenderGraphTests)
 gtest_discover_tests(PhysicsMeshTests)
 gtest_discover_tests(ShaderGraphCompilerTests)
 
+
+# Plugin loading against a real plugin library built from Tests/Plugins.
+add_library(TestPlugin SHARED Plugins/TestPlugin.cpp)
+target_link_libraries(TestPlugin PRIVATE Engine)
+gameengine_enable_warnings(TestPlugin)
+add_executable(PluginManagerTests PluginManagerTests.cpp)
+target_link_libraries(PluginManagerTests PRIVATE Engine GTest::gtest_main)
+target_compile_definitions(PluginManagerTests PRIVATE "GE_TEST_PLUGIN_LIBRARY=\"$<TARGET_FILE:TestPlugin>\"")
+add_dependencies(PluginManagerTests TestPlugin)
+gameengine_enable_warnings(PluginManagerTests)
+gameengine_enable_sanitizers(PluginManagerTests)
+gameengine_copy_runtime_dependencies(PluginManagerTests)
+gtest_discover_tests(PluginManagerTests DISCOVERY_MODE PRE_TEST)

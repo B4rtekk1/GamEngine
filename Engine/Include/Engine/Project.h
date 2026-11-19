@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Engine {
@@ -59,6 +60,13 @@ class Project final {
         startupScene_ = std::move(scene);
     }
 
+    /** Plugins the project turned off (manifest key disabled_plugins). */
+    [[nodiscard]] const std::vector<std::string>& disabledPlugins() const noexcept {
+        return disabledPlugins_;
+    }
+    [[nodiscard]] bool pluginEnabled(std::string_view name) const;
+    void setPluginEnabled(std::string_view name, bool enabled);
+
     /** Rewrites the manifest with the current name, asset root and startup scene. */
     void save() const;
 
@@ -74,6 +82,7 @@ class Project final {
     std::filesystem::path rootPath_;
     std::filesystem::path assetRoot_;
     std::filesystem::path startupScene_;
+    std::vector<std::string> disabledPlugins_;
 };
 
 } // namespace Engine

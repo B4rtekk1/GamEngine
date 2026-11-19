@@ -121,8 +121,8 @@ std::array<bool, MAX_FRAMES_IN_FLIGHT> localShadowMaskInitialized{};
 // architectures, so it is measured on the real scene rather than assumed:
 // alternating trial phases time both, then the faster one is kept.
 enum class ShadowTraceBackend : std::uint8_t { Measuring, Cluster, Classic };
-// GAMENGINE_SHADOW_BACKEND=cluster|classic skips the timing trial.
-ShadowTraceBackend shadowTraceBackend{[] {
+// GAMENGINE_SHADOW_BACKEND=cluster|classic skips the timing trial of Auto.
+static ShadowTraceBackend autoShadowTraceBackend() noexcept {
     const char* forced = std::getenv("GAMENGINE_SHADOW_BACKEND");
     if (forced != nullptr && std::string_view{forced} == "cluster") {
         return ShadowTraceBackend::Cluster;
@@ -131,7 +131,12 @@ ShadowTraceBackend shadowTraceBackend{[] {
         return ShadowTraceBackend::Classic;
     }
     return ShadowTraceBackend::Measuring;
-}()};
+}
+ShadowTraceBackend shadowTraceBackend{autoShadowTraceBackend()};
+// The user's choice (Renderer::setLocalShadowBackend). Nvidia only prefers
+// the cluster scene: the frame still traces the triangle TLAS whenever the
+// GPU lacks the NV cluster extensions (clusterShadowsPossible).
+LocalShadowBackend localShadowBackendSetting{LocalShadowBackend::Auto};
 std::uint32_t shadowTraceTrialFrame{};
 std::array<bool, MAX_FRAMES_IN_FLIGHT> shadowTraceSampled{};
 std::array<bool, MAX_FRAMES_IN_FLIGHT> shadowTraceUsedCluster{};
@@ -142,14 +147,41 @@ std::array<std::vector<float>, 2> shadowTraceSamples;
 // backend for half of its ~200 frames and built both structures meanwhile.
 std::filesystem::path shadowTraceDecisionPath;
 
+void setLocalShadowBackend(const LocalShadowBackend backend) {
+    localShadowBackendSetting = backend;
+    switch (backend) {
+    case LocalShadowBackend::Nvidia:
+        shadowTraceBackend = ShadowTraceBackend::Cluster;
+        break;
+    case LocalShadowBackend::Generic:
+        shadowTraceBackend = ShadowTraceBackend::Classic;
+        break;
+    case LocalShadowBackend::Auto:
+        // Restart from the cached decision, or measure again without one.
+        shadowTraceBackend = autoShadowTraceBackend();
+        shadowTraceTrialFrame = 0;
+        for (auto& samples : shadowTraceSamples)
+            samples.clear();
+        if (!shadowTraceDecisionPath.empty())
+            readShadowTraceDecision();
+        break;
+    }
+    // A structure the new backend no longer traces stays resident until the
+    // next scene load; it is rebuilt on demand when switching back.
+}
+
 void loadShadowTraceDecision(const std::filesystem::path& directory) {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(vulkanDevice.physical(), &properties);
     shadowTraceDecisionPath = directory / ("shadow-trace-" + std::to_string(properties.vendorID) + "-" +
                                           std::to_string(properties.deviceID) + "-" +
                                           std::to_string(properties.driverVersion) + ".txt");
-    // GAMENGINE_SHADOW_BACKEND already chose one.
-    if (shadowTraceBackend != ShadowTraceBackend::Measuring)
+    readShadowTraceDecision();
+}
+
+void readShadowTraceDecision() {
+    // An explicit backend or GAMENGINE_SHADOW_BACKEND already chose one.
+    if (localShadowBackendSetting != LocalShadowBackend::Auto || shadowTraceBackend != ShadowTraceBackend::Measuring)
         return;
     std::ifstream input(shadowTraceDecisionPath);
     std::string backend;
@@ -465,6 +497,10 @@ struct RetiredGeometryHeapAllocation final {
 };
 std::unordered_map<const void*, GeometryHeapAllocation> geometryHeapAllocations;
 std::unordered_map<const void*, MeshId> geometryHeapMeshIds;
+// MeshGpuResource::textureIdentity of each MeshRenderer key above. The keys
+// are addresses, and the heap now outlives full scene reloads, so a new
+// resource allocated where a released one lived must not inherit its data.
+std::unordered_map<const void*, std::uint64_t> geometryHeapIdentities;
 std::vector<GeometryHeapRange> geometryHeapFreeVertices;
 std::vector<GeometryHeapRange> geometryHeapFreeIndices;
 std::vector<RetiredGeometryHeapAllocation> retiredGeometryHeapAllocations;

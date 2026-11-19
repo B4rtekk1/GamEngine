@@ -3,12 +3,19 @@
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/Scripting/Script.h"
 
+#include <atomic>
 #include <utility>
 
 namespace Engine {
 ScriptRegistry& ScriptRegistry::instance() {
     static ScriptRegistry registry;
     return registry;
+}
+
+std::uint64_t ScriptRegistry::allocateModuleGeneration() noexcept {
+    // Generation 0 marks in-process registrations.
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
 }
 
 RuntimeScriptInstance::RuntimeScriptInstance(RuntimeScriptInstance&& other) noexcept

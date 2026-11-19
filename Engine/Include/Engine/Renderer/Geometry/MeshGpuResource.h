@@ -102,6 +102,17 @@ class MeshHandle final {
         requires std::is_convertible_v<T*, const MeshSourceData*>
     MeshHandle(std::shared_ptr<T> source) : MeshHandle(std::shared_ptr<const MeshSourceData>{std::move(source)}) {}
 
+    /**
+     * Shares an existing renderer resource, for example the live copy of an
+     * asset that a scene snapshot references again. Its GPU geometry and
+     * textures stay keyed to the same resource identity.
+     */
+    [[nodiscard]] static MeshHandle fromResource(std::shared_ptr<MeshGpuResource> resource) noexcept {
+        MeshHandle handle;
+        handle.resource_ = std::move(resource);
+        return handle;
+    }
+
     [[nodiscard]] explicit operator bool() const noexcept {
         return resource_ != nullptr;
     }
